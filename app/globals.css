@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ───────────────────────────────────────────────
+   Design System — "Technical Authority"
+   Theme-aware tokens. Dark is the default brand mode.
+   ─────────────────────────────────────────────── */
+:root {
+  /* Light Mode Scales */
+  --bg: #f4f6f8;
+  --panel: #ffffff;
+  --border: #d1d9e0;
+  --ink: #2c3032;
+  --ink-muted: #5f6b73;
+}
+
+.dark {
+  /* Dark Mode Scales (brand default) */
+  --bg: #1e2123;
+  --panel: #2c3032;
+  --border: #3e4447;
+  --ink: #e0e5e8;
+  --ink-muted: #9aa5ac;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-plex-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Custom thin scrollbars to match the IDE aesthetic */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-muted);
+}
+
+/* Selection uses the steel-blue accent */
+::selection {
+  background: rgba(119, 153, 177, 0.35);
+}
+
+/* Utility: command-prompt caret blink */
+@keyframes caret-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.caret-blink::after {
+  content: "_";
+  animation: caret-blink 1s step-end infinite;
+  color: var(--accent, #7799b1);
+}
