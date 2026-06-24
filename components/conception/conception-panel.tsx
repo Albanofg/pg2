@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useConception } from "@/lib/hooks/use-conception";
 import { useWorkspace } from "@/lib/store";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import HelperComposer from "@/components/workspace/helper-composer";
 import type {
@@ -28,8 +29,11 @@ import type {
  */
 export default function ConceptionPanel({
   projectId,
+  maxW = "max-w-2xl",
 }: {
   projectId: string | null;
+  /** Tailwind max-width for the content column; widens as sidebars collapse. */
+  maxW?: string;
 }) {
   const { view, busy, error, act, tell, reset } = useConception(projectId);
   const setStage = useWorkspace((s) => s.setStage);
@@ -54,7 +58,9 @@ export default function ConceptionPanel({
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 p-6">
+        <div
+          className={cn("mx-auto flex w-full flex-col gap-5 p-6", maxW)}
+        >
       <header className="flex items-center justify-between">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-action">
@@ -196,7 +202,7 @@ export default function ConceptionPanel({
 
       {hasStatement && (
         <div className="border-t border-border bg-panel p-4">
-          <div className="mx-auto w-full max-w-2xl">
+          <div className={cn("mx-auto w-full", maxW)}>
             <HelperComposer
               placeholder={conceptionPlaceholder(view.phase)}
               busy={busy}

@@ -21,8 +21,10 @@ import type {
  */
 export default function DifferentiationPanel({
   projectId,
+  maxW = "max-w-2xl",
 }: {
   projectId: string | null;
+  maxW?: string;
 }) {
   const { view, busy, error, ready, act, tell, restart } = useDifferentiation(projectId);
   const setStage = useWorkspace((s) => s.setStage);
@@ -32,7 +34,9 @@ export default function DifferentiationPanel({
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 p-6">
+        <div
+          className={`mx-auto flex w-full flex-col gap-5 p-6 ${maxW}`}
+        >
           <header className="flex items-center justify-between">
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-action">
@@ -161,7 +165,7 @@ export default function DifferentiationPanel({
       </div>
 
       <div className="border-t border-border bg-panel p-4">
-        <div className="mx-auto w-full max-w-2xl">
+        <div className={`mx-auto w-full ${maxW}`}>
           <HelperComposer
             placeholder="Note anything for the record…"
             busy={busy}

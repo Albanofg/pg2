@@ -71,13 +71,22 @@ export default function Triptych() {
   const rightCol = rightCollapsed ? RAIL : `${right * 100}%`;
   const leftDiv = leftCollapsed ? "0px" : "1px";
   const rightDiv = rightCollapsed ? "0px" : "1px";
+  // Width grows with how much room the inventor frees up: both rails open → a
+  // comfortable column; one collapsed → wide; both collapsed → full width.
+  const collapsedCount = (leftCollapsed ? 1 : 0) + (rightCollapsed ? 1 : 0);
+  const maxW =
+    collapsedCount >= 2
+      ? "max-w-none"
+      : collapsedCount === 1
+        ? "max-w-4xl"
+        : "max-w-2xl";
 
   return (
     <div
       ref={containerRef}
       className="grid h-screen w-screen overflow-hidden bg-bg"
       style={{
-        gridTemplateColumns: `${leftCol} ${leftDiv} 1fr ${rightDiv} ${rightCol}`,
+        gridTemplateColumns: `${leftCol} ${leftDiv} minmax(0, 1fr) ${rightDiv} ${rightCol}`,
       }}
     >
       <LeftSidebar
@@ -91,15 +100,15 @@ export default function Triptych() {
       )}
       <div className="h-screen overflow-hidden bg-bg">
         {stage === "showcase" ? (
-          <ShowcasePanel projectId={projectId} />
+          <ShowcasePanel projectId={projectId} maxW={maxW} />
         ) : stage === "differentiation" ? (
-          <DifferentiationPanel projectId={projectId} />
+          <DifferentiationPanel projectId={projectId} maxW={maxW} />
         ) : stage === "landscape" ? (
-          <LandscapePanel projectId={projectId} />
+          <LandscapePanel projectId={projectId} maxW={maxW} />
         ) : stage === "maturation" ? (
-          <MaturationPanel projectId={projectId} />
+          <MaturationPanel projectId={projectId} maxW={maxW} />
         ) : (
-          <ConceptionPanel projectId={projectId} />
+          <ConceptionPanel projectId={projectId} maxW={maxW} />
         )}
       </div>
       {rightCollapsed ? (
