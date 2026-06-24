@@ -21,6 +21,8 @@ export default function Triptych() {
   // Fractions of the total width. Must sum to 1.
   const [left, setLeft] = useState(0.2);
   const [right, setRight] = useState(0.35);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef<null | "left" | "right">(null);
   const projectId = useWorkspace((s) => s.projectId);
@@ -63,18 +65,30 @@ export default function Triptych() {
     };
   }, [onMouseMove, onMouseUp]);
 
-  const center = Math.max(0.16, 1 - left - right);
+  // A collapsed pane shrinks to a thin rail; the center (1fr) takes the rest.
+  const RAIL = "44px";
+  const leftCol = leftCollapsed ? RAIL : `${left * 100}%`;
+  const rightCol = rightCollapsed ? RAIL : `${right * 100}%`;
+  const leftDiv = leftCollapsed ? "0px" : "1px";
+  const rightDiv = rightCollapsed ? "0px" : "1px";
 
   return (
     <div
       ref={containerRef}
       className="grid h-screen w-screen overflow-hidden bg-bg"
       style={{
-        gridTemplateColumns: `${left * 100}% 1px ${center * 100}% 1px ${right * 100}%`,
+        gridTemplateColumns: `${leftCol} ${leftDiv} 1fr ${rightDiv} ${rightCol}`,
       }}
     >
-      <LeftSidebar />
-      <Divider onMouseDown={onMouseDown("left")} />
+      <LeftSidebar
+        collapsed={leftCollapsed}
+        onToggle={() => setLeftCollapsed((v) => !v)}
+      />
+      {leftCollapsed ? (
+        <div />
+      ) : (
+        <Divider onMouseDown={onMouseDown("left")} />
+      )}
       <div className="h-screen overflow-hidden bg-bg">
         {stage === "showcase" ? (
           <ShowcasePanel projectId={projectId} />
@@ -88,8 +102,15 @@ export default function Triptych() {
           <ConceptionPanel projectId={projectId} />
         )}
       </div>
-      <Divider onMouseDown={onMouseDown("right")} />
-      <RightSidebar />
+      {rightCollapsed ? (
+        <div />
+      ) : (
+        <Divider onMouseDown={onMouseDown("right")} />
+      )}
+      <RightSidebar
+        collapsed={rightCollapsed}
+        onToggle={() => setRightCollapsed((v) => !v)}
+      />
     </div>
   );
 }

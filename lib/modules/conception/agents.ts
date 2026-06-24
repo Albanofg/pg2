@@ -2,7 +2,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { withBackpack } from "@/lib/modules/shared";
+import { withBackpack, type BackpackSection } from "@/lib/modules/shared";
 import type { AgentName, AgentRunner } from "./types";
 
 /**
@@ -30,6 +30,7 @@ import type { AgentName, AgentRunner } from "./types";
 const MODULE_1_DIR = "module-1-conception";
 
 const PROMPT_FILES: Record<AgentName, string> = {
+  helper: `${MODULE_1_DIR}/00-helper.md`,
   distiller: `${MODULE_1_DIR}/01-distiller.md`,
   decomposer: `${MODULE_1_DIR}/02-decomposer.md`,
   examiner: `${MODULE_1_DIR}/03-examiner.md`,
@@ -44,10 +45,19 @@ const PROMPT_FILES: Record<AgentName, string> = {
 const promptCache = new Map<AgentName, string>();
 
 /**
+ * Extra Backpack sections an agent pulls beyond CORE. The user-facing `helper`
+ * reads the shared HELPER_DOCTRINE (the V1 QA-Assistant teaching protocol, now a
+ * shared layer); the silent sub-agents stay lean on CORE only.
+ */
+const AGENT_SECTIONS: Partial<Record<AgentName, BackpackSection[]>> = {
+  helper: ["helper_doctrine"],
+};
+
+/**
  * Load an agent's system prompt: the shared Backpack (patent-writing knowledge +
- * inventorship law) prepended to the agent's own prompts/<module>/<file>.md, so
- * every agent reads BOTH shared layers. The file is cached; the Backpack is
- * prepended on each return.
+ * inventorship law, plus any per-agent sections) prepended to the agent's own
+ * prompts/<module>/<file>.md, so every agent reads BOTH shared layers. The file
+ * is cached; the Backpack is prepended on each return.
  */
 export async function loadAgentPrompt(agent: AgentName): Promise<string> {
   let contents = promptCache.get(agent);
@@ -56,12 +66,31 @@ export async function loadAgentPrompt(agent: AgentName): Promise<string> {
     contents = (await readFile(file, "utf8")).trim();
     promptCache.set(agent, contents);
   }
-  return withBackpack(contents);
+  return withBackpack(contents, AGENT_SECTIONS[agent] ?? []);
 }
 
 /* ------------------------------------------------------------------ *
  * Output schemas (the contract the AgentRunner validates against)
  * ------------------------------------------------------------------ */
+
+export const HelperOutput = z.object({
+  /** What the Helper understood the inventor's message to be. */
+  intent: z.enum(["question", "edit", "new_idea", "answer", "other"]),
+  /** The plain-language message shown to the inventor; always present; teaches, never invents. */
+  reply: z.string(),
+  /** Teaching points about weak/thin parts — they ask, they never answer. */
+  teaching: z
+    .array(
+      z.object({
+        topic: z.string(),
+        why_it_matters: z.string(),
+        what_would_strengthen: z.string(),
+        ask: z.string(),
+      }),
+    )
+    .default([]),
+});
+export type HelperResult = z.infer<typeof HelperOutput>;
 
 export const ReviserOutput = z.object({
   /** The full revised core statement, per the inventor's instruction. */
@@ -167,6 +196,67 @@ export type CodeGeneratorResult = z.infer<typeof CodeGeneratorOutput>;
 /* ------------------------------------------------------------------ *
  * Run functions — build the user prompt, call through the seam, return typed
  * ------------------------------------------------------------------ */
+
+export async function runHelper(
+  runAgent: AgentRunner,
+  input: {
+    message: string;
+    phase: string;
+    core: string;
+    strong: string[];
+    thin: string[];
+    setAside: string[];
+    concepts: { title: string; statement: string }[];
+    conversation: { role: string; text: string }[];
+    inventorMaterial: string;
+    consciousness?: string;
+  },
+): Promise<HelperResult> {
+  const system = await loadAgentPrompt("helper");
+  const list = (items: string[]) =>
+    items.length ? items.map((s) => `- ${s}`).join("\n") : "(none)";
+  const prompt = [
+    "THE INVENTOR JUST SAID (their message to you — read what they mean before acting):",
+    input.message,
+    "",
+    `WHERE THEY ARE (phase): ${input.phase}`,
+    "",
+    "THE CURRENT READING OF THEIR IDEA (the core statement):",
+    input.core || "(not distilled yet)",
+    "",
+    "WHAT LOOKS STRONG:",
+    list(input.strong),
+    "",
+    "WHAT LOOKS THIN / NOT YET PINNED DOWN (the likely subject of a 'how do I fix this' question):",
+    list(input.thin),
+    "",
+    "DEFERRED TO LATER MODULES (set aside, not lost):",
+    list(input.setAside),
+    "",
+    "CONCEPTS SPLIT OUT SO FAR:",
+    input.concepts.length
+      ? input.concepts.map((c, i) => `[${i + 1}] ${c.title}: ${c.statement}`).join("\n")
+      : "(none yet)",
+    "",
+    "RECENT CONVERSATION (oldest first):",
+    input.conversation.length
+      ? input.conversation.map((t) => `${t.role === "helper" ? "HELPER" : "INVENTOR"}: ${t.text}`).join("\n")
+      : "(none yet)",
+    "",
+    "THE INVENTOR'S OWN MATERIAL SO FAR (the ONLY source of inventive substance — never add to it yourself):",
+    input.inventorMaterial || "(none yet)",
+    ...(input.consciousness
+      ? ["", "WHAT'S ALREADY SETTLED FOR THIS PATENT (stay consistent):", input.consciousness]
+      : []),
+  ].join("\n");
+  return runAgent({
+    agent: "helper",
+    system,
+    prompt,
+    schema: HelperOutput,
+    temperature: 0.4,
+  });
+}
 
 export async function runDistiller(
   runAgent: AgentRunner,

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useWorkspace } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { Chevron, TOGGLE_CLASS } from "./left-sidebar";
 import type { LedgerEntry } from "@/lib/modules/shared";
 
 type Tab = "idea" | "notebook";
@@ -13,19 +14,51 @@ type Tab = "idea" | "notebook";
  *  - Inventor's Notebook: the chronological record of what the inventor decided.
  * Both are fed live from the active module's view via the store.
  */
-export default function RightSidebar() {
+export default function RightSidebar({
+  collapsed = false,
+  onToggle,
+}: {
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
   const { proofIdea, proofNotebook, title } = useWorkspace();
   const [tab, setTab] = useState<Tab>("idea");
 
+  if (collapsed) {
+    return (
+      <aside className="flex h-screen flex-col items-center gap-4 overflow-hidden border-l border-border bg-panel py-3">
+        <button
+          onClick={onToggle}
+          aria-label="Expand the Live Draft panel"
+          title="Expand Live Draft"
+          className={TOGGLE_CLASS}
+        >
+          <Chevron dir="left" />
+        </button>
+        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-muted [writing-mode:vertical-rl]">
+          Live Draft
+        </span>
+      </aside>
+    );
+  }
+
   return (
     <aside className="flex h-screen flex-col overflow-hidden border-l border-border bg-panel">
-      <div className="flex border-b border-border">
+      <div className="flex items-center border-b border-border">
         <TabButton active={tab === "idea"} onClick={() => setTab("idea")}>
           Current Idea
         </TabButton>
         <TabButton active={tab === "notebook"} onClick={() => setTab("notebook")}>
           Inventor&apos;s Notebook
         </TabButton>
+        <button
+          onClick={onToggle}
+          aria-label="Collapse the Live Draft panel"
+          title="Collapse Live Draft"
+          className={cn(TOGGLE_CLASS, "mr-2")}
+        >
+          <Chevron dir="right" />
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 py-5">

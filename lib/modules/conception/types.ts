@@ -178,6 +178,41 @@ export type Module1Card =
   | CodeReviewCard;
 
 /* ------------------------------------------------------------------ *
+ * The Helper's voice — the conversation surface
+ * ------------------------------------------------------------------ */
+
+/**
+ * One teaching point the Helper surfaces about a weak/thin part of the idea.
+ * It explains and ASKS — it never carries a proposed answer (that would be the
+ * machine inventing). The inventor supplies the substance in their own words.
+ */
+export type HelperTeachingPoint = {
+  /** The thin/weak point, named as it sits in the inventor's idea. */
+  topic: string;
+  /** Why a patent needs this pinned down. */
+  why_it_matters: string;
+  /** The FORM of a strong answer (neutral categories at most) — never the answer. */
+  what_would_strengthen: string;
+  /** A direct request for the inventor to supply it in their own words. */
+  ask: string;
+};
+
+/**
+ * One turn in the Helper conversation. The Helper ALWAYS replies in words (it is
+ * a teacher, not a silent mutator); the inventor's composer messages are shown
+ * too so the exchange reads as a real dialogue.
+ */
+export type HelperTurn = {
+  role: "inventor" | "helper";
+  text: string;
+  /** Teaching points attached to a Helper turn (mainly when explaining weaknesses). */
+  teaching?: HelperTeachingPoint[];
+  /** What the Helper understood the inventor's message to be (helper turns only). */
+  intent?: "question" | "edit" | "new_idea" | "answer" | "other";
+  timestamp: string;
+};
+
+/* ------------------------------------------------------------------ *
  * Inventor action inputs (what the Helper sends back when the inventor acts)
  * ------------------------------------------------------------------ */
 
@@ -218,6 +253,8 @@ export type Module1View = {
   phase: Module1Phase;
   /** Cards to render now. The Helper renders these; it does not invent them. */
   cards: Module1Card[];
+  /** The Helper conversation — its teaching replies and the inventor's messages. */
+  conversation: HelperTurn[];
   /** The Helper's formalized restatement of the raw idea, and whether approved. */
   statement?: { text: string; approved: boolean };
   /** Representative code (generated after the statement is approved), if any. */
@@ -234,8 +271,10 @@ export type Module1View = {
  * The five sub-agents + the deps the Helper injects
  * ------------------------------------------------------------------ */
 
-/** The sub-agents Module 1 calls. Never user-facing. */
+/** The sub-agents Module 1 calls. The `helper` is the user-facing brain; the
+ *  rest are never user-facing. */
 export type AgentName =
+  | "helper"
   | "distiller"
   | "clarifier"
   | "examiner"

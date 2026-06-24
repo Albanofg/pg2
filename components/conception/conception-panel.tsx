@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConception } from "@/lib/hooks/use-conception";
 import { useWorkspace } from "@/lib/store";
+import { Button } from "@/components/ui/button";
 import HelperComposer from "@/components/workspace/helper-composer";
 import type {
   CandidateConceptCard,
   ClarityCard,
   CodeReviewCard,
+  HelperTurn,
   LeapCard,
   Module1Card,
   Module1Phase,
@@ -42,6 +44,12 @@ export default function ConceptionPanel({
   );
 
   const strength = strengthOf(view, keptConcepts.length);
+
+  // Keep the Helper's latest reply in view when the conversation grows.
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [view.conversation.length, busy]);
 
   return (
     <div className="flex h-full flex-col">
@@ -87,14 +95,25 @@ export default function ConceptionPanel({
         </div>
       )}
 
-      {/* Onboarding — the inventor types their idea into the composer below. */}
+      {/* Onboarding — the input IS the start. Everything flows from it. */}
       {!hasStatement && (
-        <div className="rounded-md border border-border bg-panel p-5">
-          <p className="font-mono text-xs leading-relaxed text-ink-muted">
-            Describe your software idea in your own words in the box below — even
-            a single sentence. The Helper will read it, capture your exact words,
-            and hand back a clean version for you to approve.
-          </p>
+        <div className="flex flex-col gap-4 py-2">
+          <div>
+            <h3 className="font-sans text-lg font-semibold text-ink">
+              In one line, what does your software do?
+            </h3>
+            <p className="mt-1.5 font-mono text-xs leading-relaxed text-ink-muted">
+              No detail needed yet — type it, paste rough notes, or tap the mic.
+              I&apos;ll read it back and ask about the rest as we go.
+            </p>
+          </div>
+
+          {/* The input, front and center — the first thing the inventor does. */}
+          <HelperComposer
+            placeholder={conceptionPlaceholder(view.phase)}
+            busy={busy}
+            onSend={tell}
+          />
         </div>
       )}
 
@@ -158,26 +177,34 @@ export default function ConceptionPanel({
             Conception complete — {keptConcepts.length} concept
             {keptConcepts.length === 1 ? "" : "s"} you own.
           </p>
-          <button
+          <Button
+            variant="primary"
+            size="lg"
             onClick={() => setStage("maturation")}
-            className="mt-3 rounded-md bg-accent px-5 py-2.5 font-sans text-sm font-medium text-brand transition-colors hover:bg-accent/90"
+            className="mt-3"
           >
             Continue to Maturation →
-          </button>
+          </Button>
         </div>
       )}
+
+      {/* The Helper's voice — its teaching replies and the inventor's messages. */}
+      <HelperThread turns={view.conversation} />
+      <div ref={endRef} />
         </div>
       </div>
 
-      <div className="border-t border-border bg-panel p-4">
-        <div className="mx-auto w-full max-w-2xl">
-          <HelperComposer
-            placeholder={conceptionPlaceholder(view.phase)}
-            busy={busy}
-            onSend={tell}
-          />
+      {hasStatement && (
+        <div className="border-t border-border bg-panel p-4">
+          <div className="mx-auto w-full max-w-2xl">
+            <HelperComposer
+              placeholder={conceptionPlaceholder(view.phase)}
+              busy={busy}
+              onSend={tell}
+            />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -185,14 +212,79 @@ export default function ConceptionPanel({
 function conceptionPlaceholder(phase: Module1Phase): string {
   switch (phase) {
     case "reviewing_statement":
-      return "Tell the Helper to change the reading — e.g. “make it broader”, “focus on the timing”, or add a detail in your words…";
+      return "Ask “what’s weak?” or request a change…";
     case "confirming_concepts":
-      return "Tell the Helper another idea, in your own words…";
+      return "Ask a question, or add an idea…";
     case "complete":
-      return "Add another idea, or note anything for the record…";
+      return "Ask anything, or add an idea…";
     default:
-      return "Describe your software idea in your own words…";
+      return "Type your idea here…";
   }
+}
+
+/**
+ * The Helper's reply area — a running thread of the Helper's teaching responses
+ * and the inventor's own messages. This is where the Helper TALKS to the
+ * inventor (teaches, asks), instead of silently rewriting the cards.
+ */
+function HelperThread({ turns }: { turns: HelperTurn[] }) {
+  if (!turns || turns.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+        Helper
+      </div>
+      {turns.map((t, i) =>
+        t.role === "helper" ? (
+          <div
+            key={i}
+            className="rounded-md border border-action/30 bg-action/5 p-3"
+          >
+            <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-action">
+              Helper
+            </div>
+            <p className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink">
+              {t.text}
+            </p>
+            {t.teaching && t.teaching.length > 0 && (
+              <ul className="mt-3 space-y-3">
+                {t.teaching.map((tp, j) => (
+                  <li
+                    key={j}
+                    className="rounded-md border border-border bg-bg/40 p-3"
+                  >
+                    <div className="font-sans text-xs font-semibold text-ink">
+                      {tp.topic}
+                    </div>
+                    <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
+                      Why it matters: {tp.why_it_matters}
+                    </p>
+                    <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
+                      What would make it concrete: {tp.what_would_strengthen}
+                    </p>
+                    <p className="mt-2 font-mono text-[11px] leading-relaxed text-accent">
+                      {tp.ask}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <div key={i} className="flex justify-end">
+            <div className="max-w-[85%] rounded-md border border-border bg-panel px-3 py-2">
+              <div className="mb-0.5 font-mono text-[9px] uppercase tracking-[0.15em] text-ink-muted">
+                You
+              </div>
+              <p className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink">
+                {t.text}
+              </p>
+            </div>
+          </div>
+        )
+      )}
+    </div>
+  );
 }
 
 function strengthOf(
@@ -322,7 +414,8 @@ function ReviewCardView({
             className="w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
           />
           <div className="mt-2 flex gap-2">
-            <button
+            <Button
+              variant="primary"
               onClick={() =>
                 onAct(card.id, {
                   action: "request_edit",
@@ -330,16 +423,12 @@ function ReviewCardView({
                 } as never)
               }
               disabled={busy || !text.trim()}
-              className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
             >
               Send my version
-            </button>
-            <button
-              onClick={() => setEditing(false)}
-              className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
-            >
+            </Button>
+            <Button variant="ghost" onClick={() => setEditing(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
@@ -389,7 +478,8 @@ function CodeCardView({
       )}
       {editing ? (
         <div className="mt-2 flex gap-2">
-          <button
+          <Button
+            variant="primary"
             onClick={() =>
               onAct(card.id, {
                 action: "request_edit",
@@ -397,16 +487,12 @@ function CodeCardView({
               } as never)
             }
             disabled={busy}
-            className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
           >
             Save my version
-          </button>
-          <button
-            onClick={() => setEditing(false)}
-            className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
-          >
+          </Button>
+          <Button variant="ghost" onClick={() => setEditing(false)}>
             Cancel
-          </button>
+          </Button>
         </div>
       ) : (
         <ActionRow
@@ -445,13 +531,13 @@ function ClarityCardView({
         className="w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
       />
       <div className="mt-2 flex justify-end">
-        <button
+        <Button
+          variant="primary"
           onClick={() => onAct(card.id, { answer: text.trim() } as never)}
           disabled={busy || !text.trim()}
-          className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
         >
-          Answer
-        </button>
+          Answer →
+        </Button>
       </div>
     </CardShell>
   );
@@ -490,13 +576,13 @@ function LeapCardView({
         className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
       />
       <div className="mt-2 flex justify-end">
-        <button
+        <Button
+          variant="primary"
           onClick={() => onAct(card.id, { idea: text.trim() } as never)}
           disabled={busy || !text.trim()}
-          className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
         >
-          This is mine
-        </button>
+          This is mine →
+        </Button>
       </div>
     </div>
   );
@@ -532,8 +618,10 @@ function CandidateCardView({
               </span>
             )}
             {others.map((o) => (
-              <button
+              <Button
                 key={o.conceptId}
+                variant="secondary"
+                size="sm"
                 onClick={() =>
                   onAct(card.id, {
                     action: "merge",
@@ -541,42 +629,38 @@ function CandidateCardView({
                   } as never)
                 }
                 disabled={busy}
-                className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink hover:border-accent/50 disabled:opacity-50"
               >
                 {o.title}
-              </button>
+              </Button>
             ))}
-            <button
-              onClick={() => setMerging(false)}
-              className="rounded-md px-2.5 py-1 font-sans text-xs text-ink-muted hover:text-ink"
-            >
+            <Button variant="ghost" size="sm" onClick={() => setMerging(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Button
+            variant="primary"
             onClick={() => onAct(card.id, { action: "keep" } as never)}
             disabled={busy}
-            className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
           >
-            Keep
-          </button>
-          <button
+            ✓ Keep this
+          </Button>
+          <Button
+            variant="secondary"
             onClick={() => setMerging(true)}
             disabled={busy}
-            className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
           >
             Merge…
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="danger"
             onClick={() => onAct(card.id, { action: "drop" } as never)}
             disabled={busy}
-            className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-red-300 hover:border-red-500/40 hover:bg-red-500/10 disabled:opacity-50"
           >
             Drop
-          </button>
+          </Button>
         </div>
       )}
     </CardShell>
@@ -595,30 +679,18 @@ function ActionRow({
   onDiscard: () => void;
 }) {
   return (
-    <div className="mt-3 flex flex-wrap gap-2">
-      <button
-        onClick={onApprove}
-        disabled={busy}
-        className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
-      >
-        Approve
-      </button>
+    <div className="mt-4 flex flex-wrap items-center gap-2">
+      <Button variant="primary" onClick={onApprove} disabled={busy}>
+        ✓ Approve
+      </Button>
       {onEdit && (
-        <button
-          onClick={onEdit}
-          disabled={busy}
-          className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
-        >
+        <Button variant="secondary" onClick={onEdit} disabled={busy}>
           Request edit
-        </button>
+        </Button>
       )}
-      <button
-        onClick={onDiscard}
-        disabled={busy}
-        className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-red-300 hover:border-red-500/40 hover:bg-red-500/10 disabled:opacity-50"
-      >
+      <Button variant="danger" onClick={onDiscard} disabled={busy}>
         Discard
-      </button>
+      </Button>
     </div>
   );
 }

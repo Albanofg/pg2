@@ -5,6 +5,7 @@ import {
   runDecomposer,
   runDistiller,
   runFormalizer,
+  runHelper,
   runReviser,
   runVerifier,
 } from "./agents";
@@ -25,6 +26,7 @@ import type {
   ClarityAnswerInput,
   ClarityCard,
   CodeReviewCard,
+  HelperTurn,
   LeapCard,
   ConceptObject,
   ConceptProvenancePart,
@@ -93,6 +95,12 @@ export type ConceptionSnapshot = {
   openCards: Module1Card[];
   intents: [string, Intent][];
   ledger: import("@/lib/modules/shared").LedgerEntry[];
+  /** The Helper conversation (added later — optional for back-compat). */
+  conversation?: HelperTurn[];
+  /** The distiller's last read of the idea (added later — optional for back-compat). */
+  strong?: string[];
+  thin?: string[];
+  setAside?: string[];
 };
 
 export class ConceptionModule {
@@ -120,6 +128,14 @@ export class ConceptionModule {
 
   private openCards = new Map<string, Module1Card>();
   private intents = new Map<string, Intent>();
+
+  /** The Helper conversation — its teaching replies and the inventor's messages. */
+  private conversation: HelperTurn[] = [];
+
+  /** The distiller's last read of the idea (so the Helper can teach about it). */
+  private strong: string[] = [];
+  private thin: string[] = [];
+  private setAside: string[] = [];
 
   constructor(deps: ConceptionDeps) {
     this.runAgent = deps.runAgent;
@@ -198,56 +214,137 @@ export class ConceptionModule {
   }
 
   /**
-   * The inventor talks to the Helper in free text (the always-on composer), and
-   * the Helper ACTS. While reviewing the core, the message is an instruction and
-   * the Helper REVISES the reading per it (the edit channel). Once on concepts,
-   * it adds a new idea in the inventor's own words. Never an interrogation.
+   * The inventor talks to the Helper in free text (the always-on composer). The
+   * Helper is the core teaching presence: it READS what the inventor means
+   * before acting, always REPLIES in words (never a silent no-op), and routes:
+   *  - a QUESTION → it teaches (explains what's thin, why it matters, what kind
+   *    of detail would strengthen it) and ASKS — it never invents the substance;
+   *  - an EDIT → it revises the reading via the reviser;
+   *  - a NEW_IDEA / ANSWER → it records the inventor's words verbatim as theirs
+   *    and folds them back into the reading.
+   * The intent is decided by understanding the inventor, NOT by the phase.
    */
   async tell(text: string): Promise<Module1View> {
     const t = text.trim();
     if (!t) return this.view();
 
+    // The very first words are the raw idea — capture + distill (acknowledgment).
     if (this.phase === "ingesting") return this.ingest(t);
 
-    if (this.phase === "reviewing_statement") {
-      // The instruction is the inventor's words; the Helper revises the reading.
-      this.ledger.recordInventorSource("inventor_edit", t, ["statement", "instruction"]);
-      let revisedOk = false;
-      try {
-        const revised = await runReviser(this.runAgent, {
-          current: this.statementText,
-          instruction: t,
-          consciousness: this.consciousness.renderForAgent({ part: CORE_PART }),
-        });
-        if (revised.core_statement?.trim()) {
-          this.statementText = revised.core_statement;
-          revisedOk = true;
-        }
-        this.ledger.recordMachineEvent("agent_distilled", ["revision"]);
-      } catch (err) {
-        console.error("[conception] reviser failed", err);
-      }
-      this.statementApproved = false;
-      this.emitReadingCard(["Revised at your request."]);
-      if (revisedOk) await this.syncCoreToConsciousness({ agent: "reviser" });
+    // Verbatim-first: the composer message is recorded before any AI step.
+    const noteEntry = this.ledger.recordInventorSource("inventor_note", t, [
+      "composer",
+      this.phase,
+    ]);
+    this.pushTurn({ role: "inventor", text: t });
+
+    // The Helper brain reads the full context and decides what the inventor means.
+    const helper = await this.runHelperBrain(t);
+    const intent = helper?.intent ?? this.fallbackIntent();
+    this.pushTurn({
+      role: "helper",
+      text: helper?.reply ?? this.fallbackReply(intent),
+      ...(helper?.teaching?.length ? { teaching: helper.teaching } : {}),
+      intent,
+    });
+
+    // A question (or aside) teaches only — nothing is mutated. This is the path
+    // that used to be a no-op "Revised at your request"; now it actually helps.
+    if (intent === "question" || intent === "other") {
       return this.view();
     }
 
-    // confirming_concepts / complete — a new inventor-authored idea.
-    const entry = this.ledger.recordInventorSource("leap_input", t, [
-      "authored",
-      "inventor_conceived",
-    ]);
+    if (this.phase === "reviewing_statement") {
+      if (intent === "edit") {
+        await this.reviseStatement(t);
+      } else {
+        // new_idea / answer — the inventor's own substance, folded into the core.
+        this.ledger.recordInventorSource(
+          intent === "answer" ? "clarity_answer" : "leap_input",
+          t,
+          intent === "answer" ? ["composer", "factual"] : ["composer", "inventor_conceived"],
+        );
+        this.material.push(t);
+        await this.buildStatement();
+      }
+      return this.view();
+    }
+
+    // confirming_concepts / complete — a new inventor-authored idea/concept.
     this.material.push(t);
-    await this.materializeLeapConcept(t, entry.id, "");
+    await this.materializeLeapConcept(t, noteEntry.id, "");
     if (this.phase === "complete") this.phase = "confirming_concepts";
     return this.view();
+  }
+
+  /** Run the Helper brain over the current context. Null if the call fails. */
+  private async runHelperBrain(message: string) {
+    try {
+      return await runHelper(this.runAgent, {
+        message,
+        phase: this.phase,
+        core: this.statementText,
+        strong: this.strong,
+        thin: this.thin,
+        setAside: this.setAside,
+        concepts: this.activeConcepts().map((c) => ({
+          title: c.title,
+          statement: c.formalized_statement,
+        })),
+        conversation: this.conversation.slice(-6).map((tn) => ({ role: tn.role, text: tn.text })),
+        inventorMaterial: this.material.join("\n"),
+        consciousness: this.consciousness.renderForAgent({ part: CORE_PART }),
+      });
+    } catch (err) {
+      console.error("[conception] helper brain failed", err);
+      return null;
+    }
+  }
+
+  /** Revise the current reading per the inventor's instruction (the edit channel). */
+  private async reviseStatement(instruction: string): Promise<void> {
+    this.ledger.recordInventorSource("inventor_edit", instruction, ["statement", "instruction"]);
+    let revisedOk = false;
+    try {
+      const revised = await runReviser(this.runAgent, {
+        current: this.statementText,
+        instruction,
+        consciousness: this.consciousness.renderForAgent({ part: CORE_PART }),
+      });
+      if (revised.core_statement?.trim()) {
+        this.statementText = revised.core_statement;
+        revisedOk = true;
+      }
+      this.ledger.recordMachineEvent("agent_distilled", ["revision"]);
+    } catch (err) {
+      console.error("[conception] reviser failed", err);
+    }
+    this.statementApproved = false;
+    this.emitReadingCard();
+    if (revisedOk) await this.syncCoreToConsciousness({ agent: "reviser" });
+  }
+
+  /** When the Helper brain is unavailable, fall back to the old phase default. */
+  private fallbackIntent(): "edit" | "new_idea" {
+    return this.phase === "reviewing_statement" ? "edit" : "new_idea";
+  }
+
+  private fallbackReply(intent: string): string {
+    return intent === "edit"
+      ? "I’ll update the reading with that."
+      : "I’ve recorded that in your own words.";
+  }
+
+  /** Append a turn to the Helper conversation. */
+  private pushTurn(turn: Omit<HelperTurn, "timestamp">): void {
+    this.conversation.push({ ...turn, timestamp: this.now() });
   }
 
   view(): Module1View {
     return {
       phase: this.phase,
       cards: [...this.openCards.values()],
+      conversation: this.conversation.map((t) => ({ ...t })),
       ...(this.statementText
         ? { statement: { text: this.statementText, approved: this.statementApproved } }
         : {}),
@@ -309,6 +406,10 @@ export class ConceptionModule {
       openCards: [...this.openCards.values()],
       intents: [...this.intents.entries()],
       ledger: this.ledger.serialize(),
+      conversation: this.conversation.map((t) => ({ ...t })),
+      strong: [...this.strong],
+      thin: [...this.thin],
+      setAside: [...this.setAside],
     };
   }
 
@@ -335,6 +436,10 @@ export class ConceptionModule {
     m.confirmed = new Set(snap.confirmed);
     m.openCards = new Map(snap.openCards.map((c) => [c.id, c]));
     m.intents = new Map(snap.intents);
+    m.conversation = snap.conversation ? snap.conversation.map((t) => ({ ...t })) : [];
+    m.strong = snap.strong ? [...snap.strong] : [];
+    m.thin = snap.thin ? [...snap.thin] : [];
+    m.setAside = snap.setAside ? [...snap.setAside] : [];
     return m;
   }
 
@@ -366,17 +471,19 @@ export class ConceptionModule {
     this.statementText = distilled.core_statement;
     this.statementApproved = false;
 
+    // Remember the read so the Helper can teach about it from the composer.
+    this.strong = [...distilled.strong];
+    this.thin = [...distilled.thin];
+    this.setAside = [...distilled.set_aside];
+
     // Drop any prior reading/spark cards (re-reading after an answer or edit).
     this.clearIntents(["statement", "clarity", "leap"]);
 
-    // The reading: restatement + what's strong + what's thin + what's deferred.
-    const notes: string[] = [];
-    for (const s of distilled.strong) notes.push(`Strong: ${s}`);
-    for (const t of distilled.thin) notes.push(`Could be thin: ${t}`);
-    if (distilled.set_aside.length)
-      notes.push(`Set aside for later (not lost): ${distilled.set_aside.join("; ")}.`);
-
-    this.emitReadingCard(notes);
+    // Light first read-back: just the clean restatement to confirm. The
+    // strong / thin / set-aside read is stored (this.strong/thin/setAside) and
+    // surfaced through the Helper on demand ("what's weak?") — we don't dump a
+    // wall of analysis at the start. Keeps step one easy.
+    this.emitReadingCard();
     // No question here — the first response is acknowledgment only. Spark
     // capture (asking for a missing core) happens later, after the inventor has
     // acknowledged the reading and the concepts are split.
@@ -449,7 +556,7 @@ export class ConceptionModule {
       id,
       type: "review",
       kind: "restatement",
-      title: "Here's the core of your idea, as I understand it",
+      title: "Here's what I understood — did I get it?",
       body: this.statementText,
       ...(notes.length ? { notes } : {}),
       actions: ["approve", "discard"],
@@ -526,6 +633,9 @@ export class ConceptionModule {
         this.resolveCard(cardId);
         // Any unanswered Spark was optional — clear it on approval.
         this.clearIntents(["clarity", "leap"]);
+        // Advancing a phase starts the Helper area fresh — the teaching about the
+        // reading is done once it's approved (it stays in the Notebook as record).
+        this.conversation = [];
         // Only now: illustrate with code and decompose into distinct concepts.
         await this.generateCode();
         await this.buildConcepts();
@@ -533,6 +643,7 @@ export class ConceptionModule {
       } else if (input.action === "discard") {
         this.resolveCard(cardId);
         this.statementText = "";
+        this.conversation = [];
         this.phase = "ingesting";
       } else {
         // request_edit — capture the correction verbatim, re-formalize.

@@ -18,6 +18,8 @@ import type { AgentName } from "./types";
  */
 
 const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
+  // The user-facing teaching brain — route to the strong conversational model.
+  helper: MODELS.helper,
   distiller: MODELS.drafter,
   clarifier: MODELS.drafter,
   examiner: MODELS.drafter,

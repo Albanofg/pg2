@@ -10,6 +10,7 @@ import type {
 const EMPTY: Module1View = {
   phase: "ingesting",
   cards: [],
+  conversation: [],
   concepts: [],
   ledger: [],
   complete: false,

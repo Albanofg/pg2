@@ -7,7 +7,13 @@ import PhaseRail from "./phase-rail";
 import { uploadContextFile } from "@/lib/hooks/use-upload";
 
 /** The Brain — phase, distilled idea state, and uploaded context. */
-export default function LeftSidebar() {
+export default function LeftSidebar({
+  collapsed = false,
+  onToggle,
+}: {
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
   const {
     title,
     currentIdea,
@@ -18,6 +24,24 @@ export default function LeftSidebar() {
     removeFile,
   } = useWorkspace();
   const inputRef = useRef<HTMLInputElement>(null);
+
+  if (collapsed) {
+    return (
+      <aside className="flex h-screen flex-col items-center gap-4 overflow-hidden bg-panel py-3">
+        <button
+          onClick={onToggle}
+          aria-label="Expand The Brain panel"
+          title="Expand The Brain"
+          className={TOGGLE_CLASS}
+        >
+          <Chevron dir="right" />
+        </button>
+        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-muted [writing-mode:vertical-rl]">
+          The Brain
+        </span>
+      </aside>
+    );
+  }
 
   const onPick = () => inputRef.current?.click();
 
@@ -38,12 +62,22 @@ export default function LeftSidebar() {
           </span>
           <span className="font-mono text-xs text-ink-muted">2.0</span>
         </div>
-        <Link
-          href="/projects"
-          className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors duration-150 ease-util hover:text-accent"
-        >
-          ← Projects
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/projects"
+            className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors duration-150 ease-util hover:text-accent"
+          >
+            ← Projects
+          </Link>
+          <button
+            onClick={onToggle}
+            aria-label="Collapse The Brain panel"
+            title="Collapse The Brain"
+            className={TOGGLE_CLASS}
+          >
+            <Chevron dir="left" />
+          </button>
+        </div>
       </header>
 
       <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
@@ -131,5 +165,32 @@ export default function LeftSidebar() {
         )}
       </div>
     </aside>
+  );
+}
+
+/** Shared style for the collapse/expand toggle — a clearly visible icon button. */
+export const TOGGLE_CLASS =
+  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-bg/60 text-ink transition-colors duration-150 ease-util hover:border-accent hover:bg-accent/10 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50";
+
+/** A crisp chevron used by the panel collapse/expand toggles. */
+export function Chevron({ dir }: { dir: "left" | "right" }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {dir === "left" ? (
+        <polyline points="15 18 9 12 15 6" />
+      ) : (
+        <polyline points="9 18 15 12 9 6" />
+      )}
+    </svg>
   );
 }
