@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getLocalUser } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/db";
 import { notebooks } from "@/db/schema";
 import { assertOwnership } from "@/lib/db/projects";
@@ -13,7 +13,9 @@ export const runtime = "nodejs";
  * obtain an RFC 3161 timestamp token, and persist the proof.
  */
 export async function POST(req: NextRequest) {
-  const { userId } = getLocalUser();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const { userId } = user;
 
   const { projectId } = await req.json();
   if (!projectId) {

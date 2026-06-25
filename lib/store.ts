@@ -3,14 +3,21 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type { PhaseKey } from "./utils";
-import type { LedgerEntry } from "@/lib/modules/shared";
+import type { Grade, LedgerEntry } from "@/lib/modules/shared";
 
 /** The living "Current Idea" — everything the inventor has approved so far. */
 export type ProofIdea = {
   /** The distilled core (conception), if approved yet. */
   core: string | null;
-  /** The concepts the inventor owns, with their current text. */
-  concepts: { title: string; text: string }[];
+  /** The concepts the inventor owns, with their current text + reasoning/grade. */
+  concepts: {
+    title: string;
+    text: string;
+    /** The reasons the piece rests on (anchored to the inventor's words). */
+    reasons?: string[];
+    /** The cross-agent grade — a failed grade is shown, never buried. */
+    grade?: Grade;
+  }[];
 };
 
 export type ChatMessage = {

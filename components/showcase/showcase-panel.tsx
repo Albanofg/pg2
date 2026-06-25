@@ -87,11 +87,13 @@ export default function ShowcasePanel({
             </div>
           )}
 
-          {working && view.cards.length === 0 && view.phase !== "ready" && (
+          {working && (
             <div className="flex items-center gap-3 rounded-md border border-accent/30 bg-accent/5 p-4">
               <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" />
               <span className="font-mono text-xs text-ink-muted">
-                The Helper is working through the broadening… this can take a moment.
+                {view.cards.length === 0
+                  ? "The Helper is working through the broadening… this can take a moment."
+                  : "Working…"}
               </span>
             </div>
           )}

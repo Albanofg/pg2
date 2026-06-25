@@ -2,35 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { MicIcon } from "@/components/ui/voice-textarea";
+import { useDictation } from "@/lib/hooks/use-dictation";
 import { cn } from "@/lib/utils";
 
 /** Compact cap before the box stops auto-growing — use Maximize for more room. */
 const MAX_AUTO = 220;
-
-/* Minimal Web Speech API typings — not in the standard DOM lib across setups. */
-type SpeechAlternative = { transcript: string };
-type SpeechResult = { readonly length: number; [i: number]: SpeechAlternative };
-type SpeechResultList = { readonly length: number; [i: number]: SpeechResult };
-type SpeechResultEvent = { resultIndex: number; results: SpeechResultList };
-type SpeechRecognitionLike = {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  start: () => void;
-  stop: () => void;
-  onresult: ((e: SpeechResultEvent) => void) | null;
-  onend: (() => void) | null;
-  onerror: (() => void) | null;
-};
-type SpeechCtor = new () => SpeechRecognitionLike;
-function getSpeechCtor(): SpeechCtor | null {
-  if (typeof window === "undefined") return null;
-  const w = window as unknown as {
-    SpeechRecognition?: SpeechCtor;
-    webkitSpeechRecognition?: SpeechCtor;
-  };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
-}
 
 /**
  * The always-on Helper input. Type, paste, or SPEAK at any point. It auto-grows
@@ -55,10 +32,10 @@ export default function HelperComposer({
 }) {
   const [text, setText] = useState("");
   const [maximized, setMaximized] = useState(false);
-  const [listening, setListening] = useState(false);
-  const [voiceSupported, setVoiceSupported] = useState(false);
-  const recognition = useRef<SpeechRecognitionLike | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const { supported: voiceSupported, listening, toggle, stop } = useDictation(
+    (chunk) => setText((prev) => (prev ? `${prev} ${chunk}` : chunk)),
+  );
 
   // Seed from an example chip (panel-driven). Keyed on the nonce.
   useEffect(() => {
@@ -67,11 +44,6 @@ export default function HelperComposer({
     taRef.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedNonce]);
-
-  useEffect(() => {
-    setVoiceSupported(!!getSpeechCtor());
-    return () => recognition.current?.stop();
-  }, []);
 
   // Auto-size to fit content (compact when short). In maximized mode the box
   // fills its container via flex, so we clear the inline height.
@@ -87,36 +59,14 @@ export default function HelperComposer({
   }, [text, maximized]);
 
   const toggleVoice = () => {
-    if (listening) {
-      recognition.current?.stop();
-      return;
-    }
-    const Ctor = getSpeechCtor();
-    if (!Ctor) return;
-    const rec = new Ctor();
-    rec.lang = "en-US";
-    rec.continuous = true;
-    rec.interimResults = false;
-    rec.onresult = (e) => {
-      let chunk = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        chunk += e.results[i][0].transcript;
-      }
-      const piece = chunk.trim();
-      if (piece) setText((prev) => (prev ? `${prev} ${piece}` : piece));
-    };
-    rec.onend = () => setListening(false);
-    rec.onerror = () => setListening(false);
-    recognition.current = rec;
-    rec.start();
-    setListening(true);
+    toggle();
     taRef.current?.focus();
   };
 
   const submit = () => {
     const t = text.trim();
     if (!t || busy) return;
-    recognition.current?.stop();
+    stop();
     setText("");
     setMaximized(false);
     onSend(t);
@@ -201,26 +151,6 @@ export default function HelperComposer({
   }
 
   return box;
-}
-
-function MicIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
-      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-      <line x1="12" y1="19" x2="12" y2="22" />
-    </svg>
-  );
 }
 
 function MaximizeIcon() {

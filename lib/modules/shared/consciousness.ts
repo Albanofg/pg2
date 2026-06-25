@@ -70,6 +70,13 @@ export type ConsciousnessEntry = {
   content: string;
   /** Why it is the way it is. Immutable once written. */
   why: string;
+  /**
+   * A few concrete reasons (anchored to the inventor's words) this piece was made
+   * the way it is. A downstream grade checks the new output for consistency
+   * against EACH of these — recording them is what keeps the draft from drifting.
+   * Immutable once written.
+   */
+  reasons?: string[];
   /** The agent that created it. */
   agent: string;
   /** ISO-8601 timestamp. */
@@ -96,6 +103,7 @@ export type RecordOptions = {
   agent: string;
   kind?: ConsciousnessKind;
   why?: string;
+  reasons?: string[];
   derivedFrom?: string[];
   tracesTo?: string[];
   tags?: string[];
@@ -195,6 +203,7 @@ export class SharedConsciousness {
       kind: opts.kind ?? "artifact",
       content: opts.content,
       why: opts.why ?? "",
+      ...(opts.reasons?.length ? { reasons: [...opts.reasons] } : {}),
       agent: opts.agent,
       createdAt: this.now(),
       derivedFrom: opts.derivedFrom ? [...opts.derivedFrom] : [],
@@ -308,7 +317,12 @@ export class SharedConsciousness {
       .filter(Boolean)
       .join(", ");
     const why = e.why ? `\n  why: ${e.why}` : "";
-    return `[${e.part}] (${flags}) by ${e.agent}\n  ${e.content}${why}`;
+    const reasons = e.reasons?.length
+      ? `\n  reasons (stay consistent with each):${e.reasons
+          .map((r, i) => `\n    ${i + 1}. ${r}`)
+          .join("")}`
+      : "";
+    return `[${e.part}] (${flags}) by ${e.agent}\n  ${e.content}${why}${reasons}`;
   }
 
   /* ---- persistence -------------------------------------------------- */

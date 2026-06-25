@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
-import { getLocalUser } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { bootstrapProject } from "@/lib/db/projects";
 import { getNodes } from "@/lib/db/shared-consciousness";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const { userId, email } = getLocalUser();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const { userId, email } = user;
 
   // Optional: load a specific project chosen from the dashboard.
   let projectId: string | null = null;

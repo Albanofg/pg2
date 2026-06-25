@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { useWorkspace } from "@/lib/store";
+import { useWorkspace, type ProofIdea } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Chevron, TOGGLE_CLASS } from "./left-sidebar";
-import type { LedgerEntry } from "@/lib/modules/shared";
+import type { Grade, LedgerEntry } from "@/lib/modules/shared";
+
+type IdeaConcept = ProofIdea["concepts"][number];
 
 type Tab = "idea" | "notebook";
 
@@ -101,7 +103,7 @@ function CurrentIdea({
   idea,
 }: {
   title: string;
-  idea: { core: string | null; concepts: { title: string; text: string }[] };
+  idea: ProofIdea;
 }) {
   const empty = !idea.core && idea.concepts.length === 0;
   if (empty) {
@@ -143,12 +145,96 @@ function CurrentIdea({
                 <p className="mt-1 whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-ink-muted">
                   {c.text}
                 </p>
+                <ConceptReasoning concept={c} />
               </li>
             ))}
           </ul>
         </div>
       )}
     </article>
+  );
+}
+
+/**
+ * The reasoning + grade for one concept — the "ledger" made visible. A failed
+ * grade is shown as a drift warning (never buried); a passed grade shows a
+ * "verified consistent" chip with the reasons it was checked against; ungraded
+ * reasons show as a plain list.
+ */
+function ConceptReasoning({ concept }: { concept: IdeaConcept }) {
+  const grade: Grade | undefined = concept.grade;
+  // Once graded, the reasons live on the grade; before that, on the concept.
+  const reasons = grade?.reasons?.length ? grade.reasons : concept.reasons ?? [];
+
+  if (grade?.verdict === "fail") {
+    const violated = (grade.violatedReasons ?? [])
+      .map((n) => reasons[n - 1])
+      .filter((r): r is string => Boolean(r));
+    return (
+      <div className="mt-2 rounded border border-action/40 bg-action/10 p-2">
+        <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-action">
+          <span aria-hidden>!</span> Needs review — may have drifted
+        </div>
+        {grade.note && (
+          <p className="mt-1 font-mono text-[10px] leading-relaxed text-ink">
+            {grade.note}
+          </p>
+        )}
+        {violated.length > 0 && (
+          <ul className="mt-1.5 space-y-1">
+            {violated.map((r, i) => (
+              <li key={i} className="font-mono text-[10px] leading-relaxed text-ink-muted">
+                <span className="text-action">drifts from:</span> {r}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
+  if (grade?.verdict === "pass") {
+    return (
+      <div className="mt-2">
+        <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-accent">
+          <span aria-hidden>✓</span> Verified consistent
+        </div>
+        {reasons.length > 0 && (
+          <details className="mt-1">
+            <summary className="cursor-pointer font-mono text-[10px] text-ink-muted hover:text-ink">
+              Why ({reasons.length})
+            </summary>
+            <ReasonsList reasons={reasons} />
+          </details>
+        )}
+      </div>
+    );
+  }
+
+  if (reasons.length > 0) {
+    return (
+      <div className="mt-2">
+        <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+          Reasoning
+        </div>
+        <ReasonsList reasons={reasons} />
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function ReasonsList({ reasons }: { reasons: string[] }) {
+  return (
+    <ul className="mt-1 space-y-1">
+      {reasons.map((r, i) => (
+        <li key={i} className="flex gap-1.5 font-mono text-[10px] leading-relaxed text-ink-muted">
+          <span className="shrink-0 text-accent">{i + 1}.</span>
+          <span>{r}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -212,7 +298,7 @@ function noteLabel(e: LedgerEntry): string {
     case "addition_rejected":
       return "Rejected an addition";
     case "deepen_action":
-      return `Maturing${action ? ` · ${action}` : ""}`;
+      return `Expanding${action ? ` · ${action}` : ""}`;
     case "concept_decision":
       return `Carry-forward${action ? ` · ${action}` : ""}`;
     case "novelty_statement":

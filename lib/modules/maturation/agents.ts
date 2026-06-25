@@ -38,6 +38,12 @@ export const DeepenerOutput = z.object({
   deepened_statement: z.string(),
   search_ready: z.boolean(),
   missing_for_search: z.string().default(""),
+  /**
+   * 2–4 short reasons, each anchored to the inventor's verbatim, for WHY the
+   * deepened statement is the way it is. Carried into the Shared Consciousness so
+   * the Verifier (and downstream modules) can check consistency against each one.
+   */
+  reasons: z.array(z.string()).default([]),
   inventive_gaps: z
     .array(
       z.object({
@@ -76,12 +82,23 @@ export async function runDeepener(
 export const VerifierOutput = z.object({
   verdict: z.enum(["pass", "fail"]),
   note: z.string().default(""),
+  /**
+   * Indices (1-based, matching the numbered list shown to the verifier) of the
+   * recorded reasons the piece contradicts or drifts from. [] on a clean pass.
+   */
+  violated_reasons: z.array(z.number()).default([]),
 });
 export type VerifierResult = z.infer<typeof VerifierOutput>;
 
 export async function runVerifier(
   runAgent: AgentRunner,
-  input: { piece: string; inventorMaterial: string; consciousness?: string },
+  input: {
+    piece: string;
+    inventorMaterial: string;
+    consciousness?: string;
+    /** The reasons the creator recorded — the piece must stay consistent with each. */
+    reasons?: string[];
+  },
 ): Promise<VerifierResult> {
   const system = await loadAgentPrompt("verifier");
   const prompt = [
@@ -90,6 +107,13 @@ export async function runVerifier(
     "",
     "THE INVENTOR'S OWN STATED MATERIAL (the only thing that counts as theirs):",
     input.inventorMaterial,
+    ...(input.reasons?.length
+      ? [
+          "",
+          "THE REASONS THE CREATOR RECORDED (the piece must stay consistent with EACH; list any it contradicts in violated_reasons, by number):",
+          ...input.reasons.map((r, i) => `[${i + 1}] ${r}`),
+        ]
+      : []),
     ...(input.consciousness
       ? ["", "THE SHARED CONSCIOUSNESS (must stay consistent with what's settled):", input.consciousness]
       : []),

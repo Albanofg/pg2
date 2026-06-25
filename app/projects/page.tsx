@@ -33,6 +33,10 @@ export default function ProjectsPage() {
     setError(null);
     try {
       const res = await fetch("/api/projects");
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
       if (!res.ok) throw new Error(`list failed (${res.status})`);
       const data = await res.json();
       setProjects(Array.isArray(data.projects) ? data.projects : []);
@@ -44,7 +48,18 @@ export default function ProjectsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
+
+  const logout = useCallback(async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // Clear locally regardless of the network result.
+    }
+    reset();
+    useWorkspace.persist.clearStorage();
+    router.replace("/login");
+  }, [reset, router]);
 
   useEffect(() => {
     void refresh();
@@ -136,12 +151,20 @@ export default function ProjectsPage() {
   return (
     <main className="mx-auto min-h-screen w-full max-w-3xl px-6 py-12">
       <header className="mb-8 animate-fade-in">
-        <Link
-          href="/"
-          className="font-mono text-xs uppercase tracking-[0.2em] text-action transition-colors hover:text-accent"
-        >
-          ← Patent Geyser
-        </Link>
+        <div className="flex items-center justify-between gap-4">
+          <Link
+            href="/"
+            className="font-mono text-xs uppercase tracking-[0.2em] text-action transition-colors hover:text-accent"
+          >
+            ← Patent Geyser
+          </Link>
+          <button
+            onClick={() => void logout()}
+            className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted transition-colors hover:text-ink"
+          >
+            Log out
+          </button>
+        </div>
         <h1 className="mt-3 font-sans text-3xl font-bold tracking-tight text-ink">
           Projects
         </h1>

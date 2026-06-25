@@ -5,6 +5,7 @@ import { useConception } from "@/lib/hooks/use-conception";
 import { useWorkspace } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { VoiceTextarea } from "@/components/ui/voice-textarea";
 import HelperComposer from "@/components/workspace/helper-composer";
 import type {
   CandidateConceptCard,
@@ -189,7 +190,7 @@ export default function ConceptionPanel({
             onClick={() => setStage("maturation")}
             className="mt-3"
           >
-            Continue to Maturation →
+            Continue to Expansion →
           </Button>
         </div>
       )}
@@ -298,7 +299,7 @@ function strengthOf(
   kept: number,
 ): { pct: number; label: string } {
   if (!view.statement) return { pct: 0, label: "Just getting started" };
-  if (view.complete) return { pct: 100, label: "Solid — ready for Maturation" };
+  if (view.complete) return { pct: 100, label: "Solid — ready for Expansion" };
   let pct = view.statement.approved ? 35 : 15;
   let label = view.statement.approved ? "Core locked in" : "Core distilled";
   pct += Math.min(45, kept * 15);
@@ -412,9 +413,9 @@ function ReviewCardView({
       ))}
       {canEdit && editing ? (
         <div className="mt-3">
-          <textarea
+          <VoiceTextarea
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={setText}
             rows={4}
             placeholder="Rewrite it in your own words…"
             className="w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
@@ -471,9 +472,9 @@ function CodeCardView({
   return (
     <CardShell badge={`Representative code · ${card.language}`} title={card.title}>
       {editing ? (
-        <textarea
+        <VoiceTextarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={setText}
           rows={10}
           className="w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-[11px] text-ink focus:border-accent focus:outline-none"
         />
@@ -529,9 +530,9 @@ function ClarityCardView({
           {card.whyItMatters}
         </p>
       )}
-      <textarea
+      <VoiceTextarea
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={setText}
         rows={3}
         placeholder="Answer in your own words…"
         className="w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
@@ -574,9 +575,9 @@ function LeapCardView({
         This has to be your idea, in your own words — the Helper won&apos;t
         suggest it.
       </p>
-      <textarea
+      <VoiceTextarea
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={setText}
         rows={4}
         placeholder="Describe the idea yourself…"
         className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"

@@ -20,16 +20,16 @@ export default function Home() {
 
         <div className="mt-10 flex items-center justify-center gap-3">
           <Link
-            href="/projects"
+            href="/signup"
             className="rounded-md bg-accent px-5 py-3 font-sans text-sm font-medium text-brand transition-colors duration-150 ease-util hover:bg-accent/90"
           >
-            Your Projects
+            Get started
           </Link>
           <Link
-            href="/workspace"
+            href="/login"
             className="rounded-md border border-border px-5 py-3 font-sans text-sm font-medium text-ink transition-colors duration-150 ease-util hover:border-accent/50"
           >
-            Enter Workspace
+            Log in
           </Link>
         </div>
 

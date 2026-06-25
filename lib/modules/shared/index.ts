@@ -41,6 +41,12 @@ export {
 } from "./boundary";
 
 export {
+  type Grade,
+  type GradeResult,
+  applyGrade,
+} from "./grading";
+
+export {
   type BackpackSection,
   INVENTORSHIP_LAW,
   INVENTOR_SUPREMACY,

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getLocalUser } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/db";
 import { messages as messagesTable } from "@/db/schema";
 import { assertOwnership } from "@/lib/db/projects";
@@ -31,7 +31,9 @@ const NEXT_PHASE: Record<string, string | null> = {
 };
 
 export async function POST(req: NextRequest) {
-  const { userId } = getLocalUser();
+  const user = await getSessionUser();
+  if (!user) return new Response("unauthorized", { status: 401 });
+  const { userId } = user;
 
   const body = await req.json();
   const { projectId, phase, message, disavowedQuote, history } = body ?? {};

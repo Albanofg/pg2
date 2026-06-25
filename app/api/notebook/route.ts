@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getLocalUser } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { assertOwnership } from "@/lib/db/projects";
 import { buildNotebook } from "@/lib/notebook";
 import { sha256Hex } from "@/lib/crypto/rfc3161";
@@ -8,7 +8,9 @@ export const runtime = "nodejs";
 
 /** Download the Inventor's Notebook as Markdown (GET /api/notebook?projectId=). */
 export async function GET(req: NextRequest) {
-  const { userId } = getLocalUser();
+  const user = await getSessionUser();
+  if (!user) return new Response("unauthorized", { status: 401 });
+  const { userId } = user;
 
   const projectId = new URL(req.url).searchParams.get("projectId");
   if (!projectId) return new Response("projectId required", { status: 400 });

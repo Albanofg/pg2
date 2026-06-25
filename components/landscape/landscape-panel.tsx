@@ -46,7 +46,7 @@ export default function LandscapePanel({
               onClick={() => setStage("maturation")}
               className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
             >
-              ← Maturation
+              ← Expansion
             </button>
           </header>
 
@@ -56,12 +56,13 @@ export default function LandscapePanel({
             </div>
           )}
 
-          {working && !anyIdeas && (
+          {working && (
             <div className="flex items-center gap-3 rounded-md border border-accent/30 bg-accent/5 p-4">
               <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" />
               <span className="font-mono text-xs text-ink-muted">
-                Searching patents and publications for each idea… this can take a
-                moment.
+                {!anyIdeas
+                  ? "Searching patents and publications for each idea… this can take a moment."
+                  : "Working…"}
               </span>
             </div>
           )}
@@ -69,7 +70,7 @@ export default function LandscapePanel({
           {!working && !anyIdeas && (
             <div className="rounded-md border border-border bg-panel p-5 text-center">
               <p className="font-mono text-xs leading-relaxed text-ink-muted">
-                No ideas came through from Maturation to search yet.
+                No ideas came through from Expansion to search yet.
               </p>
               <div className="mt-3 flex justify-center gap-2">
                 <button
@@ -82,7 +83,7 @@ export default function LandscapePanel({
                   onClick={() => setStage("maturation")}
                   className="rounded-md border border-border px-4 py-2 font-sans text-sm text-ink-muted transition-colors hover:text-ink"
                 >
-                  ← Back to Maturation
+                  ← Back to Expansion
                 </button>
               </div>
             </div>

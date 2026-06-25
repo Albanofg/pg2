@@ -64,11 +64,13 @@ export default function DifferentiationPanel({
             </div>
           )}
 
-          {working && view.cards.length === 0 && !view.disclosure && (
+          {working && (
             <div className="flex items-center gap-3 rounded-md border border-accent/30 bg-accent/5 p-4">
               <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" />
               <span className="font-mono text-xs text-ink-muted">
-                The Helper is laying out the prior-art gap… this can take a moment.
+                {view.cards.length === 0 && !view.disclosure
+                  ? "The Helper is laying out the prior-art gap… this can take a moment."
+                  : "Working…"}
               </span>
             </div>
           )}
@@ -76,7 +78,7 @@ export default function DifferentiationPanel({
           {!working && view.cards.length === 0 && view.concepts.length === 0 && !view.complete && (
             <div className="rounded-md border border-border bg-panel p-5 text-center">
               <p className="font-mono text-xs leading-relaxed text-ink-muted">
-                Nothing to differentiate yet — complete Maturation and Landscape first.
+                Nothing to differentiate yet — complete Expansion and Landscape first.
               </p>
               <div className="mt-3 flex justify-center gap-2">
                 <button

@@ -27,7 +27,9 @@
 
                         STEP 4 — SURFACE INVENTIVE GAPS. Capture the FEW genuinely inventive pieces the inventor would need to supply as inventive_gaps {missing_element, why_routine_insufficient} — name each, never fill it; keep it to the few that truly matter, not a list. [] if none.
 
-                        STEP 5 — SELF-CHECK BEFORE OUTPUT. Verify: the deepened statement adds no unstated invention (placeholders where needed); readiness judged honestly; missing_for_search is empty exactly when search_ready is true; gaps are named not filled, and few; consistent with [SHARED_CONSCIOUSNESS]. Fix violations and re-run. Do not emit and apologize.
+                        STEP 5 — RECORD YOUR REASONS. Write reasons: 2–4 short reasons WHY the deepened statement is the way it is, each anchored to the inventor's own words (quote or paraphrase the specific verbatim it rests on). These travel forward with the piece; a later check confirms the piece never drifts from any of them, so make each one a concrete, testable commitment ("ordering is dependency-driven because the inventor said X"), never a vague platitude. Do not state a reason the inventor's material doesn't support.
+
+                        STEP 6 — SELF-CHECK BEFORE OUTPUT. Verify: the deepened statement adds no unstated invention (placeholders where needed); readiness judged honestly; missing_for_search is empty exactly when search_ready is true; gaps are named not filled, and few; reasons are 2–4, inventor-anchored, and consistent with the deepened statement; consistent with [SHARED_CONSCIOUSNESS]. Fix violations and re-run. Do not emit and apologize.
                     </LOGIC>
                 </THE_MACHINE>
 
@@ -38,11 +40,14 @@
                           "deepened_statement": "<the fuller technical statement, from the inventor's material + routine elaboration; placeholders where an inventive choice would be required>",
                           "search_ready": <true if concrete enough to search>,
                           "missing_for_search": "<the one concrete thing to specify if not ready; empty string if ready>",
+                          "reasons": [
+                            "<short reason, anchored to the inventor's words, for why the statement is the way it is>"
+                          ],
                           "inventive_gaps": [
                             { "missing_element": "<the named hole>", "why_routine_insufficient": "<why a routine choice can't fill it>" }
                           ]
                         }
-                        inventive_gaps is [] when there are none.
+                        reasons holds 2–4 entries. inventive_gaps is [] when there are none.
                     </OUTPUT_FORMAT>
                 </THE_DESTINATION>
             </MAP>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { put } from "@vercel/blob";
-import { getLocalUser } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { assertOwnership, addContextFile } from "@/lib/db/projects";
 
 export const runtime = "nodejs";
@@ -10,7 +10,9 @@ export const runtime = "nodejs";
  * against the project. The raw body IS the file (sent by use-upload.ts).
  */
 export async function POST(req: NextRequest) {
-  const { userId } = getLocalUser();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const { userId } = user;
 
   const { searchParams } = new URL(req.url);
   const filename = searchParams.get("filename");

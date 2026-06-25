@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMaturation } from "@/lib/hooks/use-maturation";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
+import { VoiceTextarea } from "@/components/ui/voice-textarea";
 import type {
   DeepenReviewCard,
   Module2Card,
@@ -37,12 +38,12 @@ export default function MaturationPanel({
           <header className="flex items-center justify-between">
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-action">
-                Stage 2 · Maturation
+                Stage 2 · Expansion
               </div>
               <h2 className="mt-1 font-sans text-lg font-semibold text-ink">
                 {view.phase === "selecting"
                   ? "Choose which concepts move forward"
-                  : "Deepen each concept until it's ready to search"}
+                  : "Expand each concept until it's ready to search"}
               </h2>
             </div>
             <button
@@ -59,11 +60,13 @@ export default function MaturationPanel({
             </div>
           )}
 
-          {working && view.cards.length === 0 && (
+          {working && (
             <div className="flex items-center gap-3 rounded-md border border-accent/30 bg-accent/5 p-4">
               <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" />
               <span className="font-mono text-xs text-ink-muted">
-                The Helper is deepening your concepts… this can take a moment.
+                {view.cards.length === 0
+                  ? "The Helper is expanding your concepts… this can take a moment."
+                  : "Working…"}
               </span>
             </div>
           )}
@@ -117,7 +120,7 @@ export default function MaturationPanel({
           {view.complete && (
             <div className="rounded-md border border-accent/40 bg-accent/10 p-4 text-center">
               <p className="font-sans text-sm font-medium text-ink">
-                Maturation complete — {carried.length} concept
+                Expansion complete — {carried.length} concept
                 {carried.length === 1 ? "" : "s"} carried forward, ready for
                 Landscape.
               </p>
@@ -182,13 +185,13 @@ function DeepenReviewView({
   return (
     <div className="rounded-md border border-border bg-panel p-4">
       <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-action">
-        Maturing · approve, edit, or discard
+        Expanding · approve, edit, or discard
       </div>
       <div className="font-sans text-sm font-semibold text-ink">{card.title}</div>
       {editing ? (
-        <textarea
+        <VoiceTextarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={setText}
           rows={8}
           className="mt-3 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
         />
@@ -275,9 +278,9 @@ function SparkView({
           This has to be your idea, in your own words — the Helper won&apos;t suggest it.
         </p>
       )}
-      <textarea
+      <VoiceTextarea
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={setText}
         rows={3}
         placeholder={isLeap ? "Describe it yourself…" : "Answer in your own words…"}
         className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"

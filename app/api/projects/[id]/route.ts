@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getLocalUser } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { deleteProject, renameProject } from "@/lib/db/projects";
 
 export const runtime = "nodejs";
@@ -8,7 +8,9 @@ type Params = { params: { id: string } };
 
 /** DELETE /api/projects/:id — delete a project and everything under it. */
 export async function DELETE(_req: Request, { params }: Params) {
-  const { userId } = getLocalUser();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const { userId } = user;
   try {
     const ok = await deleteProject(userId, params.id);
     if (!ok) {
@@ -26,7 +28,9 @@ export async function DELETE(_req: Request, { params }: Params) {
 
 /** PATCH /api/projects/:id — rename a project. Body: { title: string }. */
 export async function PATCH(req: Request, { params }: Params) {
-  const { userId } = getLocalUser();
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const { userId } = user;
   let title = "";
   try {
     const body = (await req.json()) as { title?: string };

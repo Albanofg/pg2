@@ -1,5 +1,5 @@
 import "server-only";
-import { EvidenceLedger, SharedConsciousness } from "@/lib/modules/shared";
+import { applyGrade, EvidenceLedger, SharedConsciousness } from "@/lib/modules/shared";
 import { hasCheckpoint, sealCheckpoint } from "@/lib/modules/shared/checkpoint";
 import type { ConceptObject } from "@/lib/modules/shared";
 import { runDeepener, runVerifier } from "./agents";
@@ -214,6 +214,9 @@ export class MaturationModule {
         isDeepened = true;
       }
       concept.searchReady = r.search_ready;
+      // The reasons the deepening rests on — carried forward so the grade (and
+      // downstream modules) can check the statement never drifts from them.
+      if (r.reasons?.length) concept.reasons = [...r.reasons];
       // One sharp inventive Spark, if any (not a wall).
       const gap = r.inventive_gaps[0];
       if (gap) this.emitSpark(concept.id, "leap", gap.missing_element, gap.why_routine_insufficient);
@@ -250,10 +253,12 @@ export class MaturationModule {
     if (!concept.deepened_statement.trim()) return;
     const part = `concept:${concept.id}`;
     const prior = this.consciousness.current(part);
+    const reasons = concept.reasons ?? [];
     const entry = this.consciousness.record({
       part,
       content: concept.deepened_statement,
-      why: `concept "${concept.title}" — deepened for search-readiness`,
+      why: `concept "${concept.title}" — deepened from the inventor's words for search-readiness`,
+      reasons,
       agent: "deepener",
       tracesTo: concept.conception_trail.map((t) => t.ledgerId),
       ...(prior ? { supersedes: prior.id } : {}),
@@ -262,13 +267,25 @@ export class MaturationModule {
       const verdict = await runVerifier(this.runAgent, {
         piece: concept.deepened_statement,
         inventorMaterial: concept.conception_trail.map((t) => t.verbatim_text).join("\n"),
+        reasons,
         consciousness: this.consciousness.renderForAgent({ part }),
       });
-      this.consciousness.verify(entry.id, {
-        by: "verifier",
-        verdict: verdict.verdict,
-        ...(verdict.note ? { note: verdict.note } : {}),
-      });
+      // Act on the grade (don't drop a fail): a pass settles the entry; a fail
+      // leaves it a draft AND records a durable, surfaceable failure. The resolved
+      // Grade rides on the concept to the view → the Live Draft panel.
+      concept.grade = applyGrade(
+        this.consciousness,
+        this.ledger,
+        entry,
+        {
+          verdict: verdict.verdict,
+          ...(verdict.note ? { note: verdict.note } : {}),
+          ...(verdict.violated_reasons?.length
+            ? { violatedReasons: verdict.violated_reasons }
+            : {}),
+        },
+        { by: "verifier", tags: ["maturation", part] },
+      );
     } catch (err) {
       console.error("[maturation] verifier failed for concept", concept.id, err);
     }
@@ -454,6 +471,18 @@ export class MaturationModule {
       conception_trail: c.conception_trail.map((t) => ({ ...t })),
       provenance: c.provenance.map((p) => ({ ...p, derivedFrom: [...p.derivedFrom] })),
       status: { ...c.status },
+      ...(c.reasons ? { reasons: [...c.reasons] } : {}),
+      ...(c.grade
+        ? {
+            grade: {
+              ...c.grade,
+              reasons: [...c.grade.reasons],
+              ...(c.grade.violatedReasons
+                ? { violatedReasons: [...c.grade.violatedReasons] }
+                : {}),
+            },
+          }
+        : {}),
     }));
   }
 }

@@ -22,10 +22,13 @@ import {
  */
 export const pg = pgSchema("patentgeyser2o");
 
-// Users — one fixed local user (Clerk/third-party auth was removed).
+// Users — real accounts (hand-rolled email/password auth). `id` is an
+// app-generated uuid string; `email` is unique; `passwordHash` is scrypt
+// `salt:hash` hex (nullable so legacy/seed rows without a password are valid).
 export const users = pg.table("users", {
-  id: text("id").primaryKey(), // local user id
-  email: text("email").notNull(),
+  id: text("id").primaryKey(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -83,6 +86,10 @@ export const consciousnessEntries = pg.table("consciousness_entries", {
   kind: text("kind").notNull(),
   content: text("content").notNull(),
   why: text("why"),
+  // A few concrete reasons (anchored to the inventor's words) the piece was made
+  // this way. Carried forward so a downstream grade can check consistency against
+  // each one — the anti-drift mechanism. Nullable/additive; old rows read as [].
+  reasons: jsonb("reasons").$type<string[]>(),
   agent: text("agent").notNull(),
   // ISO-8601 string, stored verbatim to round-trip the in-memory entry exactly.
   createdAt: text("created_at").notNull(),

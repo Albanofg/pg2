@@ -52,6 +52,8 @@ export function useMaturation(projectId: string | null) {
               .map((c) => ({
                 title: c.title,
                 text: c.deepened_statement || c.formalized_statement,
+                ...(c.reasons ? { reasons: c.reasons } : {}),
+                ...(c.grade ? { grade: c.grade } : {}),
               })),
           },
           data.ledger,

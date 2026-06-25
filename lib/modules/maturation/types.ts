@@ -11,6 +11,7 @@ import type {
   AgentRunner,
   ConceptObject,
   EvidenceLedger,
+  Grade,
   LedgerEntry,
   SharedConsciousness,
 } from "@/lib/modules/shared";
@@ -23,6 +24,7 @@ export type {
   ConceptProvenancePart,
   ConceptObject,
   Origin,
+  Grade,
   LedgerEntry,
   AppendOptions,
   AgentRunRequest,
@@ -43,6 +45,10 @@ export type MaturedConcept = ConceptObject & {
   searchReady: boolean;
   /** The inventor's scope decision (they choose; set-aside is retained). */
   decision: MaturationDecision;
+  /** The reasons the deepening rests on (anchored to the inventor's words). */
+  reasons?: string[];
+  /** The cross-agent grade of the deepening — surfaced so a drift is visible, not buried. */
+  grade?: Grade;
 };
 
 /* ------------------------------------------------------------------ *
@@ -62,6 +68,7 @@ export type LedgerEntryType =
   | "maturation_started"
   | "agent_deepened"
   | "concept_matured"
+  | "grade_failed" // a cross-agent grade failed; surfaced for inventor review
   | "module_completed";
 
 export const MATURATION_HUMAN_SOURCE_TYPES: ReadonlySet<string> =
