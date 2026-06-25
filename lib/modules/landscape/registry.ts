@@ -5,6 +5,7 @@ import { loadModuleState, saveModuleState } from "@/lib/modules/persistence";
 import { LandscapeModule, type LandscapeSnapshot } from "./controller";
 import { LANDSCAPE_HUMAN_SOURCE_TYPES } from "./types";
 import { n8nPriorArtSearch } from "./search.n8n";
+import { openaiAgentRunner } from "./runner.openai";
 
 /**
  * DB-backed landscape sessions. `module_state.landscape` on the project row is
@@ -23,6 +24,7 @@ export async function loadLandscape(
     concepts: [],
     context: "",
     search,
+    runAgent: openaiAgentRunner,
   });
 }
 
@@ -40,7 +42,7 @@ export function seedLandscape(
     priorLedger,
     LANDSCAPE_HUMAN_SOURCE_TYPES,
   );
-  return new LandscapeModule({ concepts, context, search, ledger });
+  return new LandscapeModule({ concepts, context, search, ledger, runAgent: openaiAgentRunner });
 }
 
 export async function saveLandscape(

@@ -47,6 +47,7 @@ export function seedDifferentiation(
   landscape: ConceptLandscape[],
   priorLedger: LedgerEntry[],
   consciousness?: SharedConsciousness,
+  representativeCode?: { language: string; code: string } | null,
 ): DifferentiationModule {
   const ledger = EvidenceLedger.fromEntries(
     priorLedger,
@@ -58,6 +59,7 @@ export function seedDifferentiation(
     landscape,
     ledger,
     ...(consciousness ? { consciousness } : {}),
+    ...(representativeCode ? { representativeCode } : {}),
   });
 }
 

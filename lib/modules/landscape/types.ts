@@ -8,12 +8,14 @@
  */
 
 import type {
+  AgentRunner,
   ConceptObject,
   EvidenceLedger,
+  HelperTurn,
   LedgerEntry,
 } from "@/lib/modules/shared";
 
-export type { ConceptObject, LedgerEntry } from "@/lib/modules/shared";
+export type { ConceptObject, LedgerEntry, HelperTurn } from "@/lib/modules/shared";
 
 /* ------------------------------------------------------------------ *
  * Prior-art results
@@ -104,6 +106,8 @@ export type Module3View = {
   phase: Module3Phase;
   /** Each carried-forward idea with its closest existing art. */
   ideas: LandscapeIdea[];
+  /** The Helper conversation — its replies/teaching and the inventor's messages. */
+  conversation: HelperTurn[];
   ledger: LedgerEntry[];
   /** True once every idea has been searched. */
   complete: boolean;
@@ -116,6 +120,8 @@ export type LandscapeDeps = {
   context: string;
   /** The prior-art search implementation (Helper-provided). */
   search: PriorArtSearch;
+  /** The agent transport for the user-facing Helper (Helper-provided). */
+  runAgent?: AgentRunner;
   /** Optional shared ledger to thread the proof trail across modules. */
   ledger?: EvidenceLedger;
   now?: () => string;

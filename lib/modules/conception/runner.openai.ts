@@ -23,12 +23,15 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   distiller: MODELS.drafter,
   clarifier: MODELS.drafter,
   examiner: MODELS.drafter,
+  advocate: MODELS.drafter,
   decomposer: MODELS.drafter,
   // The boundary classifier is the inventorship gate; route it to your
   // strongest reasoning model in production.
   "boundary-classifier": MODELS.drafter,
   formalizer: MODELS.drafter,
   "code-generator": MODELS.drafter,
+  // The brainstormer teaches + proposes directions — route to the conversational model.
+  brainstorm: MODELS.helper,
   reviser: MODELS.drafter,
   // Independent cross-check on a DIFFERENT model (Gemini) than the agents it reviews.
   verifier: MODELS.verifier,

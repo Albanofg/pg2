@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useDifferentiation } from "@/lib/hooks/use-differentiation";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
+import HelperThread from "@/components/workspace/helper-thread";
 import type {
   CertificationCard,
   DifferentiationReviewCard,
@@ -11,6 +12,7 @@ import type {
   KeyConceptCard,
   Module4Card,
   NoveltyCaptureCard,
+  WhitespaceCard,
 } from "@/lib/modules/differentiation/types";
 
 /**
@@ -163,13 +165,15 @@ export default function DifferentiationPanel({
               </button>
             </div>
           )}
+
+          <HelperThread turns={view.conversation} onQuickReply={tell} busy={busy} />
         </div>
       </div>
 
       <div className="border-t border-border bg-panel p-4">
         <div className={`mx-auto w-full ${maxW}`}>
           <HelperComposer
-            placeholder="Note anything for the record…"
+            placeholder="Ask the Helper anything…"
             busy={busy}
             onSend={tell}
           />
@@ -191,6 +195,8 @@ function CardView({
   onAct: (cardId: string, input: never) => void;
 }) {
   switch (card.type) {
+    case "whitespace":
+      return <WhitespaceView card={card} />;
     case "gap":
       return <GapView card={card} />;
     case "novelty_capture":
@@ -204,6 +210,106 @@ function CardView({
     default:
       return null;
   }
+}
+
+function WhitespaceView({ card }: { card: WhitespaceCard }) {
+  const a = card.analysis;
+  const level = a.overallMatchLevel.level;
+  const badge =
+    level === "Green Match"
+      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+      : level === "Yellow Match"
+        ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
+        : "border-red-500/40 bg-red-500/10 text-red-400";
+  return (
+    <div className="rounded-md border border-border bg-panel p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+          Open landscape · {a.totalPatentsAnalyzed} reference
+          {a.totalPatentsAnalyzed === 1 ? "" : "s"} analyzed
+        </div>
+        <span
+          className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] ${badge}`}
+        >
+          {level}
+        </span>
+      </div>
+      <div className="mt-1 font-sans text-sm font-semibold text-ink">{card.title}</div>
+      <p className="mt-1 font-mono text-[10px] text-ink-muted">
+        {a.overallMatchLevel.directMatches} direct · {a.overallMatchLevel.adjacentMatches} adjacent ·{" "}
+        {a.overallMatchLevel.unrelatedReferences} unrelated
+      </p>
+
+      {/* Per-reference extracted mechanisms */}
+      {a.patentAnalyses.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            What each reference describes
+          </p>
+          {a.patentAnalyses.map((p, i) => (
+            <div key={`${p.patentNumber}-${i}`} className="rounded border border-border bg-bg p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[11px] text-ink">
+                  {p.patentNumber || "(no number)"}
+                </span>
+                <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted">
+                  {p.patentStatus}
+                </span>
+              </div>
+              {p.patentTitle && (
+                <div className="font-sans text-[11px] text-ink-muted">{p.patentTitle}</div>
+              )}
+              {p.extractedMechanisms.length > 0 && (
+                <ul className="mt-1 list-disc pl-4 font-mono text-[11px] leading-relaxed text-ink-muted">
+                  {p.extractedMechanisms.map((m, j) => (
+                    <li key={j}>{m}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Primary distinguishing features */}
+      {a.primaryDistinguishingFeatures.length > 0 && (
+        <>
+          <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            Primary distinguishing features
+          </p>
+          <ul className="mt-1 list-disc pl-4 font-mono text-xs leading-relaxed text-ink">
+            {a.primaryDistinguishingFeatures.map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {/* Consolidated open-landscape analysis */}
+      {a.consolidatedOpenLandscapeAnalysis && (
+        <>
+          <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            Where your concept sits
+          </p>
+          <p className="mt-1 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-muted">
+            {a.consolidatedOpenLandscapeAnalysis}
+          </p>
+        </>
+      )}
+
+      {/* Development guidance */}
+      {a.keyConceptDevelopmentGuidance && (
+        <>
+          <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            What to document in depth
+          </p>
+          <p className="mt-1 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-muted">
+            {a.keyConceptDevelopmentGuidance}
+          </p>
+        </>
+      )}
+    </div>
+  );
 }
 
 function GapView({ card }: { card: GapCard }) {
@@ -249,7 +355,9 @@ function NoveltyCaptureView({
         {card.context}
       </p>
       <p className="mt-2 font-mono text-[11px] italic text-ink-muted">
-        This has to be your idea, in your own words — the Helper won&apos;t suggest it.
+        Talk it through with the Helper if you want — it can brainstorm angles and explain what
+        tends to make something registrable. The one sentence that has to be yours, in your own
+        words, is this one: what your concept does that the art does not.
       </p>
       <textarea
         value={text}

@@ -1,8 +1,8 @@
 import "server-only";
 import { applyGrade, EvidenceLedger, SharedConsciousness } from "@/lib/modules/shared";
 import { hasCheckpoint, sealCheckpoint } from "@/lib/modules/shared/checkpoint";
-import type { ConceptObject } from "@/lib/modules/shared";
-import { runDeepener, runVerifier } from "./agents";
+import type { ConceptObject, HelperTurn } from "@/lib/modules/shared";
+import { runDeepener, runHelper, runVerifier } from "./agents";
 import { MATURATION_HUMAN_SOURCE_TYPES } from "./types";
 import type {
   DeepenReviewCard,
@@ -38,6 +38,7 @@ export type MaturationSnapshot = {
   concepts: MaturedConcept[];
   openCards: Module2Card[];
   intents: [string, Intent][];
+  conversation: HelperTurn[];
   ledger: import("@/lib/modules/shared").LedgerEntry[];
 };
 
@@ -54,6 +55,7 @@ export class MaturationModule {
   private concepts = new Map<string, MaturedConcept>();
   private openCards = new Map<string, Module2Card>();
   private intents = new Map<string, Intent>();
+  private conversation: HelperTurn[] = [];
 
   constructor(deps: MaturationDeps) {
     this.runAgent = deps.runAgent;
@@ -118,11 +120,60 @@ export class MaturationModule {
     }
   }
 
-  /** The inventor types to the Helper — captured as a verbatim note. */
+  /** The inventor types to the Helper — captured verbatim AND answered. */
   async tell(text: string): Promise<Module2View> {
     const t = text.trim();
-    if (t) this.ledger.recordInventorSource("inventor_note", t, ["maturation", "note"]);
+    if (!t) return this.view();
+    this.ledger.recordInventorSource("inventor_note", t, ["maturation", "note"]);
+    this.pushTurn({ role: "inventor", text: t });
+    try {
+      const helper = await runHelper(this.runAgent, {
+        message: t,
+        context: this.helperContext(),
+        inventorMaterial: this.inventorMaterial(),
+        conversation: this.conversation.slice(-6).map((tn) => ({ role: tn.role, text: tn.text })),
+        consciousness: this.consciousness.renderForAgent(),
+      });
+      this.pushTurn({
+        role: "helper",
+        text: helper.reply || "Tell me a bit more and I'll help you sharpen it.",
+        ...(helper.question?.ask ? { question: helper.question } : {}),
+        intent: helper.intent,
+      });
+    } catch (err) {
+      console.error("[maturation] helper failed", err);
+      this.pushTurn({ role: "helper", text: "I hit a snag answering that — try rephrasing?" });
+    }
     return this.view();
+  }
+
+  private pushTurn(turn: Omit<HelperTurn, "timestamp">): void {
+    this.conversation.push({ ...turn, timestamp: this.now() });
+  }
+
+  /** A compact description of the live Maturation state for the Helper. */
+  private helperContext(): string {
+    const active = [...this.concepts.values()].filter((c) => c.status.state === "active");
+    return [
+      `Phase: ${this.phase}.`,
+      active.length
+        ? `Concepts being matured:\n${active
+            .map((c, i) => `[${i + 1}] ${c.title}: ${c.deepened_statement || c.formalized_statement}`)
+            .join("\n")}`
+        : "No active concepts yet.",
+      this.openCards.size ? `${this.openCards.size} card(s) open for the inventor's decision.` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  /** Everything the inventor has stated in their own words (the verbatim trail). */
+  private inventorMaterial(): string {
+    return this.ledger
+      .humanVerbatim()
+      .map((e) => e.verbatim_text)
+      .filter(Boolean)
+      .join("\n");
   }
 
   view(): Module2View {
@@ -130,6 +181,7 @@ export class MaturationModule {
       phase: this.phase,
       cards: [...this.openCards.values()],
       concepts: this.snapshotConcepts(),
+      conversation: this.conversation.map((t) => ({ ...t })),
       ledger: this.ledger.serialize(),
       complete: this.isComplete(),
     };
@@ -166,6 +218,7 @@ export class MaturationModule {
       concepts: this.snapshotConcepts(),
       openCards: [...this.openCards.values()],
       intents: [...this.intents.entries()],
+      conversation: this.conversation.map((t) => ({ ...t })),
       ledger: this.ledger.serialize(),
     };
   }
@@ -185,6 +238,7 @@ export class MaturationModule {
     m.concepts = new Map(snap.concepts.map((c) => [c.id, c]));
     m.openCards = new Map(snap.openCards.map((c) => [c.id, c]));
     m.intents = new Map(snap.intents);
+    m.conversation = (snap.conversation ?? []).map((t) => ({ ...t }));
     return m;
   }
 

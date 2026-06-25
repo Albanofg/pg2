@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { withBackpack, type BackpackSection } from "@/lib/modules/shared";
-import type { AgentName, AgentRunner, ConceptLandscape } from "./types";
+import { buildHelperPrompt, HelperOutput, type HelperResult } from "@/lib/modules/shared/helper-agent";
+import type { AgentName, AgentRunner, ConceptLandscape, SectionAgent } from "./types";
 
 /**
  * Module 4 (Differentiation) — the Slice-A sub-agents. Module 4 owns each agent's
@@ -14,21 +15,46 @@ import type { AgentName, AgentRunner, ConceptLandscape } from "./types";
 
 const MODULE_4_DIR = "module-4-differentiation";
 
+const SEC_DIR = `${MODULE_4_DIR}/sections`;
+
 const PROMPT_FILES: Record<AgentName, string> = {
+  helper: `${MODULE_4_DIR}/00-helper.md`,
+  "key-concept-decomposer": `${MODULE_4_DIR}/06-key-concept-decomposer.md`,
+  whitespace: `${MODULE_4_DIR}/01-whitespace.md`,
   "gap-framer": `${MODULE_4_DIR}/01-gap-framer.md`,
   "differentiation-formalizer": `${MODULE_4_DIR}/02-differentiation-formalizer.md`,
   verifier: `${MODULE_4_DIR}/03-verifier.md`,
-  "disclosure-compiler": `${MODULE_4_DIR}/04-disclosure.md`,
   "pohc-scorer": `${MODULE_4_DIR}/05-pohc.md`,
+  // The nine per-section disclosure specialists.
+  "sec-title": `${SEC_DIR}/title.md`,
+  "sec-background": `${SEC_DIR}/background.md`,
+  "sec-summary": `${SEC_DIR}/summary.md`,
+  "sec-abstract": `${SEC_DIR}/abstract.md`,
+  "sec-architecture": `${SEC_DIR}/architecture.md`,
+  "sec-data-structures": `${SEC_DIR}/data-structures.md`,
+  "sec-operations": `${SEC_DIR}/operations.md`,
+  "sec-alternatives": `${SEC_DIR}/alternatives.md`,
+  "sec-ramifications": `${SEC_DIR}/ramifications.md`,
 };
 
 /** Which Backpack knowledge sections each agent pulls in (on top of CORE). */
 const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
+  helper: ["helper_doctrine"],
+  "key-concept-decomposer": [],
+  whitespace: ["examiner_grounds"],
   "gap-framer": ["examiner_grounds"],
   "differentiation-formalizer": [],
   verifier: [],
-  "disclosure-compiler": ["disclosure_sections", "enablement_101", "abstract_rules"],
   "pohc-scorer": ["inventorship_factors"],
+  "sec-title": [],
+  "sec-background": [],
+  "sec-summary": [],
+  "sec-abstract": ["abstract_rules"],
+  "sec-architecture": ["enablement_101"],
+  "sec-data-structures": ["enablement_101"],
+  "sec-operations": ["enablement_101"],
+  "sec-alternatives": ["broadening"],
+  "sec-ramifications": [],
 };
 
 const promptCache = new Map<AgentName, string>();
@@ -47,6 +73,105 @@ export async function loadAgentPrompt(agent: AgentName): Promise<string> {
 /* ------------------------------------------------------------------ *
  * Output schemas
  * ------------------------------------------------------------------ */
+
+/**
+ * Splits one carried Concept into its distinct novel elements — one element per
+ * Key Concept, by technical density, each traceable to the inventor's words. It
+ * splits what is genuinely there; it never manufactures concepts to look thorough.
+ */
+export const KeyConceptDecomposerOutput = z.object({
+  concepts: z
+    .array(
+      z.object({
+        title: z.string(),
+        statement: z.string(),
+        source_excerpts: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
+});
+export type KeyConceptDecomposerResult = z.infer<typeof KeyConceptDecomposerOutput>;
+
+export async function runKeyConceptDecomposer(
+  runAgent: AgentRunner,
+  input: { title: string; statement: string; verbatim: string[] },
+): Promise<KeyConceptDecomposerResult> {
+  const system = await loadAgentPrompt("key-concept-decomposer");
+  const prompt = [
+    `THE CONCEPT: ${input.title}`,
+    `Current statement: ${input.statement}`,
+    "",
+    "THE INVENTOR'S OWN WORDS (the ONLY source — split only what is genuinely distinct here; cite the excerpts each split rests on):",
+    ...input.verbatim.map((v, i) => `[${i + 1}] ${v}`),
+  ].join("\n");
+  return runAgent({
+    agent: "key-concept-decomposer",
+    system,
+    prompt,
+    schema: KeyConceptDecomposerOutput,
+    temperature: 0.2,
+  });
+}
+
+/** V1 whitespace ("open landscape") — the full prior-art mechanism surfacing + synthesis. */
+export const WhitespaceOutput = z.object({
+  totalPatentsAnalyzed: z.number().default(0),
+  patentAnalyses: z
+    .array(
+      z.object({
+        patentNumber: z.string().default(""),
+        patentTitle: z.string().default(""),
+        patentStatus: z.enum(["GRANTED", "PENDING", "UNKNOWN"]).default("UNKNOWN"),
+        extractedMechanisms: z.array(z.string()).default([]),
+        inventorClarificationQuestions: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
+  crossPatentClarificationQuestions: z.array(z.string()).default([]),
+  overallMatchLevel: z
+    .object({
+      level: z.enum(["Green Match", "Yellow Match", "Red Match"]).default("Green Match"),
+      directMatches: z.number().default(0),
+      adjacentMatches: z.number().default(0),
+      unrelatedReferences: z.number().default(0),
+    })
+    .default({ level: "Green Match", directMatches: 0, adjacentMatches: 0, unrelatedReferences: 0 }),
+  consolidatedOpenLandscapeAnalysis: z.string().default(""),
+  primaryDistinguishingFeatures: z.array(z.string()).default([]),
+  keyConceptDevelopmentGuidance: z.string().default(""),
+});
+export type WhitespaceResult = z.infer<typeof WhitespaceOutput>;
+
+export async function runWhitespace(
+  runAgent: AgentRunner,
+  input: {
+    title: string;
+    statement: string;
+    references: {
+      publicationNumber: string;
+      title: string;
+      summary: string;
+      relevanceScore?: number;
+    }[];
+  },
+): Promise<WhitespaceResult> {
+  const system = await loadAgentPrompt("whitespace");
+  const prompt = [
+    "THE KEY CONCEPT (the inventor's owned, distinct technological description):",
+    `${input.title}: ${input.statement}`,
+    "",
+    `THE PRIOR-ART REFERENCES (${input.references.length}):`,
+    input.references.length
+      ? input.references
+          .map(
+            (r, i) =>
+              `[${i + 1}] ${r.publicationNumber || "(no number)"} — ${r.title}\n    summary: ${r.summary || "(no summary provided)"}\n    relevance: ${r.relevanceScore ?? "n/a"}`,
+          )
+          .join("\n")
+      : "(no prior art found — return totalPatentsAnalyzed 0, a Green Match, an empty patentAnalyses list, and an open-landscape paragraph noting the area appears open)",
+  ].join("\n");
+  return runAgent({ agent: "whitespace", system, prompt, schema: WhitespaceOutput, temperature: 0.2 });
+}
 
 export const GapFramerOutput = z.object({
   art_summary: z.string(),
@@ -83,18 +208,9 @@ export const PohcOutput = z.object({
 });
 export type PohcResult = z.infer<typeof PohcOutput>;
 
-export const DisclosureOutput = z.object({
-  title: z.string().default(""),
-  background: z.string().default(""),
-  summary: z.string().default(""),
-  abstract: z.string().default(""),
-  architecture: z.string().default(""),
-  data_structures: z.string().default(""),
-  operations: z.string().default(""),
-  alternatives: z.string().default(""),
-  ramifications: z.string().default(""),
-});
-export type DisclosureResult = z.infer<typeof DisclosureOutput>;
+/** Every per-section drafter returns one field: the raw prose for its section. */
+export const SectionOutput = z.object({ body: z.string().default("") });
+export type SectionResult = z.infer<typeof SectionOutput>;
 
 /* ------------------------------------------------------------------ *
  * Run functions
@@ -159,16 +275,27 @@ export async function runDifferentiationFormalizer(
   });
 }
 
-export async function runDisclosureCompiler(
+/**
+ * Draft ONE disclosure section with its specialist agent. Every section gets the
+ * same rich material — Key Concepts, the inventor's full verbatim, the
+ * representative code, the prior-art summary — plus any already-drafted sections
+ * it depends on (so reference numerals, component names, and Data Object names
+ * stay consistent across the disclosure). The section's own prompt file enforces
+ * its depth rules; this only assembles the fuel.
+ */
+export async function runSection(
   runAgent: AgentRunner,
+  agent: SectionAgent,
   input: {
     keyConcepts: { title: string; statement: string; differentiation: string }[];
     verbatim: string[];
+    code?: { language: string; code: string } | null;
     artSummary: string;
+    priorSections?: { label: string; body: string }[];
     consciousness?: string;
   },
-): Promise<DisclosureResult> {
-  const system = await loadAgentPrompt("disclosure-compiler");
+): Promise<SectionResult> {
+  const system = await loadAgentPrompt(agent);
   const prompt = [
     "THE OWNED KEY CONCEPTS (anchors of the disclosure):",
     ...input.keyConcepts.map(
@@ -176,22 +303,38 @@ export async function runDisclosureCompiler(
         `(${i + 1}) ${k.title}\n    Statement: ${k.statement}\n    Differentiation: ${k.differentiation}`,
     ),
     "",
-    "THE INVENTOR'S OWN WORDS (the only source of technical substance):",
+    "THE INVENTOR'S OWN WORDS (the only source of technical substance — draw on these, invent nothing beyond them):",
     ...input.verbatim.map((v, i) => `[${i + 1}] ${v}`),
-    "",
-    "WHAT THE PRIOR ART COVERS (for the Background only — do not present as the invention):",
-    input.artSummary || "(no prior-art summary available)",
+    ...(input.code?.code?.trim()
+      ? [
+          "",
+          `REPRESENTATIVE CODE (${input.code.language}) — concrete implementation the inventor approved; mine it for components, data fields, and steps, but add no mechanism it does not show:`,
+          input.code.code,
+        ]
+      : []),
+    ...(input.artSummary?.trim()
+      ? [
+          "",
+          "WHAT THE PRIOR ART COVERS (Background context only — never present it as the invention):",
+          input.artSummary,
+        ]
+      : []),
+    ...(input.priorSections?.length
+      ? [
+          "",
+          "SECTIONS ALREADY DRAFTED FOR THIS DISCLOSURE — reuse their reference numerals, component names, and Data Object names EXACTLY; do not renumber or rename:",
+          ...input.priorSections.map((s) => `### ${s.label}\n${s.body}`),
+        ]
+      : []),
     ...(input.consciousness
-      ? ["", "EVERYTHING SETTLED FOR THIS PATENT (Shared Consciousness — stay consistent):", input.consciousness]
+      ? [
+          "",
+          "EVERYTHING SETTLED FOR THIS PATENT (Shared Consciousness — stay consistent):",
+          input.consciousness,
+        ]
       : []),
   ].join("\n");
-  return runAgent({
-    agent: "disclosure-compiler",
-    system,
-    prompt,
-    schema: DisclosureOutput,
-    temperature: 0.2,
-  });
+  return runAgent({ agent, system, prompt, schema: SectionOutput, temperature: 0.3 });
 }
 
 export async function runPohcScorer(
@@ -226,4 +369,28 @@ export async function runVerifier(
       : []),
   ].join("\n");
   return runAgent({ agent: "verifier", system, prompt, schema: VerifierOutput, temperature: 0 });
+}
+
+/** The module Helper — replies to the inventor, teaches, brainstorms (Differentiation context). */
+export async function runHelper(
+  runAgent: AgentRunner,
+  input: {
+    message: string;
+    context: string;
+    inventorMaterial: string;
+    conversation: { role: string; text: string }[];
+    consciousness?: string;
+  },
+): Promise<HelperResult> {
+  const system = await loadAgentPrompt("helper");
+  const prompt = buildHelperPrompt({
+    message: input.message,
+    where:
+      "Module 4 (Differentiation) — the heavy moment: per concept, framing the prior-art gap and capturing, in the inventor's own words, what is genuinely new",
+    context: input.context,
+    inventorMaterial: input.inventorMaterial,
+    conversation: input.conversation,
+    ...(input.consciousness ? { consciousness: input.consciousness } : {}),
+  });
+  return runAgent({ agent: "helper", system, prompt, schema: HelperOutput, temperature: 0.4 });
 }

@@ -13,6 +13,7 @@ export const runtime = "nodejs";
 const EMPTY_VIEW: Module3View = {
   phase: "idle",
   ideas: [],
+  conversation: [],
   ledger: [],
   complete: false,
 };

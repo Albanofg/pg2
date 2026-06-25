@@ -40,6 +40,8 @@ const PROMPT_FILES: Record<AgentName, string> = {
   "code-generator": `${MODULE_1_DIR}/07-code-generator.md`,
   reviser: `${MODULE_1_DIR}/08-reviser.md`,
   verifier: `${MODULE_1_DIR}/09-verifier.md`,
+  brainstorm: `${MODULE_1_DIR}/10-brainstorm.md`,
+  advocate: `${MODULE_1_DIR}/11-advocate.md`,
 };
 
 const promptCache = new Map<AgentName, string>();
@@ -51,6 +53,9 @@ const promptCache = new Map<AgentName, string>();
  */
 const AGENT_SECTIONS: Partial<Record<AgentName, BackpackSection[]>> = {
   helper: ["helper_doctrine"],
+  // The brainstormer teaches patentability and brainstorms WITH the inventor —
+  // it reads the same doctrine so it stays in the teach-don't-invent lane.
+  brainstorm: ["helper_doctrine"],
 };
 
 /**
@@ -76,19 +81,16 @@ export async function loadAgentPrompt(agent: AgentName): Promise<string> {
 export const HelperOutput = z.object({
   /** What the Helper understood the inventor's message to be. */
   intent: z.enum(["question", "edit", "new_idea", "answer", "other"]),
-  /** The plain-language message shown to the inventor; always present; teaches, never invents. */
+  /** The plain-language message shown to the inventor — SHORT (1–3 sentences); teaches/brainstorms, never invents. */
   reply: z.string(),
-  /** Teaching points about weak/thin parts — they ask, they never answer. */
-  teaching: z
-    .array(
-      z.object({
-        topic: z.string(),
-        why_it_matters: z.string(),
-        what_would_strengthen: z.string(),
-        ask: z.string(),
-      }),
-    )
-    .default([]),
+  /** At most ONE short question with tap-to-answer options. Leave `ask` empty when nothing is needed. */
+  question: z
+    .object({
+      ask: z.string().default(""),
+      why: z.string().default(""),
+      options: z.array(z.string()).default([]),
+    })
+    .default({ ask: "", why: "", options: [] }),
 });
 export type HelperResult = z.infer<typeof HelperOutput>;
 
@@ -131,35 +133,32 @@ export const ClarifierOutput = z.object({
 });
 export type ClarifierResult = z.infer<typeof ClarifierOutput>;
 
-export const ExaminerOutput = z.object({
-  findings: z.array(
-    z.object({
-      category: z.enum([
-        "vague",
-        "appears_known",
-        "contradiction",
-        "gap_needs_inventive_input",
-      ]),
-      excerpt: z.string(),
-      explanation: z.string(),
-      severity: z.enum(["low", "medium", "high"]),
-      /** For gap_needs_inventive_input: the named missing element (no solution). */
-      missing_element: z.string().default(""),
-    }),
-  ),
+/** A candidate Concept restated purely from the inventor's words (shared by the three concept passes). */
+const ConceptCandidate = z.object({
+  title: z.string(),
+  restatement: z.string(),
+  source_excerpts: z.array(z.string()).default([]),
 });
-export type ExaminerResult = z.infer<typeof ExaminerOutput>;
 
 export const DecomposerOutput = z.object({
-  concepts: z.array(
-    z.object({
-      title: z.string(),
-      restatement: z.string(),
-      source_excerpts: z.array(z.string()),
-    }),
-  ),
+  concepts: z.array(ConceptCandidate).default([]),
 });
 export type DecomposerResult = z.infer<typeof DecomposerOutput>;
+
+/** Advocate — the generous breadth pass; surfaces distinct Concepts the Decomposer under-split. */
+export const AdvocateOutput = z.object({
+  concepts: z.array(ConceptCandidate).default([]),
+});
+export type AdvocateResult = z.infer<typeof AdvocateOutput>;
+
+/**
+ * Examiner — the skeptical consolidation pass. Now returns the FINAL, de-duplicated,
+ * correctly-split Concept set (not diagnostic findings).
+ */
+export const ExaminerOutput = z.object({
+  concepts: z.array(ConceptCandidate).default([]),
+});
+export type ExaminerResult = z.infer<typeof ExaminerOutput>;
 
 export const BoundaryOutput = z.object({
   classification: z.enum(["factual_or_clarifying", "inventive"]),
@@ -192,6 +191,21 @@ export const CodeGeneratorOutput = z.object({
     .default([]),
 });
 export type CodeGeneratorResult = z.infer<typeof CodeGeneratorOutput>;
+
+export const BrainstormOutput = z.object({
+  /** One short sentence introducing the directions, in the Helper's voice. */
+  intro: z.string().default(""),
+  directions: z
+    .array(
+      z.object({
+        direction: z.string(),
+        why_it_might_be_patentable: z.string(),
+        invite_to_develop: z.string(),
+      }),
+    )
+    .default([]),
+});
+export type BrainstormResult = z.infer<typeof BrainstormOutput>;
 
 /* ------------------------------------------------------------------ *
  * Run functions — build the user prompt, call through the seam, return typed
@@ -338,16 +352,43 @@ export async function runDecomposer(
   return runAgent({ agent: "decomposer", system, prompt, schema: DecomposerOutput, temperature: 0.2 });
 }
 
+/** Render a candidate Concept list as readable text for the advocate/examiner prompts. */
+function renderConcepts(concepts: { title: string; restatement: string }[]): string {
+  return concepts.length
+    ? concepts.map((c, i) => `(${i + 1}) ${c.title}: ${c.restatement}`).join("\n")
+    : "(none)";
+}
+
+/** The generous breadth pass — surfaces distinct Concepts the Decomposer under-split. */
+export async function runAdvocate(
+  runAgent: AgentRunner,
+  input: { material: string; candidates: { title: string; restatement: string }[] },
+): Promise<AdvocateResult> {
+  const system = await loadAgentPrompt("advocate");
+  const prompt = [
+    "CANDIDATE CONCEPTS ALREADY SURFACED (do NOT duplicate these; add only genuinely distinct ones):",
+    renderConcepts(input.candidates),
+    "",
+    "INVENTOR'S MATERIAL (your only permitted source — restate, never add):",
+    input.material,
+  ].join("\n");
+  return runAgent({ agent: "advocate", system, prompt, schema: AdvocateOutput, temperature: 0.3 });
+}
+
+/** The skeptical consolidation pass — returns the FINAL, de-duplicated, correctly-split Concept set. */
 export async function runExaminer(
   runAgent: AgentRunner,
-  input: { material: string },
+  input: { material: string; candidates: { title: string; restatement: string }[] },
 ): Promise<ExaminerResult> {
   const system = await loadAgentPrompt("examiner");
   const prompt = [
-    "INVENTOR'S MATERIAL TO DIAGNOSE (diagnose only — never prescribe a fix):",
+    "CANDIDATE CONCEPTS (from the Decomposer and the Advocate — merge duplicates, split bundles, complete what's missing):",
+    renderConcepts(input.candidates),
+    "",
+    "INVENTOR'S MATERIAL (the ground truth and ONLY source of substance — restate, never add):",
     input.material,
-  ].join("\n\n");
-  return runAgent({ agent: "examiner", system, prompt, schema: ExaminerOutput, temperature: 0.2 });
+  ].join("\n");
+  return runAgent({ agent: "examiner", system, prompt, schema: ExaminerOutput, temperature: 0.1 });
 }
 
 export async function runClarifier(
@@ -388,6 +429,40 @@ export async function runFormalizer(
     ...input.verbatim.map((v, i) => `[${i + 1}] ${v}`),
   ].join("\n");
   return runAgent({ agent: "formalizer", system, prompt, schema: FormalizerOutput, temperature: 0.1 });
+}
+
+export async function runBrainstorm(
+  runAgent: AgentRunner,
+  input: {
+    core: string;
+    concepts: { title: string; statement: string }[];
+    inventorMaterial: string;
+    consciousness?: string;
+  },
+): Promise<BrainstormResult> {
+  const system = await loadAgentPrompt("brainstorm");
+  const prompt = [
+    "THE INVENTOR'S IDEA, AS AGREED (the core reading — your only source of substance):",
+    input.core || "(not distilled yet)",
+    "",
+    "THE DISTINCT CONCEPTS SPLIT OUT SO FAR (directions should not just repeat these):",
+    input.concepts.length
+      ? input.concepts.map((c, i) => `[${i + 1}] ${c.title}: ${c.statement}`).join("\n")
+      : "(none yet)",
+    "",
+    "THE INVENTOR'S OWN MATERIAL (the ONLY source of inventive substance — never add to it yourself):",
+    input.inventorMaterial || "(none yet)",
+    ...(input.consciousness
+      ? ["", "WHAT'S ALREADY SETTLED FOR THIS PATENT (stay consistent):", input.consciousness]
+      : []),
+  ].join("\n");
+  return runAgent({
+    agent: "brainstorm",
+    system,
+    prompt,
+    schema: BrainstormOutput,
+    temperature: 0.5,
+  });
 }
 
 export async function runCodeGenerator(

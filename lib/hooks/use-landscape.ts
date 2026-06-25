@@ -7,6 +7,7 @@ import type { Module3View } from "@/lib/modules/landscape/types";
 const EMPTY: Module3View = {
   phase: "idle",
   ideas: [],
+  conversation: [],
   ledger: [],
   complete: false,
 };

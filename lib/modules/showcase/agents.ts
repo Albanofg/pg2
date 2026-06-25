@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { withBackpack, type BackpackSection } from "@/lib/modules/shared";
+import { buildHelperPrompt, HelperOutput, type HelperResult } from "@/lib/modules/shared/helper-agent";
 import type { AgentName, AgentRunner, Genus, Species, SpeciesType } from "./types";
 
 /**
@@ -15,17 +16,30 @@ import type { AgentName, AgentRunner, Genus, Species, SpeciesType } from "./type
 const MODULE_5_DIR = "module-5-showcase";
 
 const PROMPT_FILES: Record<AgentName, string> = {
+  helper: `${MODULE_5_DIR}/00-helper.md`,
   "genus-extractor": `${MODULE_5_DIR}/01-genus-extractor.md`,
   "species-synthesizer": `${MODULE_5_DIR}/02-species-synthesizer.md`,
   "key-concept-broadener": `${MODULE_5_DIR}/03-key-concept-broadener.md`,
   verifier: `${MODULE_5_DIR}/04-verifier.md`,
+  // The 5c extender second pass.
+  "background-extender": `${MODULE_5_DIR}/05-background-extender.md`,
+  "summary-extender": `${MODULE_5_DIR}/06-summary-extender.md`,
+  "detail-description-extender": `${MODULE_5_DIR}/07-detail-description-extender.md`,
+  "abstract-rewriter": `${MODULE_5_DIR}/08-abstract-rewriter.md`,
+  "key-concept-appender": `${MODULE_5_DIR}/09-key-concept-appender.md`,
 };
 
 const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
+  helper: ["helper_doctrine"],
   "genus-extractor": ["broadening"],
   "species-synthesizer": ["broadening"],
   "key-concept-broadener": ["broadening"],
   verifier: [],
+  "background-extender": ["broadening"],
+  "summary-extender": ["broadening"],
+  "detail-description-extender": ["broadening", "enablement_101"],
+  "abstract-rewriter": ["broadening", "abstract_rules"],
+  "key-concept-appender": ["broadening"],
 };
 
 const promptCache = new Map<AgentName, string>();
@@ -163,4 +177,181 @@ export async function runVerifier(
       : []),
   ].join("\n");
   return runAgent({ agent: "verifier", system, prompt, schema: VerifierOutput, temperature: 0 });
+}
+
+/* ------------------------------------------------------------------ *
+ * The 5c "extender" second pass — enrich the disclosure across paradigms.
+ * ------------------------------------------------------------------ */
+
+function renderSpecies(species: Species[]): string {
+  if (!species.length) return "(none)";
+  return species
+    .map((s, i) =>
+      [
+        `(${i + 1}) [${s.species_type}] ${s.species_name}`,
+        `    architecture: ${s.architectural_description}`,
+        `    data flow: ${s.data_flow}`,
+        `    key components: ${s.key_components.join("; ")}`,
+        `    technical improvements: ${s.technical_improvements.join("; ")}`,
+        `    differentiation: ${s.differentiation_from_traditional}`,
+      ].join("\n"),
+    )
+    .join("\n\n");
+}
+
+/** Extenders that APPEND paragraphs to an existing section (background, summary). */
+export const ExtenderOutput = z.object({ additional: z.string().default("") });
+export type ExtenderResult = z.infer<typeof ExtenderOutput>;
+
+async function runExtender(
+  runAgent: AgentRunner,
+  agent: "background-extender" | "summary-extender",
+  input: { genus: Genus; species: Species[]; existing: string },
+): Promise<ExtenderResult> {
+  const system = await loadAgentPrompt(agent);
+  const prompt = [
+    "THE EXISTING SECTION (continue its voice; APPEND new paragraphs, do not rewrite what's there):",
+    input.existing,
+    "",
+    "THE PARADIGM-NEUTRAL GENUS:",
+    renderGenus(input.genus),
+    "",
+    "THE APPROVED ALTERNATIVE IMPLEMENTATIONS (species):",
+    renderSpecies(input.species),
+  ].join("\n");
+  return runAgent({ agent, system, prompt, schema: ExtenderOutput, temperature: 0.3 });
+}
+
+export function runBackgroundExtender(
+  runAgent: AgentRunner,
+  input: { genus: Genus; species: Species[]; existing: string },
+): Promise<ExtenderResult> {
+  return runExtender(runAgent, "background-extender", input);
+}
+
+export function runSummaryExtender(
+  runAgent: AgentRunner,
+  input: { genus: Genus; species: Species[]; existing: string },
+): Promise<ExtenderResult> {
+  return runExtender(runAgent, "summary-extender", input);
+}
+
+/** The new "Detailed Description — Across Implementations" section body. */
+export const SectionBodyOutput = z.object({ body: z.string().default("") });
+export type SectionBodyResult = z.infer<typeof SectionBodyOutput>;
+
+export async function runDetailDescriptionExtender(
+  runAgent: AgentRunner,
+  input: { genus: Genus; species: Species[] },
+): Promise<SectionBodyResult> {
+  const system = await loadAgentPrompt("detail-description-extender");
+  const prompt = [
+    "THE PARADIGM-NEUTRAL GENUS:",
+    renderGenus(input.genus),
+    "",
+    "THE APPROVED ALTERNATIVE IMPLEMENTATIONS (species) — render ONE subsection per species, in order, then a technical-improvements paragraph and a hardware-optimization paragraph:",
+    renderSpecies(input.species),
+  ].join("\n");
+  return runAgent({
+    agent: "detail-description-extender",
+    system,
+    prompt,
+    schema: SectionBodyOutput,
+    temperature: 0.3,
+  });
+}
+
+/** A complete replacement Abstract that folds in mechanism + species + hardware. */
+export const AbstractRewriteOutput = z.object({ abstract: z.string().default("") });
+export type AbstractRewriteResult = z.infer<typeof AbstractRewriteOutput>;
+
+export async function runAbstractRewriter(
+  runAgent: AgentRunner,
+  input: { genus: Genus; species: Species[]; existing: string },
+): Promise<AbstractRewriteResult> {
+  const system = await loadAgentPrompt("abstract-rewriter");
+  const prompt = [
+    "THE ORIGINAL ABSTRACT (read it, then write a COMPLETE replacement):",
+    input.existing,
+    "",
+    "THE PARADIGM-NEUTRAL GENUS:",
+    renderGenus(input.genus),
+    "",
+    "THE APPROVED ALTERNATIVE IMPLEMENTATIONS (species):",
+    renderSpecies(input.species),
+  ].join("\n");
+  return runAgent({
+    agent: "abstract-rewriter",
+    system,
+    prompt,
+    schema: AbstractRewriteOutput,
+    temperature: 0.2,
+  });
+}
+
+/** A new Key Concept covering one of the genus/species/hardware aspects. */
+export const AppendedConceptOutput = z.object({
+  title: z.string().default(""),
+  key_concept_text: z.string().default(""),
+});
+export type AppendedConceptResult = z.infer<typeof AppendedConceptOutput>;
+
+export type ConceptAspect =
+  | "genus_mechanism"
+  | "species_spectrum"
+  | "hardware_optimization";
+
+export async function runKeyConceptAppender(
+  runAgent: AgentRunner,
+  input: {
+    genus: Genus;
+    species: Species[];
+    existingTitles: string[];
+    aspect: ConceptAspect;
+  },
+): Promise<AppendedConceptResult> {
+  const system = await loadAgentPrompt("key-concept-appender");
+  const prompt = [
+    `THE CONCEPT ASPECT TO WRITE: ${input.aspect}`,
+    "",
+    "THE PARADIGM-NEUTRAL GENUS:",
+    renderGenus(input.genus),
+    "",
+    "THE APPROVED ALTERNATIVE IMPLEMENTATIONS (species):",
+    renderSpecies(input.species),
+    "",
+    "EXISTING KEY CONCEPT TITLES (do NOT duplicate or overlap these):",
+    ...input.existingTitles.map((t, i) => `(${i + 1}) ${t}`),
+  ].join("\n");
+  return runAgent({
+    agent: "key-concept-appender",
+    system,
+    prompt,
+    schema: AppendedConceptOutput,
+    temperature: 0.3,
+  });
+}
+
+/** The module Helper — replies to the inventor, teaches, brainstorms (Showcase context). */
+export async function runHelper(
+  runAgent: AgentRunner,
+  input: {
+    message: string;
+    context: string;
+    inventorMaterial: string;
+    conversation: { role: string; text: string }[];
+    consciousness?: string;
+  },
+): Promise<HelperResult> {
+  const system = await loadAgentPrompt("helper");
+  const prompt = buildHelperPrompt({
+    message: input.message,
+    where:
+      "Module 5 (Showcase) — optionally broadening the Key Concepts across alternative implementations so the mechanism is covered however it's built",
+    context: input.context,
+    inventorMaterial: input.inventorMaterial,
+    conversation: input.conversation,
+    ...(input.consciousness ? { consciousness: input.consciousness } : {}),
+  });
+  return runAgent({ agent: "helper", system, prompt, schema: HelperOutput, temperature: 0.4 });
 }

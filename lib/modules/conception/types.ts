@@ -170,42 +170,78 @@ export type CodeReviewCard = {
   actions: ReviewAction[];
 };
 
+/**
+ * Brainstorm card — the Helper's candidate patentable DIRECTIONS surfaced from
+ * the inventor's own idea. It teaches what tends to make each direction
+ * registrable and invites the inventor to develop the ones they want, in their
+ * own words. It NEVER supplies the novel mechanism (that would be the machine
+ * inventing); the inventor's development is captured verbatim as theirs. This is
+ * the opposite of a black box: it points at where the value could be, then hands
+ * the pen back.
+ */
+export type BrainstormDirection = {
+  /** A short, plain name for the angle, in the inventor's own terms. */
+  direction: string;
+  /** Teaching: what tends to make this kind of thing registrable (never a ruling). */
+  why_it_might_be_patentable: string;
+  /** An open question inviting the inventor to develop it in their own words. */
+  invite_to_develop: string;
+};
+
+export type BrainstormCard = {
+  id: string;
+  type: "brainstorm";
+  /** One short sentence introducing the directions, in the Helper's voice. */
+  intro: string;
+  directions: BrainstormDirection[];
+};
+
 export type Module1Card =
   | ReviewCard
   | ClarityCard
   | LeapCard
   | CandidateConceptCard
-  | CodeReviewCard;
+  | CodeReviewCard
+  | BrainstormCard;
 
 /* ------------------------------------------------------------------ *
  * The Helper's voice — the conversation surface
  * ------------------------------------------------------------------ */
 
 /**
- * One teaching point the Helper surfaces about a weak/thin part of the idea.
- * It explains and ASKS — it never carries a proposed answer (that would be the
- * machine inventing). The inventor supplies the substance in their own words.
+ * ONE short question the Helper attaches to a reply, so replying is one tap. The
+ * Helper proposes a few candidate answers the inventor can click; they can always
+ * type their own. At most ONE per turn — never a wall of five.
  */
+export type HelperQuestion = {
+  /** The single short question (empty = no question this turn). */
+  ask: string;
+  /** One short line on why it helps — optional. */
+  why?: string;
+  /** 2–4 short proposed answers the inventor can tap; they can always type their own. */
+  options: string[];
+};
+
+/** @deprecated Legacy multi-point teaching. Kept only so older stored turns still render. */
 export type HelperTeachingPoint = {
-  /** The thin/weak point, named as it sits in the inventor's idea. */
   topic: string;
-  /** Why a patent needs this pinned down. */
   why_it_matters: string;
-  /** The FORM of a strong answer (neutral categories at most) — never the answer. */
   what_would_strengthen: string;
-  /** A direct request for the inventor to supply it in their own words. */
   ask: string;
 };
 
 /**
  * One turn in the Helper conversation. The Helper ALWAYS replies in words (it is
  * a teacher, not a silent mutator); the inventor's composer messages are shown
- * too so the exchange reads as a real dialogue.
+ * too so the exchange reads as a real dialogue. A helper turn carries a SHORT
+ * reply and, when needed, at most ONE `question` with tap-to-answer options.
  */
 export type HelperTurn = {
   role: "inventor" | "helper";
   text: string;
-  /** Teaching points attached to a Helper turn (mainly when explaining weaknesses). */
+  /** At most ONE short question, with tap-to-answer options. The fast-reply path. */
+  question?: HelperQuestion;
+  /** @deprecated Legacy multi-point teaching; only older stored turns still carry this. */
   teaching?: HelperTeachingPoint[];
   /** What the Helper understood the inventor's message to be (helper turns only). */
   intent?: "question" | "edit" | "new_idea" | "answer" | "other";
@@ -233,11 +269,21 @@ export type CandidateActionInput =
   | { action: "drop" }
   | { action: "merge"; into: string };
 
+/**
+ * Brainstorm action — either the inventor develops one of the candidate
+ * directions in their OWN words (captured verbatim, becomes a concept), or they
+ * dismiss the brainstorm to move on.
+ */
+export type BrainstormInput =
+  | { action: "develop"; direction: string; text: string }
+  | { action: "dismiss" };
+
 export type CardActionInput =
   | ReviewActionInput
   | ClarityAnswerInput
   | LeapInput
-  | CandidateActionInput;
+  | CandidateActionInput
+  | BrainstormInput;
 
 /* ------------------------------------------------------------------ *
  * The view the engine returns to the Helper after each step
@@ -278,10 +324,12 @@ export type AgentName =
   | "distiller"
   | "clarifier"
   | "examiner"
+  | "advocate"
   | "decomposer"
   | "boundary-classifier"
   | "formalizer"
   | "code-generator"
+  | "brainstorm"
   | "reviser"
   | "verifier";
 

@@ -2,16 +2,24 @@ import "server-only";
 import { EvidenceLedger, SharedConsciousness } from "@/lib/modules/shared";
 import { hasCheckpoint, sealCheckpoint } from "@/lib/modules/shared/checkpoint";
 import {
+  runAbstractRewriter,
+  runBackgroundExtender,
+  runDetailDescriptionExtender,
   runGenusExtractor,
+  runHelper,
+  runKeyConceptAppender,
   runKeyConceptBroadener,
   runSpeciesSynthesizer,
+  runSummaryExtender,
   runVerifier,
+  type ConceptAspect,
 } from "./agents";
 import { SHOWCASE_HUMAN_SOURCE_TYPES } from "./types";
 import type {
   ChoiceInput,
   DisclosureSection,
   Genus,
+  HelperTurn,
   Module5Card,
   Module5Phase,
   Module5View,
@@ -50,6 +58,7 @@ export type ShowcaseSnapshot = {
   disclosure: DisclosureSection[] | null;
   openCards: Module5Card[];
   intents: [string, Intent][];
+  conversation: HelperTurn[];
   ledger: import("@/lib/modules/shared").LedgerEntry[];
 };
 
@@ -69,6 +78,7 @@ export class ShowcaseModule {
   private disclosure: DisclosureSection[] | null = null;
   private openCards = new Map<string, Module5Card>();
   private intents = new Map<string, Intent>();
+  private conversation: HelperTurn[] = [];
 
   constructor(deps: ShowcaseDeps) {
     this.runAgent = deps.runAgent;
@@ -132,8 +142,55 @@ export class ShowcaseModule {
 
   async tell(text: string): Promise<Module5View> {
     const t = text.trim();
-    if (t) this.ledger.recordInventorSource("inventor_note", t, ["showcase", "note"]);
+    if (!t) return this.view();
+    this.ledger.recordInventorSource("inventor_note", t, ["showcase", "note"]);
+    this.pushTurn({ role: "inventor", text: t });
+    try {
+      const helper = await runHelper(this.runAgent, {
+        message: t,
+        context: this.helperContext(),
+        inventorMaterial: this.inventorMaterial(),
+        conversation: this.conversation.slice(-6).map((tn) => ({ role: tn.role, text: tn.text })),
+        consciousness: this.consciousness.renderForAgent(),
+      });
+      this.pushTurn({
+        role: "helper",
+        text: helper.reply || "Ask away — I can explain broadening or how this fits together.",
+        ...(helper.question?.ask ? { question: helper.question } : {}),
+        intent: helper.intent,
+      });
+    } catch (err) {
+      console.error("[showcase] helper failed", err);
+      this.pushTurn({ role: "helper", text: "I hit a snag answering that — try rephrasing?" });
+    }
     return this.view();
+  }
+
+  private pushTurn(turn: Omit<HelperTurn, "timestamp">): void {
+    this.conversation.push({ ...turn, timestamp: this.now() });
+  }
+
+  /** A compact description of the live Showcase state for the Helper. */
+  private helperContext(): string {
+    const kept = this.species.filter((s) => s.kept).map((s) => s.species_type);
+    return [
+      `Phase: ${this.phase}. Broadening ${this.broadened ? "applied" : "not yet applied"}.`,
+      `Key Concepts: ${[...this.keyConcepts.values()].map((k) => k.title).join("; ") || "(none)"}.`,
+      this.genus ? `Paradigm-neutral genus: ${this.genus.genus_name}.` : "",
+      kept.length ? `Kept implementations: ${kept.join(", ")}.` : "",
+      this.openCards.size ? `${this.openCards.size} card(s) open for the inventor's decision.` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  /** Everything the inventor has stated in their own words (the verbatim trail). */
+  private inventorMaterial(): string {
+    return this.ledger
+      .humanVerbatim()
+      .map((e) => e.verbatim_text)
+      .filter(Boolean)
+      .join("\n");
   }
 
   view(): Module5View {
@@ -144,6 +201,7 @@ export class ShowcaseModule {
       ...(this.genus ? { genus: { ...this.genus } } : {}),
       species: this.species.map((s) => ({ ...s, key_components: [...s.key_components], technical_improvements: [...s.technical_improvements] })),
       broadened: this.broadened,
+      conversation: this.conversation.map((t) => ({ ...t })),
       ledger: this.ledger.serialize(),
       complete: this.isComplete(),
     };
@@ -277,12 +335,124 @@ export class ShowcaseModule {
         console.error("[showcase] broadening failed for", kc.id, err);
       }
     }
+    // The 5c second pass: enrich the disclosure prose across the kept
+    // implementations and append the genus/species/hardware Key Concepts. This is
+    // the multi-paradigm depth — it applies once species are kept, independent of
+    // whether individual per-concept broadenings survive the Boundary.
+    await this.enrichDisclosure(kept);
+    this.broadened = true;
+
     if (![...this.openCards.values()].some((c) => c.type === "widened_review")) {
-      this.broadened = false;
       this.complete();
       return;
     }
     this.phase = "approving_widened";
+  }
+
+  /**
+   * The 5c "extender" pass — enrich the carried Invention Disclosure across the
+   * approved implementations, mutating it in place so export + reload carry the
+   * richer document, and append the genus/species/hardware Key Concepts.
+   */
+  private async enrichDisclosure(kept: Species[]): Promise<void> {
+    if (!this.genus || kept.length === 0) return;
+    const genus = this.genus;
+
+    // Append the genus / species-spectrum / hardware Key Concepts (2–3 of V1's 7).
+    await this.appendKeyConcepts(genus, kept);
+
+    const sections = this.disclosure;
+    if (!sections) return;
+    const find = (key: string) => sections.find((s) => s.key === key);
+    const bg = find("background");
+    const sum = find("summary");
+    const abs = find("abstract");
+
+    // Append to background + summary, replace the abstract — each mutates a
+    // different section object, so they run in parallel.
+    await Promise.all([
+      (async () => {
+        if (!bg) return;
+        try {
+          const r = await runBackgroundExtender(this.runAgent, { genus, species: kept, existing: bg.body });
+          if (r.additional.trim()) bg.body = `${bg.body}\n\n${r.additional.trim()}`;
+        } catch (err) {
+          console.error("[showcase] background-extender failed", err);
+        }
+      })(),
+      (async () => {
+        if (!sum) return;
+        try {
+          const r = await runSummaryExtender(this.runAgent, { genus, species: kept, existing: sum.body });
+          if (r.additional.trim()) sum.body = `${sum.body}\n\n${r.additional.trim()}`;
+        } catch (err) {
+          console.error("[showcase] summary-extender failed", err);
+        }
+      })(),
+      (async () => {
+        if (!abs) return;
+        try {
+          const r = await runAbstractRewriter(this.runAgent, { genus, species: kept, existing: abs.body });
+          if (r.abstract.trim()) abs.body = r.abstract.trim();
+        } catch (err) {
+          console.error("[showcase] abstract-rewriter failed", err);
+        }
+      })(),
+    ]);
+
+    // Add the new "Detailed Description — Across Implementations" section after
+    // Operations (sequential — it splices the sections array).
+    try {
+      const dd = await runDetailDescriptionExtender(this.runAgent, { genus, species: kept });
+      if (dd.body.trim()) {
+        const sec: DisclosureSection = {
+          key: "detail_across",
+          label: "Detailed Description — Across Implementations",
+          body: dd.body.trim(),
+        };
+        const opsIdx = sections.findIndex((s) => s.key === "operations");
+        if (opsIdx >= 0) sections.splice(opsIdx + 1, 0, sec);
+        else sections.push(sec);
+      }
+    } catch (err) {
+      console.error("[showcase] detail-description-extender failed", err);
+    }
+
+    this.ledger.recordMachineEvent("disclosure_extended", ["showcase"], {
+      sections: sections.length,
+    });
+  }
+
+  /** Append the genus_mechanism / species_spectrum / hardware_optimization concepts. */
+  private async appendKeyConcepts(genus: Genus, kept: Species[]): Promise<void> {
+    const aspects: ConceptAspect[] = [
+      "genus_mechanism",
+      "species_spectrum",
+      "hardware_optimization",
+    ];
+    for (const aspect of aspects) {
+      try {
+        const existingTitles = [...this.keyConcepts.values()].map((k) => k.title);
+        const r = await runKeyConceptAppender(this.runAgent, {
+          genus,
+          species: kept,
+          existingTitles,
+          aspect,
+        });
+        if (r.key_concept_text.trim()) {
+          const id = `appended:${aspect}`;
+          this.keyConcepts.set(id, {
+            id,
+            title: r.title.trim() || aspect.replace(/_/g, " "),
+            statement: r.key_concept_text.trim(),
+            verbatim: [],
+          });
+          this.ledger.recordMachineEvent("agent_appended_concept", ["showcase", aspect], {});
+        }
+      } catch (err) {
+        console.error("[showcase] key-concept-appender failed for", aspect, err);
+      }
+    }
   }
 
   private async handleWidened(cardId: string, intent: Intent, input: WidenedActionInput): Promise<void> {
@@ -311,7 +481,9 @@ export class ShowcaseModule {
     }
     this.resolveCard(cardId);
     if (![...this.openCards.values()].some((c) => c.type === "widened_review")) {
-      this.broadened = [...this.keyConcepts.values()].some((k) => !!k.broadened);
+      // The disclosure was already enriched across implementations in
+      // applyBroadening, so the broadening path stays marked applied.
+      this.broadened = true;
       this.complete();
     }
   }
@@ -416,6 +588,7 @@ export class ShowcaseModule {
       disclosure: this.disclosure ? this.disclosure.map((s) => ({ ...s })) : null,
       openCards: [...this.openCards.values()],
       intents: [...this.intents.entries()],
+      conversation: this.conversation.map((t) => ({ ...t })),
       ledger: this.ledger.serialize(),
     };
   }
@@ -434,6 +607,7 @@ export class ShowcaseModule {
     m.disclosure = snap.disclosure;
     m.openCards = new Map(snap.openCards.map((c) => [c.id, c]));
     m.intents = new Map(snap.intents);
+    m.conversation = (snap.conversation ?? []).map((t) => ({ ...t }));
     return m;
   }
 }

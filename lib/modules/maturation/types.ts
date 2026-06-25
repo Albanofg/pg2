@@ -12,6 +12,7 @@ import type {
   ConceptObject,
   EvidenceLedger,
   Grade,
+  HelperTurn,
   LedgerEntry,
   SharedConsciousness,
 } from "@/lib/modules/shared";
@@ -25,6 +26,7 @@ export type {
   ConceptObject,
   Origin,
   Grade,
+  HelperTurn,
   LedgerEntry,
   AppendOptions,
   AgentRunRequest,
@@ -149,13 +151,15 @@ export type Module2View = {
   phase: Module2Phase;
   cards: Module2Card[];
   concepts: MaturedConcept[];
+  /** The Helper conversation — its replies/teaching and the inventor's messages. */
+  conversation: HelperTurn[];
   ledger: LedgerEntry[];
   /** True once every surviving concept has a decision and ≥1 is carried forward. */
   complete: boolean;
 };
 
 /** The sub-agents Module 2 calls. Never user-facing. */
-export type AgentName = "deepener" | "verifier";
+export type AgentName = "deepener" | "verifier" | "helper";
 
 export type MaturationDeps = {
   runAgent: AgentRunner;

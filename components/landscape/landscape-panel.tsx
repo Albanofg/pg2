@@ -3,6 +3,7 @@
 import { useLandscape } from "@/lib/hooks/use-landscape";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
+import HelperThread from "@/components/workspace/helper-thread";
 import type {
   LandscapeIdea,
   LandscapeSource,
@@ -114,13 +115,15 @@ export default function LandscapePanel({
               </button>
             </div>
           )}
+
+          <HelperThread turns={view.conversation} onQuickReply={tell} busy={busy} />
         </div>
       </div>
 
       <div className="border-t border-border bg-panel p-4">
         <div className={`mx-auto w-full ${maxW}`}>
           <HelperComposer
-            placeholder="Note anything you notice in the landscape…"
+            placeholder="Ask the Helper anything…"
             busy={busy}
             onSend={tell}
           />

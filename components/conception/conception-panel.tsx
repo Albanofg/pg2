@@ -7,11 +7,12 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { VoiceTextarea } from "@/components/ui/voice-textarea";
 import HelperComposer from "@/components/workspace/helper-composer";
+import HelperThread from "@/components/workspace/helper-thread";
 import type {
+  BrainstormCard,
   CandidateConceptCard,
   ClarityCard,
   CodeReviewCard,
-  HelperTurn,
   LeapCard,
   Module1Card,
   Module1Phase,
@@ -195,8 +196,9 @@ export default function ConceptionPanel({
         </div>
       )}
 
-      {/* The Helper's voice — its teaching replies and the inventor's messages. */}
-      <HelperThread turns={view.conversation} />
+      {/* The Helper's voice — its short replies, tap-to-answer questions, and the
+          inventor's messages. */}
+      <HelperThread turns={view.conversation} onQuickReply={tell} busy={busy} />
       <div ref={endRef} />
         </div>
       </div>
@@ -234,66 +236,6 @@ function conceptionPlaceholder(phase: Module1Phase): string {
  * and the inventor's own messages. This is where the Helper TALKS to the
  * inventor (teaches, asks), instead of silently rewriting the cards.
  */
-function HelperThread({ turns }: { turns: HelperTurn[] }) {
-  if (!turns || turns.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
-        Helper
-      </div>
-      {turns.map((t, i) =>
-        t.role === "helper" ? (
-          <div
-            key={i}
-            className="rounded-md border border-action/30 bg-action/5 p-3"
-          >
-            <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-action">
-              Helper
-            </div>
-            <p className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink">
-              {t.text}
-            </p>
-            {t.teaching && t.teaching.length > 0 && (
-              <ul className="mt-3 space-y-3">
-                {t.teaching.map((tp, j) => (
-                  <li
-                    key={j}
-                    className="rounded-md border border-border bg-bg/40 p-3"
-                  >
-                    <div className="font-sans text-xs font-semibold text-ink">
-                      {tp.topic}
-                    </div>
-                    <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
-                      Why it matters: {tp.why_it_matters}
-                    </p>
-                    <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
-                      What would make it concrete: {tp.what_would_strengthen}
-                    </p>
-                    <p className="mt-2 font-mono text-[11px] leading-relaxed text-accent">
-                      {tp.ask}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ) : (
-          <div key={i} className="flex justify-end">
-            <div className="max-w-[85%] rounded-md border border-border bg-panel px-3 py-2">
-              <div className="mb-0.5 font-mono text-[9px] uppercase tracking-[0.15em] text-ink-muted">
-                You
-              </div>
-              <p className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink">
-                {t.text}
-              </p>
-            </div>
-          </div>
-        )
-      )}
-    </div>
-  );
-}
-
 function strengthOf(
   view: Module1View,
   kept: number,
@@ -361,9 +303,106 @@ function CardView({
           onAct={onAct}
         />
       );
+    case "brainstorm":
+      return <BrainstormCardView card={card} busy={busy} onAct={onAct} />;
     default:
       return null;
   }
+}
+
+function BrainstormCardView({
+  card,
+  busy,
+  onAct,
+}: {
+  card: BrainstormCard;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  const [openIdx, setOpenIdx] = useState<number | null>(null);
+  const [text, setText] = useState("");
+  return (
+    <div className="rounded-md border border-accent/40 bg-accent/5 p-4">
+      <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
+        Directions worth developing
+      </div>
+      <p className="font-mono text-xs leading-relaxed text-ink-muted">{card.intro}</p>
+      <div className="mt-3 space-y-2">
+        {card.directions.map((d, i) => {
+          const open = openIdx === i;
+          return (
+            <div key={i} className="rounded-md border border-border bg-bg p-3">
+              <div className="font-sans text-sm font-semibold text-ink">{d.direction}</div>
+              <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
+                {d.why_it_might_be_patentable}
+              </p>
+              <p className="mt-2 font-mono text-[11px] italic text-ink-muted">
+                {d.invite_to_develop}
+              </p>
+              {open ? (
+                <>
+                  <VoiceTextarea
+                    value={text}
+                    onChange={setText}
+                    rows={4}
+                    placeholder="Develop this in your own words — how it actually works…"
+                    className="mt-2 w-full resize-y rounded-md border border-border bg-panel p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
+                  />
+                  <div className="mt-2 flex justify-end gap-2">
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setOpenIdx(null);
+                        setText("");
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="primary"
+                      onClick={() => {
+                        onAct(card.id, {
+                          action: "develop",
+                          direction: d.direction,
+                          text: text.trim(),
+                        } as never);
+                        setOpenIdx(null);
+                        setText("");
+                      }}
+                      disabled={busy || !text.trim()}
+                    >
+                      This is mine →
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setOpenIdx(i);
+                      setText("");
+                    }}
+                  >
+                    Develop this
+                  </Button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Button
+          variant="ghost"
+          onClick={() => onAct(card.id, { action: "dismiss" } as never)}
+          disabled={busy}
+        >
+          Done — move on
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function CardShell({
@@ -572,8 +611,8 @@ function LeapCardView({
         {card.context}
       </p>
       <p className="mt-2 font-mono text-[11px] italic text-ink-muted">
-        This has to be your idea, in your own words — the Helper won&apos;t
-        suggest it.
+        The Helper can brainstorm angles and explain what tends to make something
+        registrable — but this specific idea has to be yours, in your own words.
       </p>
       <VoiceTextarea
         value={text}

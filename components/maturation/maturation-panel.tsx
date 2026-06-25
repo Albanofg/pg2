@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMaturation } from "@/lib/hooks/use-maturation";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
+import HelperThread from "@/components/workspace/helper-thread";
 import { VoiceTextarea } from "@/components/ui/voice-textarea";
 import type {
   DeepenReviewCard,
@@ -132,13 +133,15 @@ export default function MaturationPanel({
               </button>
             </div>
           )}
+
+          <HelperThread turns={view.conversation} onQuickReply={tell} busy={busy} />
         </div>
       </div>
 
       <div className="border-t border-border bg-panel p-4">
         <div className={`mx-auto w-full ${maxW}`}>
           <HelperComposer
-            placeholder="Note anything for the record…"
+            placeholder="Ask the Helper anything…"
             busy={busy}
             onSend={tell}
           />

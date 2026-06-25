@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { ConceptObject } from "@/lib/modules/shared";
 import { loadConsciousness } from "@/lib/modules/shared/consciousness-store";
+import { loadConception } from "@/lib/modules/conception/registry";
 import { loadMaturation } from "@/lib/modules/maturation/registry";
 import { loadLandscape } from "@/lib/modules/landscape/registry";
 import {
@@ -21,6 +22,7 @@ const EMPTY_VIEW: Module4View = {
   phase: "framing",
   cards: [],
   concepts: [],
+  conversation: [],
   ledger: [],
   complete: false,
 };
@@ -64,10 +66,11 @@ export async function POST(req: Request) {
             v.concepts.some((c) => c.novelty || c.differentiation_statement));
         if (existing && hasProgress) return NextResponse.json(v);
 
-        const [maturation, landscape, consciousness] = await Promise.all([
+        const [maturation, landscape, consciousness, conception] = await Promise.all([
           loadMaturation(body.projectId),
           loadLandscape(body.projectId),
           loadConsciousness(body.projectId),
+          loadConception(body.projectId),
         ]);
         if (!maturation || !landscape) {
           return NextResponse.json(
@@ -108,6 +111,7 @@ export async function POST(req: Request) {
           landscapeByConcept,
           landscape.ledgerEntries(),
           consciousness,
+          conception.getRepresentativeCode(),
         );
         const view = await engine.start();
         await saveDifferentiation(body.projectId, engine);

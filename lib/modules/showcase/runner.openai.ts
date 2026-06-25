@@ -6,11 +6,18 @@ import type { AgentName } from "./types";
 
 /** OPTIONAL reference AgentRunner for Module 5. Swappable / deletable. */
 const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
+  helper: MODELS.drafter,
   "genus-extractor": MODELS.drafter,
   "species-synthesizer": MODELS.drafter,
   "key-concept-broadener": MODELS.drafter,
   // Independent Boundary guard at the broadening gates, on a different model.
   verifier: MODELS.verifier,
+  // The 5c extender second pass.
+  "background-extender": MODELS.drafter,
+  "summary-extender": MODELS.drafter,
+  "detail-description-extender": MODELS.drafter,
+  "abstract-rewriter": MODELS.drafter,
+  "key-concept-appender": MODELS.drafter,
 };
 
 export const openaiAgentRunner: AgentRunner = async (req) => {

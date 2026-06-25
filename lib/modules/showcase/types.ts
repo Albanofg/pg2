@@ -13,11 +13,12 @@
 import type {
   AgentRunner,
   EvidenceLedger,
+  HelperTurn,
   LedgerEntry,
   SharedConsciousness,
 } from "@/lib/modules/shared";
 
-export type { LedgerEntry } from "@/lib/modules/shared";
+export type { LedgerEntry, HelperTurn } from "@/lib/modules/shared";
 
 /* ------------------------------------------------------------------ *
  * Input + broadening artifacts
@@ -74,6 +75,8 @@ export type LedgerEntryType =
   | "agent_genus"
   | "agent_species"
   | "agent_broadened"
+  | "agent_appended_concept" // a genus/species/hardware Key Concept was appended
+  | "disclosure_extended" // the disclosure prose was enriched across implementations
   | "broadening_withheld" // a piece failed the Boundary and was not surfaced
   | "module_completed";
 
@@ -150,16 +153,25 @@ export type Module5View = {
   species: Species[];
   /** True once broadening has been applied (or deliberately skipped). */
   broadened: boolean;
+  /** The Helper conversation — its replies/teaching and the inventor's messages. */
+  conversation: HelperTurn[];
   ledger: LedgerEntry[];
   complete: boolean;
 };
 
-/** The sub-agents Module 5 calls (broadening slice). Never user-facing. */
+/** The sub-agents Module 5 calls. Never user-facing. */
 export type AgentName =
+  | "helper"
   | "genus-extractor"
   | "species-synthesizer"
   | "key-concept-broadener"
-  | "verifier";
+  | "verifier"
+  // The 5c "extender" second pass — enriches the disclosure with multi-paradigm depth.
+  | "background-extender"
+  | "summary-extender"
+  | "detail-description-extender"
+  | "abstract-rewriter"
+  | "key-concept-appender";
 
 export type ShowcaseDeps = {
   runAgent: AgentRunner;

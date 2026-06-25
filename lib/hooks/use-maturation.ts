@@ -11,6 +11,7 @@ const EMPTY: Module2View = {
   phase: "maturing",
   cards: [],
   concepts: [],
+  conversation: [],
   ledger: [],
   complete: false,
 };

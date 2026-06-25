@@ -1,9 +1,12 @@
 import "server-only";
 import {
+  runAdvocate,
   runBoundaryClassifier,
+  runBrainstorm,
   runCodeGenerator,
   runDecomposer,
   runDistiller,
+  runExaminer,
   runFormalizer,
   runHelper,
   runReviser,
@@ -21,6 +24,8 @@ import {
 import { hasCheckpoint, sealCheckpoint } from "@/lib/modules/shared/checkpoint";
 import { MODULE1_HUMAN_SOURCE_TYPES } from "./types";
 import type {
+  BrainstormCard,
+  BrainstormInput,
   CandidateActionInput,
   CandidateConceptCard,
   ClarityAnswerInput,
@@ -80,6 +85,7 @@ type Intent =
   | { kind: "clarity" }
   | { kind: "leap"; inventiveElement: string }
   | { kind: "candidate"; conceptId: string }
+  | { kind: "brainstorm" }
   | { kind: "confirm_addition"; conceptId: string; addition: string };
 
 /** Full, JSON-serializable snapshot of a conception session (for the DB). */
@@ -179,7 +185,8 @@ export class ConceptionModule {
       | ReviewActionInput
       | ClarityAnswerInput
       | LeapInput
-      | CandidateActionInput,
+      | CandidateActionInput
+      | BrainstormInput,
   ): Promise<Module1View> {
     const card = this.openCards.get(cardId);
     const intent = this.intents.get(cardId);
@@ -200,6 +207,9 @@ export class ConceptionModule {
         break;
       case "candidate_concept":
         this.handleCandidate(cardId, intent, input as CandidateActionInput);
+        break;
+      case "brainstorm":
+        await this.handleBrainstorm(cardId, input as BrainstormInput);
         break;
     }
     this.maybeCheckpoint();
@@ -244,7 +254,7 @@ export class ConceptionModule {
     this.pushTurn({
       role: "helper",
       text: helper?.reply ?? this.fallbackReply(intent),
-      ...(helper?.teaching?.length ? { teaching: helper.teaching } : {}),
+      ...(helper?.question?.ask ? { question: helper.question } : {}),
       intent,
     });
 
@@ -380,6 +390,16 @@ export class ConceptionModule {
   /** Current concepts (snapshot) — used to hand off to Maturation. */
   getConcepts(): ConceptObject[] {
     return this.snapshotConcepts();
+  }
+
+  /**
+   * The representative code generated in Conception, if any. Carried all the way
+   * to the Differentiation drafters — it is the most concrete implementation
+   * detail in the pipeline and feeds the architecture/data-structures/operations
+   * sections. A copy, so the engine's state stays immutable.
+   */
+  getRepresentativeCode(): { language: string; code: string } | null {
+    return this.representativeCode ? { ...this.representativeCode } : null;
   }
 
   /** The full evidence ledger — the verbatim proof trail. */
@@ -604,17 +624,92 @@ export class ConceptionModule {
     // gate and nothing to demand. We do NOT stress-test the idea or ask the
     // inventor to specify mechanisms here (that is Maturation/Differentiation,
     // per the Module 1 exit bar). Just surface the distinct concepts.
+    // V1-style breadth: three passes over the inventor's material so one rich
+    // idea yields the COMPLETE set of distinct concepts, not just 1–2.
+    //   1. Decomposer (exhaustive) — the literal split into every distinct element.
+    //   2. Advocate (generous)     — distinct concepts the first pass under-split.
+    //   3. Examiner (skeptical)    — consolidate: merge dupes, split bundles,
+    //                                complete gaps → the final clean concept set.
+    // Each pass only RESTATES the inventor's own words (no invention). If a pass
+    // fails, we fall back to the best set we already have.
     const core = this.statementText;
     const decomposed = await runDecomposer(this.runAgent, { material: core });
+    let candidates = [...decomposed.concepts];
+
+    try {
+      const advocated = await runAdvocate(this.runAgent, {
+        material: core,
+        candidates: candidates.map((c) => ({ title: c.title, restatement: c.restatement })),
+      });
+      candidates = [...candidates, ...advocated.concepts];
+    } catch (err) {
+      console.error("[conception] advocate pass failed", err);
+    }
+
+    let finalConcepts = candidates;
+    try {
+      const examined = await runExaminer(this.runAgent, {
+        material: core,
+        candidates: candidates.map((c) => ({ title: c.title, restatement: c.restatement })),
+      });
+      if (examined.concepts.length) finalConcepts = examined.concepts;
+    } catch (err) {
+      console.error("[conception] examiner consolidation failed", err);
+    }
+
     this.ledger.recordMachineEvent("agent_decomposed", ["concepts"], {
-      count: decomposed.concepts.length,
+      count: finalConcepts.length,
     });
-    const safe: SafeConcept[] = decomposed.concepts.map((c) => ({
+    const safe: SafeConcept[] = finalConcepts.map((c) => ({
       title: c.title,
       restatement: c.restatement,
       source_excerpts: c.source_excerpts,
     }));
     await this.materializeConcepts(safe);
+  }
+
+  /**
+   * Brainstorm candidate patentable DIRECTIONS from the inventor's own idea and
+   * teach what tends to make each registrable. This is the anti-black-box move:
+   * the Helper points at where the value could be and explains the principle,
+   * then hands the pen back — the inventor develops the directions they choose,
+   * in their own words (captured verbatim as theirs). Best-effort: a failure
+   * here never blocks the flow.
+   */
+  private async brainstormDirections(): Promise<void> {
+    try {
+      const result = await runBrainstorm(this.runAgent, {
+        core: this.statementText,
+        concepts: this.activeConcepts().map((c) => ({
+          title: c.title,
+          statement: c.formalized_statement,
+        })),
+        inventorMaterial: this.material.join("\n"),
+        consciousness: this.consciousness.renderForAgent({ part: CORE_PART }),
+      });
+      if (!result.directions.length) return;
+      const id = this.genId();
+      const card: BrainstormCard = {
+        id,
+        type: "brainstorm",
+        intro: result.intro || "A few directions in your idea that tend to be worth developing:",
+        directions: result.directions,
+      };
+      this.openCards.set(id, card);
+      this.intents.set(id, { kind: "brainstorm" });
+      // A short intro in the conversation so it reads as a brainstorm, not a
+      // silent card drop. The directions themselves live on the card below (with
+      // their own per-direction "Develop this") — we don't repeat them as text.
+      this.pushTurn({
+        role: "helper",
+        text:
+          result.intro ||
+          "I pulled out a few directions in your idea worth developing — pick any below to develop in your own words.",
+        intent: "other",
+      });
+    } catch (err) {
+      console.error("[conception] brainstorm failed", err);
+    }
   }
 
   /* ------------------------------------------------------------------ *
@@ -640,6 +735,10 @@ export class ConceptionModule {
         await this.generateCode();
         await this.buildConcepts();
         this.phase = "confirming_concepts";
+        // Then brainstorm WITH the inventor — surface candidate patentable
+        // directions from their own idea and teach what tends to make each
+        // registrable, so the inventor can develop the ones they want.
+        await this.brainstormDirections();
       } else if (input.action === "discard") {
         this.resolveCard(cardId);
         this.statementText = "";
@@ -758,6 +857,30 @@ export class ConceptionModule {
       status: concept.status,
     });
     this.resolveCard(cardId);
+  }
+
+  /**
+   * The inventor acts on the brainstorm card. "develop" captures their own words
+   * for a chosen direction VERBATIM (inventor_conceived) and turns them into a
+   * concept — the substance is theirs, the Helper only pointed at the angle. The
+   * card stays open so they can develop more directions. "dismiss" clears it.
+   */
+  private async handleBrainstorm(cardId: string, input: BrainstormInput): Promise<void> {
+    if (input.action === "dismiss") {
+      this.resolveCard(cardId);
+      return;
+    }
+    const text = input.text.trim();
+    if (!text) return;
+    const entry = this.ledger.recordInventorSource("leap_input", text, [
+      "brainstorm",
+      "inventor_conceived",
+      `direction:${input.direction}`,
+    ]);
+    this.pushTurn({ role: "inventor", text });
+    this.material.push(text);
+    await this.materializeLeapConcept(text, entry.id, input.direction);
+    // Keep the brainstorm card open so the inventor can develop more directions.
   }
 
   /* ------------------------------------------------------------------ *

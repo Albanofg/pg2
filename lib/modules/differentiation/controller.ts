@@ -1,14 +1,16 @@
 import "server-only";
 import { EvidenceLedger, SharedConsciousness } from "@/lib/modules/shared";
 import { hasCheckpoint, sealCheckpoint } from "@/lib/modules/shared/checkpoint";
-import type { ConceptObject } from "@/lib/modules/shared";
+import type { ConceptObject, HelperTurn } from "@/lib/modules/shared";
 import {
   runDifferentiationFormalizer,
-  runDisclosureCompiler,
   runGapFramer,
+  runHelper,
+  runKeyConceptDecomposer,
   runPohcScorer,
+  runSection,
   runVerifier,
-  type DisclosureResult,
+  runWhitespace,
   type PohcResult,
 } from "./agents";
 import { DIFFERENTIATION_HUMAN_SOURCE_TYPES, DISCLOSURE_SECTION_ORDER } from "./types";
@@ -25,6 +27,7 @@ import type {
   Module4View,
   NoveltyInput,
   ReviewActionInput,
+  SectionAgent,
 } from "./types";
 
 type PohcFactor = "conception" | "quality" | "known_concepts";
@@ -61,8 +64,10 @@ export type DifferentiationSnapshot = {
   started: boolean;
   concepts: DifferentiatedConcept[];
   disclosure: InventionDisclosure | null;
+  representativeCode: { language: string; code: string } | null;
   openCards: Module4Card[];
   intents: [string, Intent][];
+  conversation: HelperTurn[];
   ledger: import("@/lib/modules/shared").LedgerEntry[];
 };
 
@@ -77,13 +82,16 @@ export class DifferentiationModule {
   private started = false;
   private concepts = new Map<string, DifferentiatedConcept>();
   private disclosure: InventionDisclosure | null = null;
+  private representativeCode: { language: string; code: string } | null = null;
   private openCards = new Map<string, Module4Card>();
   private intents = new Map<string, Intent>();
+  private conversation: HelperTurn[] = [];
 
   constructor(deps: DifferentiationDeps) {
     this.runAgent = deps.runAgent;
     this.now = deps.now ?? (() => new Date().toISOString());
     this.genId = deps.genId ?? defaultGenId;
+    this.representativeCode = deps.representativeCode ?? null;
     this.ledger =
       deps.ledger ??
       new EvidenceLedger(DIFFERENTIATION_HUMAN_SOURCE_TYPES, this.now, this.genId);
@@ -113,8 +121,65 @@ export class DifferentiationModule {
     this.ledger.recordMachineEvent("differentiation_started", ["module4"], {
       conceptCount: this.concepts.size,
     });
+    await this.decomposeConcepts();
     await this.frameNext();
     return this.view();
+  }
+
+  /**
+   * Split each carried Concept into its distinct novel elements (one element per
+   * Key Concept, by technical density) — V1's key-concept decomposition. Children
+   * inherit the parent's verbatim trail + prior-art landscape and run the normal
+   * per-concept flow. A Concept with a single idea is left whole. This is what
+   * turns a rich multi-mechanism invention into N owned Key Concepts, not one.
+   */
+  private async decomposeConcepts(): Promise<void> {
+    const originals = [...this.concepts.values()].filter((c) => c.status.state === "active");
+    const next = new Map<string, DifferentiatedConcept>();
+    for (const parent of originals) {
+      const verbatim = parent.conception_trail.map((t) => t.verbatim_text);
+      let children: { title: string; statement: string }[] = [];
+      try {
+        const r = await runKeyConceptDecomposer(this.runAgent, {
+          title: parent.title,
+          statement: parent.formalized_statement,
+          verbatim,
+        });
+        children = r.concepts
+          .filter((k) => k.title.trim() && k.statement.trim())
+          .map((k) => ({ title: k.title.trim(), statement: k.statement.trim() }));
+      } catch (err) {
+        console.error("[differentiation] key-concept-decomposer failed for", parent.id, err);
+      }
+
+      if (children.length <= 1) {
+        // One genuine idea (or the split failed) — keep the parent whole.
+        next.set(parent.id, parent);
+        continue;
+      }
+
+      this.ledger.recordMachineEvent("key_concept_decomposed", ["differentiation"], {
+        conceptId: parent.id,
+        into: children.length,
+      });
+      children.forEach((child, i) => {
+        const id = `${parent.id}::${i + 1}`;
+        next.set(id, {
+          id,
+          title: child.title,
+          formalized_statement: child.statement,
+          conception_trail: parent.conception_trail.map((t) => ({ ...t })),
+          provenance: parent.provenance.map((p) => ({ ...p, derivedFrom: [...p.derivedFrom] })),
+          status: { state: "active" },
+          landscape: {
+            ...parent.landscape,
+            conceptId: id,
+            sources: parent.landscape.sources.map((s) => ({ ...s })),
+          },
+        });
+      });
+    }
+    this.concepts = next;
   }
 
   async act(
@@ -143,11 +208,64 @@ export class DifferentiationModule {
     return this.view();
   }
 
-  /** The inventor types to the Helper — captured as a verbatim note. */
+  /** The inventor types to the Helper — captured verbatim AND answered. */
   async tell(text: string): Promise<Module4View> {
     const t = text.trim();
-    if (t) this.ledger.recordInventorSource("inventor_note", t, ["differentiation", "note"]);
+    if (!t) return this.view();
+    this.ledger.recordInventorSource("inventor_note", t, ["differentiation", "note"]);
+    this.pushTurn({ role: "inventor", text: t });
+    try {
+      const helper = await runHelper(this.runAgent, {
+        message: t,
+        context: this.helperContext(),
+        inventorMaterial: this.inventorMaterial(),
+        conversation: this.conversation.slice(-6).map((tn) => ({ role: tn.role, text: tn.text })),
+        consciousness: this.consciousness.renderForAgent(),
+      });
+      this.pushTurn({
+        role: "helper",
+        text: helper.reply || "Say a bit more and I'll help you frame what's new.",
+        ...(helper.question?.ask ? { question: helper.question } : {}),
+        intent: helper.intent,
+      });
+    } catch (err) {
+      console.error("[differentiation] helper failed", err);
+      this.pushTurn({ role: "helper", text: "I hit a snag answering that — try rephrasing?" });
+    }
     return this.view();
+  }
+
+  private pushTurn(turn: Omit<HelperTurn, "timestamp">): void {
+    this.conversation.push({ ...turn, timestamp: this.now() });
+  }
+
+  /** A compact description of the live Differentiation state for the Helper. */
+  private helperContext(): string {
+    const active = [...this.concepts.values()].filter((c) => c.status.state === "active");
+    return [
+      `Phase: ${this.phase}.`,
+      active.length
+        ? `Concepts under differentiation:\n${active
+            .map(
+              (c, i) =>
+                `[${i + 1}] ${c.title}: ${c.differentiation_statement || c.formalized_statement}` +
+                (c.gap ? `\n    closest art: ${c.gap.artSummary}` : ""),
+            )
+            .join("\n")}`
+        : "No active concepts yet.",
+      this.openCards.size ? `${this.openCards.size} card(s) open for the inventor's decision.` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  /** Everything the inventor has stated in their own words (the verbatim trail). */
+  private inventorMaterial(): string {
+    return this.ledger
+      .humanVerbatim()
+      .map((e) => e.verbatim_text)
+      .filter(Boolean)
+      .join("\n");
   }
 
   view(): Module4View {
@@ -156,6 +274,7 @@ export class DifferentiationModule {
       cards: [...this.openCards.values()],
       concepts: [...this.concepts.values()].map(cloneDiff),
       ...(this.disclosure ? { disclosure: cloneDisclosure(this.disclosure) } : {}),
+      conversation: this.conversation.map((t) => ({ ...t })),
       ledger: this.ledger.serialize(),
       complete: this.isComplete(),
     };
@@ -193,31 +312,87 @@ export class DifferentiationModule {
       return;
     }
     const verbatim = next.conception_trail.map((t) => t.verbatim_text);
+
+    // V1 whitespace: surface each prior-art reference's mechanisms + clarification
+    // questions + the Match Level, open-landscape analysis, and distinguishing
+    // features. The clarification questions become the open points the inventor
+    // answers in the novelty capture.
+    let whitespaced = false;
     try {
-      const framed = await runGapFramer(this.runAgent, {
+      const ws = await runWhitespace(this.runAgent, {
+        title: next.title,
         statement: next.formalized_statement,
-        verbatim,
-        landscape: next.landscape,
-        consciousness: this.consciousness.renderForAgent({ part: `concept:${next.id}` }),
+        references: next.landscape.sources.map((s) => ({
+          publicationNumber: s.identifier ?? "",
+          title: s.title,
+          summary: s.snippet ?? "",
+          ...(s.closeness != null ? { relevanceScore: s.closeness } : {}),
+        })),
       });
+      next.whitespace = ws;
+      const questions = [
+        ...ws.patentAnalyses.flatMap((p) => p.inventorClarificationQuestions),
+        ...ws.crossPatentClarificationQuestions,
+      ].filter(Boolean);
       next.gap = {
-        artSummary: framed.art_summary,
-        mechanism: framed.mechanism,
-        openPoints: framed.open_points,
-      };
-      this.ledger.recordMachineEvent("agent_framed_gap", ["differentiation"], {
-        conceptId: next.id,
-      });
-    } catch (err) {
-      console.error("[differentiation] gap-framer failed for", next.id, err);
-      next.gap = {
-        artSummary: "(couldn't summarize the prior art — proceed from your own view)",
+        artSummary: ws.consolidatedOpenLandscapeAnalysis || "(the area appears open)",
         mechanism: next.formalized_statement,
-        openPoints: ["What does your concept do that the closest prior art does not?"],
+        openPoints: questions.length
+          ? questions
+          : ["What does your concept do that the closest prior art does not?"],
       };
+      this.ledger.recordMachineEvent("agent_whitespace", ["differentiation"], {
+        conceptId: next.id,
+        matchLevel: ws.overallMatchLevel.level,
+        references: ws.totalPatentsAnalyzed,
+      });
+      this.emitWhitespace(next);
+      whitespaced = true;
+    } catch (err) {
+      console.error("[differentiation] whitespace failed for", next.id, err);
     }
-    this.emitGap(next);
+
+    if (!whitespaced) {
+      // Fall back to the lighter gap-framer if whitespace couldn't run.
+      try {
+        const framed = await runGapFramer(this.runAgent, {
+          statement: next.formalized_statement,
+          verbatim,
+          landscape: next.landscape,
+          consciousness: this.consciousness.renderForAgent({ part: `concept:${next.id}` }),
+        });
+        next.gap = {
+          artSummary: framed.art_summary,
+          mechanism: framed.mechanism,
+          openPoints: framed.open_points,
+        };
+        this.ledger.recordMachineEvent("agent_framed_gap", ["differentiation"], {
+          conceptId: next.id,
+        });
+      } catch (err) {
+        console.error("[differentiation] gap-framer failed for", next.id, err);
+        next.gap = {
+          artSummary: "(couldn't summarize the prior art — proceed from your own view)",
+          mechanism: next.formalized_statement,
+          openPoints: ["What does your concept do that the closest prior art does not?"],
+        };
+      }
+      this.emitGap(next);
+    }
+
     this.emitNoveltyCapture(next);
+  }
+
+  private emitWhitespace(concept: DifferentiatedConcept): void {
+    if (!concept.whitespace) return;
+    const id = this.genId();
+    this.openCards.set(id, {
+      id,
+      type: "whitespace",
+      conceptId: concept.id,
+      title: concept.title,
+      analysis: concept.whitespace,
+    });
   }
 
   private async handleNovelty(cardId: string, intent: Intent, input: NoveltyInput): Promise<void> {
@@ -356,25 +531,95 @@ export class DifferentiationModule {
     }
   }
 
-  /** Compile the nine-section Invention Disclosure from the anchored Key Concepts. */
+  /**
+   * Compile the Invention Disclosure with NINE per-section specialist agents (not
+   * one shot). Sections run in dependency order — architecture first so its
+   * reference numerals + component names flow into data-structures, operations,
+   * etc. — parallelized within each round. Each section is fed the Key Concepts,
+   * the inventor's full verbatim, the representative code, and the prior-art
+   * summary; downstream sections also get the upstream sections for numeral/name
+   * consistency. A failed section drops to empty rather than killing the compile.
+   */
   private async compileDisclosure(): Promise<void> {
     this.phase = "compiling";
     const keyConcepts = [...this.concepts.values()].filter((c) => c.isKeyConcept);
+    const base = {
+      keyConcepts: keyConcepts.map((c) => ({
+        title: c.title,
+        statement: c.formalized_statement,
+        differentiation: c.differentiation_statement ?? "",
+      })),
+      verbatim: keyConcepts.flatMap((c) => c.conception_trail.map((t) => t.verbatim_text)),
+      code: this.representativeCode,
+      artSummary: keyConcepts
+        .map((c) => c.gap?.artSummary)
+        .filter(Boolean)
+        .join("\n\n"),
+      consciousness: this.consciousness.renderForAgent(),
+    };
+
+    const draft = async (
+      agent: SectionAgent,
+      priorSections?: { label: string; body: string }[],
+    ): Promise<string> => {
+      try {
+        const r = await runSection(this.runAgent, agent, {
+          ...base,
+          ...(priorSections ? { priorSections } : {}),
+        });
+        return r.body?.trim() ?? "";
+      } catch (err) {
+        console.error(`[differentiation] section ${agent} failed`, err);
+        return "";
+      }
+    };
+
     try {
-      const out = await runDisclosureCompiler(this.runAgent, {
-        keyConcepts: keyConcepts.map((c) => ({
-          title: c.title,
-          statement: c.formalized_statement,
-          differentiation: c.differentiation_statement ?? "",
-        })),
-        verbatim: keyConcepts.flatMap((c) => c.conception_trail.map((t) => t.verbatim_text)),
-        artSummary: keyConcepts
-          .map((c) => c.gap?.artSummary)
-          .filter(Boolean)
-          .join("\n\n"),
-        consciousness: this.consciousness.renderForAgent(),
-      });
-      this.disclosure = toDisclosure(out);
+      // R1 — independent foundations.
+      const [title, background, architecture] = await Promise.all([
+        draft("sec-title"),
+        draft("sec-background"),
+        draft("sec-architecture"),
+      ]);
+      const archSec = { label: "System Architecture", body: architecture };
+      // R2 — data-structures reuses the architecture's numerals.
+      const dataStructures = await draft("sec-data-structures", [archSec]);
+      const dsSec = { label: "Data Structures", body: dataStructures };
+      // R3 — operations reuses architecture + data-object names.
+      const operations = await draft("sec-operations", [archSec, dsSec]);
+      const opsSec = { label: "Operations", body: operations };
+      // R4 — summary builds on background; alternatives on the body.
+      const [summary, alternatives] = await Promise.all([
+        draft("sec-summary", [{ label: "Background", body: background }]),
+        draft("sec-alternatives", [archSec, opsSec]),
+      ]);
+      // R5 — abstract compresses title+summary; ramifications extends the body.
+      const [abstract, ramifications] = await Promise.all([
+        draft("sec-abstract", [
+          { label: "Title", body: title },
+          { label: "Summary", body: summary },
+        ]),
+        draft("sec-ramifications", [archSec, opsSec]),
+      ]);
+
+      const bodies: Record<string, string> = {
+        title,
+        background,
+        summary,
+        abstract,
+        architecture,
+        data_structures: dataStructures,
+        operations,
+        alternatives,
+        ramifications,
+      };
+      this.disclosure = {
+        sections: DISCLOSURE_SECTION_ORDER.map(({ key, label }) => ({
+          key,
+          label,
+          body: (bodies[key] ?? "").trim(),
+        })).filter((s) => s.body),
+      };
       this.ledger.recordMachineEvent("disclosure_compiled", ["differentiation"], {
         sections: this.disclosure.sections.length,
       });
@@ -632,8 +877,10 @@ export class DifferentiationModule {
       started: this.started,
       concepts: [...this.concepts.values()].map(cloneDiff),
       disclosure: this.disclosure ? cloneDisclosure(this.disclosure) : null,
+      representativeCode: this.representativeCode ? { ...this.representativeCode } : null,
       openCards: [...this.openCards.values()],
       intents: [...this.intents.entries()],
+      conversation: this.conversation.map((t) => ({ ...t })),
       ledger: this.ledger.serialize(),
     };
   }
@@ -652,22 +899,12 @@ export class DifferentiationModule {
     m.started = snap.started;
     m.concepts = new Map(snap.concepts.map((c) => [c.id, cloneDiff(c)]));
     m.disclosure = snap.disclosure ? cloneDisclosure(snap.disclosure) : null;
+    m.representativeCode = snap.representativeCode ?? null;
     m.openCards = new Map(snap.openCards.map((c) => [c.id, c]));
     m.intents = new Map(snap.intents);
+    m.conversation = (snap.conversation ?? []).map((t) => ({ ...t }));
     return m;
   }
-}
-
-/** Map the compiler's nine fields into ordered, non-empty disclosure sections. */
-function toDisclosure(out: DisclosureResult): InventionDisclosure {
-  const r = out as unknown as Record<string, string>;
-  return {
-    sections: DISCLOSURE_SECTION_ORDER.map(({ key, label }) => ({
-      key,
-      label,
-      body: (r[key] ?? "").trim(),
-    })).filter((s) => s.body),
-  };
 }
 
 function cloneDisclosure(d: InventionDisclosure): InventionDisclosure {

@@ -47,6 +47,12 @@ export {
 } from "./grading";
 
 export {
+  type HelperTurn,
+  type HelperQuestion,
+  type HelperTeachingPoint,
+} from "./helper";
+
+export {
   type BackpackSection,
   INVENTORSHIP_LAW,
   INVENTOR_SUPREMACY,

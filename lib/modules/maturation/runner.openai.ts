@@ -13,6 +13,7 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   deepener: MODELS.drafter,
   // Independent cross-check on a DIFFERENT model (Gemini) than the agents it reviews.
   verifier: MODELS.verifier,
+  helper: MODELS.drafter,
 };
 
 export const openaiAgentRunner: AgentRunner = async (req) => {

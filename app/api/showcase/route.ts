@@ -21,6 +21,7 @@ const EMPTY_VIEW: Module5View = {
   keyConcepts: [],
   species: [],
   broadened: false,
+  conversation: [],
   ledger: [],
   complete: false,
 };

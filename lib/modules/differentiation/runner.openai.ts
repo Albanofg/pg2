@@ -9,12 +9,24 @@ import type { AgentName } from "./types";
  * transport; this runs the module out of the box and can be swapped or deleted.
  */
 const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
+  helper: MODELS.drafter,
+  "key-concept-decomposer": MODELS.drafter,
+  whitespace: MODELS.drafter,
   "gap-framer": MODELS.drafter,
   "differentiation-formalizer": MODELS.drafter,
-  "disclosure-compiler": MODELS.drafter,
   "pohc-scorer": MODELS.drafter,
   // Independent cross-check on a DIFFERENT model (Gemini) than the agents it reviews.
   verifier: MODELS.verifier,
+  // The nine per-section disclosure drafters.
+  "sec-title": MODELS.drafter,
+  "sec-background": MODELS.drafter,
+  "sec-summary": MODELS.drafter,
+  "sec-abstract": MODELS.drafter,
+  "sec-architecture": MODELS.drafter,
+  "sec-data-structures": MODELS.drafter,
+  "sec-operations": MODELS.drafter,
+  "sec-alternatives": MODELS.drafter,
+  "sec-ramifications": MODELS.drafter,
 };
 
 export const openaiAgentRunner: AgentRunner = async (req) => {

@@ -20,6 +20,7 @@ import type {
   AgentRunner,
   ConceptObject,
   EvidenceLedger,
+  HelperTurn,
   LedgerEntry,
   SharedConsciousness,
 } from "@/lib/modules/shared";
@@ -32,6 +33,7 @@ export type {
   ConceptProvenancePart,
   ConceptObject,
   Origin,
+  HelperTurn,
   LedgerEntry,
   AppendOptions,
   AgentRunRequest,
@@ -62,6 +64,38 @@ export type ConceptLandscape = {
 };
 
 /* ------------------------------------------------------------------ *
+ * The V1 whitespace analysis — prior-art mechanism surfacing + synthesis
+ * ------------------------------------------------------------------ */
+
+export type WhitespacePatentAnalysis = {
+  patentNumber: string;
+  patentTitle: string;
+  patentStatus: "GRANTED" | "PENDING" | "UNKNOWN";
+  /** Specific mechanisms drawn literally from the reference summary (no boilerplate). */
+  extractedMechanisms: string[];
+  /** Open questions asking the inventor how THEIR approach works (their own words). */
+  inventorClarificationQuestions: string[];
+};
+
+export type WhitespaceMatchLevel = {
+  level: "Green Match" | "Yellow Match" | "Red Match";
+  directMatches: number;
+  adjacentMatches: number;
+  unrelatedReferences: number;
+};
+
+/** The full whitespace ("open landscape") analysis for one Key Concept. */
+export type WhitespaceAnalysis = {
+  totalPatentsAnalyzed: number;
+  patentAnalyses: WhitespacePatentAnalysis[];
+  crossPatentClarificationQuestions: string[];
+  overallMatchLevel: WhitespaceMatchLevel;
+  consolidatedOpenLandscapeAnalysis: string;
+  primaryDistinguishingFeatures: string[];
+  keyConceptDevelopmentGuidance: string;
+};
+
+/* ------------------------------------------------------------------ *
  * Module-4 ledger vocabulary
  * ------------------------------------------------------------------ */
 
@@ -76,6 +110,8 @@ export type LedgerEntryType =
   | "key_concept_action" // anchor / drop on a Key Concept
   // Machine events:
   | "differentiation_started"
+  | "key_concept_decomposed" // a carried Concept was split into N distinct Key Concepts
+  | "agent_whitespace" // V1 open-landscape / Match-Level analysis of a Key Concept vs its prior art
   | "agent_framed_gap"
   | "agent_formalized"
   | "agent_classified"
@@ -169,8 +205,23 @@ export type CertificationCard = {
   question: string;
 };
 
+/**
+ * Whitespace card — the full "open landscape" analysis for one concept: per-
+ * reference extracted mechanisms, the Match Level, distinguishing features, the
+ * open-landscape paragraph, and development guidance. Read-only context (the
+ * clarification questions feed the novelty capture).
+ */
+export type WhitespaceCard = {
+  id: string;
+  type: "whitespace";
+  conceptId: string;
+  title: string;
+  analysis: WhitespaceAnalysis;
+};
+
 export type Module4Card =
   | GapCard
+  | WhitespaceCard
   | NoveltyCaptureCard
   | DifferentiationReviewCard
   | KeyConceptCard
@@ -206,7 +257,9 @@ export type CardActionInput =
 /** One Concept as it moves through Differentiation. */
 export type DifferentiatedConcept = ConceptObject & {
   landscape: ConceptLandscape;
-  /** The factual gap frame, once generated. */
+  /** The full V1 whitespace analysis for this concept, once generated. */
+  whitespace?: WhitespaceAnalysis;
+  /** The factual gap frame, once generated (derived from the whitespace). */
   gap?: { artSummary: string; mechanism: string; openPoints: string[] };
   /** The inventor's verbatim novelty statement + its Ledger id. inventor_conceived. */
   novelty?: { verbatim: string; ledgerId: string };
@@ -276,6 +329,8 @@ export type Module4View = {
   concepts: DifferentiatedConcept[];
   /** The compiled Invention Disclosure, once anchoring is done. */
   disclosure?: InventionDisclosure;
+  /** The Helper conversation — its replies/teaching and the inventor's messages. */
+  conversation: HelperTurn[];
   ledger: LedgerEntry[];
   /** True once the disclosure is compiled from at least one Key Concept. */
   complete: boolean;
@@ -287,11 +342,35 @@ export type Module4View = {
 
 /** The sub-agents Module 4 calls. Never user-facing. */
 export type AgentName =
+  | "helper" // the user-facing Helper: answers, teaches, brainstorms (every module has one)
+  | "key-concept-decomposer" // splits a carried Concept into its distinct novel elements (N Key Concepts)
+  | "whitespace" // V1's prior-art mechanism surfacer + strategic synthesis per Key Concept
   | "gap-framer" // frames what the art covers + the open points (factual, no novelty)
   | "differentiation-formalizer" // cleans the inventor's novelty into differentiation text
-  | "disclosure-compiler" // compiles the nine-section Invention Disclosure from the Key Concepts
   | "pohc-scorer" // scores the three Proof-of-Human-Conception factors per Key Concept
-  | "verifier"; // cross-checks each piece (a different agent than the creator)
+  | "verifier" // cross-checks each piece (a different agent than the creator)
+  // The nine per-section disclosure drafters (each its own specialist prompt):
+  | "sec-title"
+  | "sec-background"
+  | "sec-summary"
+  | "sec-abstract"
+  | "sec-architecture"
+  | "sec-data-structures"
+  | "sec-operations"
+  | "sec-alternatives"
+  | "sec-ramifications";
+
+/** Just the per-section disclosure drafters. */
+export type SectionAgent =
+  | "sec-title"
+  | "sec-background"
+  | "sec-summary"
+  | "sec-abstract"
+  | "sec-architecture"
+  | "sec-data-structures"
+  | "sec-operations"
+  | "sec-alternatives"
+  | "sec-ramifications";
 
 export type DifferentiationDeps = {
   runAgent: AgentRunner;
@@ -299,6 +378,9 @@ export type DifferentiationDeps = {
   concepts: ConceptObject[];
   /** Each Concept's prior-art landscape from Module 3, keyed/aligned by conceptId. */
   landscape: ConceptLandscape[];
+  /** Representative code from Conception — concrete implementation the section
+   *  drafters mine for architecture/data-structures/operations depth. */
+  representativeCode?: { language: string; code: string } | null;
   /** Optional shared ledger to thread the proof trail across modules. */
   ledger?: EvidenceLedger;
   /** Optional Shared Consciousness — the cross-module draft memory. */

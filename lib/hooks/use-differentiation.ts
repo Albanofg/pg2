@@ -11,6 +11,7 @@ const EMPTY: Module4View = {
   phase: "framing",
   cards: [],
   concepts: [],
+  conversation: [],
   ledger: [],
   complete: false,
 };

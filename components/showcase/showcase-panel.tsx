@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useShowcase } from "@/lib/hooks/use-showcase";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
+import HelperThread from "@/components/workspace/helper-thread";
 import type {
   ChoiceCard,
   Module5Card,
@@ -167,12 +168,14 @@ export default function ShowcasePanel({
               </div>
             </div>
           )}
+
+          <HelperThread turns={view.conversation} onQuickReply={tell} busy={busy} />
         </div>
       </div>
 
       <div className="border-t border-border bg-panel p-4">
         <div className={`mx-auto w-full ${maxW}`}>
-          <HelperComposer placeholder="Note anything for the record…" busy={busy} onSend={tell} />
+          <HelperComposer placeholder="Ask the Helper anything…" busy={busy} onSend={tell} />
         </div>
       </div>
     </div>

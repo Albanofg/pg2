@@ -2,7 +2,8 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { withBackpack, type AgentRunner } from "@/lib/modules/shared";
+import { withBackpack, type AgentRunner, type BackpackSection } from "@/lib/modules/shared";
+import { buildHelperPrompt, HelperOutput, type HelperResult } from "@/lib/modules/shared/helper-agent";
 import type { AgentName } from "./types";
 
 /**
@@ -15,6 +16,13 @@ const MODULE_2_DIR = "module-2-maturation";
 const PROMPT_FILES: Record<AgentName, string> = {
   deepener: `${MODULE_2_DIR}/01-deepener.md`,
   verifier: `${MODULE_2_DIR}/02-verifier.md`,
+  helper: `${MODULE_2_DIR}/00-helper.md`,
+};
+
+const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
+  deepener: [],
+  verifier: [],
+  helper: ["helper_doctrine"],
 };
 
 const promptCache = new Map<AgentName, string>();
@@ -31,7 +39,31 @@ export async function loadAgentPrompt(agent: AgentName): Promise<string> {
     contents = (await readFile(file, "utf8")).trim();
     promptCache.set(agent, contents);
   }
-  return withBackpack(contents);
+  return withBackpack(contents, AGENT_SECTIONS[agent]);
+}
+
+/** The module Helper — replies to the inventor, teaches, brainstorms (Maturation context). */
+export async function runHelper(
+  runAgent: AgentRunner,
+  input: {
+    message: string;
+    context: string;
+    inventorMaterial: string;
+    conversation: { role: string; text: string }[];
+    consciousness?: string;
+  },
+): Promise<HelperResult> {
+  const system = await loadAgentPrompt("helper");
+  const prompt = buildHelperPrompt({
+    message: input.message,
+    where:
+      "Module 2 (Maturation) — deepening each owned concept into a fuller, search-ready technical statement",
+    context: input.context,
+    inventorMaterial: input.inventorMaterial,
+    conversation: input.conversation,
+    ...(input.consciousness ? { consciousness: input.consciousness } : {}),
+  });
+  return runAgent({ agent: "helper", system, prompt, schema: HelperOutput, temperature: 0.4 });
 }
 
 export const DeepenerOutput = z.object({
