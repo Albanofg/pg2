@@ -51,11 +51,18 @@ export default function ConceptionPanel({
 
   const strength = strengthOf(view, keptConcepts.length);
 
-  // Keep the Helper's latest reply in view when the conversation grows.
+  // Keep the Helper's latest reply in view ONLY when the conversation actually
+  // grows (a new turn). Card actions like Keep/Drop/Merge just toggle `busy` and
+  // must NOT yank the page to the footer.
   const endRef = useRef<HTMLDivElement>(null);
+  const prevTurnCount = useRef(0);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [view.conversation.length, busy]);
+    const count = view.conversation.length;
+    if (count > prevTurnCount.current) {
+      endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+    prevTurnCount.current = count;
+  }, [view.conversation.length]);
 
   return (
     <div className="flex h-full flex-col">
