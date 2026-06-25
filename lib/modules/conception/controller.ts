@@ -617,28 +617,27 @@ export class ConceptionModule {
     this.intents.set(id, { kind: "code" });
   }
 
-  /** Decompose the approved core into distinct concepts. */
+  /** Decompose the approved idea into distinct concepts. */
   private async buildConcepts(): Promise<void> {
-    // Conception only ORGANIZES what the inventor already stated — the distiller
-    // and decomposer add nothing of their own, so there is no AI invention to
-    // gate and nothing to demand. We do NOT stress-test the idea or ask the
-    // inventor to specify mechanisms here (that is Maturation/Differentiation,
-    // per the Module 1 exit bar). Just surface the distinct concepts.
-    // V1-style breadth: three passes over the inventor's material so one rich
-    // idea yields the COMPLETE set of distinct concepts, not just 1–2.
+    // Conception only ORGANIZES what the inventor already stated — every pass
+    // RESTATES their own words (no invention), so there is nothing to gate here.
+    // V1-style breadth: three passes so one rich idea yields the COMPLETE set of
+    // distinct concepts, not just 1–2.
     //   1. Decomposer (exhaustive) — the literal split into every distinct element.
     //   2. Advocate (generous)     — distinct concepts the first pass under-split.
     //   3. Examiner (skeptical)    — consolidate: merge dupes, split bundles,
     //                                complete gaps → the final clean concept set.
-    // Each pass only RESTATES the inventor's own words (no invention). If a pass
-    // fails, we fall back to the best set we already have.
-    const core = this.statementText;
-    const decomposed = await runDecomposer(this.runAgent, { material: core });
+    // IMPORTANT: extract from the inventor's FULL raw material, not the distilled
+    // core — the distiller deliberately strips detail (its set_aside pile), and
+    // extracting from that compressed paragraph would cap breadth before we start.
+    // Raw words also make the source_excerpts line up with the verbatim ledger.
+    const material = this.material.join("\n\n") || this.statementText;
+    const decomposed = await runDecomposer(this.runAgent, { material });
     let candidates = [...decomposed.concepts];
 
     try {
       const advocated = await runAdvocate(this.runAgent, {
-        material: core,
+        material,
         candidates: candidates.map((c) => ({ title: c.title, restatement: c.restatement })),
       });
       candidates = [...candidates, ...advocated.concepts];
@@ -646,16 +645,37 @@ export class ConceptionModule {
       console.error("[conception] advocate pass failed", err);
     }
 
-    let finalConcepts = candidates;
+    // Deduped union of the literal split + the advocate's additions. This is the
+    // FLOOR: we never end up with fewer concepts than this, so an over-eager
+    // Examiner can't silently collapse the breadth we just surfaced.
+    const union = dedupeConceptsByTitle(candidates);
+
+    let finalConcepts = union;
     try {
       const examined = await runExaminer(this.runAgent, {
-        material: core,
-        candidates: candidates.map((c) => ({ title: c.title, restatement: c.restatement })),
+        material,
+        candidates: union.map((c) => ({ title: c.title, restatement: c.restatement })),
       });
-      if (examined.concepts.length) finalConcepts = examined.concepts;
+      // Accept the Examiner's consolidation only if it didn't drop below the
+      // literal split (merging true duplicates is fine; losing distinct elements
+      // is not). Otherwise keep the deduped union.
+      if (examined.concepts.length >= decomposed.concepts.length) {
+        finalConcepts = examined.concepts;
+      } else if (examined.concepts.length) {
+        console.warn(
+          `[conception] examiner returned ${examined.concepts.length} concepts vs ${decomposed.concepts.length} from the decomposer — keeping the deduped union to preserve breadth`,
+        );
+      }
     } catch (err) {
       console.error("[conception] examiner consolidation failed", err);
     }
+
+    // #4 — Inventorship verification. The advocate/examiner passes are told to
+    // restate-only, but nothing trusted that. An INDEPENDENT check (the verifier,
+    // on a different model than the passes above) now confirms each concept's
+    // restatement traces to the inventor's own words; a concept that introduces
+    // unsupported substance is dropped before it can enter the proof set.
+    finalConcepts = await this.verifyConceptFidelity(finalConcepts);
 
     this.ledger.recordMachineEvent("agent_decomposed", ["concepts"], {
       count: finalConcepts.length,
@@ -666,6 +686,54 @@ export class ConceptionModule {
       source_excerpts: c.source_excerpts,
     }));
     await this.materializeConcepts(safe);
+  }
+
+  /**
+   * Independent fidelity check on the generated concept set. Each concept is
+   * cross-verified (FAIL-CLOSED, on a different model than the generating passes)
+   * against the inventor's full material; one that introduces substance the
+   * inventor never stated is dropped, with the reason logged to the ledger.
+   *
+   * Two safety nets so this protects inventorship WITHOUT eating breadth:
+   *  - an infrastructure error on a check KEEPS the concept (never drop on a glitch);
+   *  - if every concept somehow fails (a fail-closed misfire), keep the whole set.
+   */
+  private async verifyConceptFidelity(concepts: SafeConcept[]): Promise<SafeConcept[]> {
+    if (concepts.length <= 1) return concepts;
+    const material = this.material.join("\n");
+    const consciousness = this.consciousness.renderForAgent({ part: CORE_PART });
+    const checked = await Promise.all(
+      concepts.map(async (c): Promise<SafeConcept | null> => {
+        try {
+          const verdict = await runVerifier(this.runAgent, {
+            piece: `${c.title}: ${c.restatement}`,
+            inventorMaterial: material,
+            consciousness,
+          });
+          if (verdict.verdict === "fail") {
+            this.ledger.recordMachineEvent("agent_verified", ["concepts", "dropped"], {
+              title: c.title,
+              ...(verdict.note ? { note: verdict.note } : {}),
+            });
+            return null;
+          }
+          return c;
+        } catch (err) {
+          console.error("[conception] concept fidelity check failed (kept)", c.title, err);
+          return c;
+        }
+      }),
+    );
+    const kept = checked.filter((c): c is SafeConcept => c !== null);
+    if (!kept.length) {
+      console.warn("[conception] fidelity check failed every concept — keeping the set");
+      return concepts;
+    }
+    this.ledger.recordMachineEvent("agent_verified", ["concepts"], {
+      kept: kept.length,
+      dropped: concepts.length - kept.length,
+    });
+    return kept;
   }
 
   /**
@@ -1182,6 +1250,32 @@ export class ConceptionModule {
       timestamp: e.timestamp,
     }));
   }
+}
+
+/**
+ * Merge candidate concepts that share a normalized title (same element surfaced by
+ * more than one pass). Source excerpts are unioned and the fuller restatement kept.
+ * Deterministic, in code — a reliable floor that never loses a distinct concept.
+ */
+function dedupeConceptsByTitle<
+  T extends { title: string; restatement: string; source_excerpts: string[] },
+>(items: T[]): T[] {
+  const seen = new Map<string, T>();
+  for (const it of items) {
+    const key = it.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, { ...it, source_excerpts: [...it.source_excerpts] });
+      continue;
+    }
+    existing.source_excerpts = [
+      ...new Set([...existing.source_excerpts, ...it.source_excerpts]),
+    ];
+    if (it.restatement.length > existing.restatement.length) {
+      existing.restatement = it.restatement;
+    }
+  }
+  return [...seen.values()];
 }
 
 function defaultGenId(): string {
