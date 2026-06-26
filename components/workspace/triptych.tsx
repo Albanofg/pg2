@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import LeftSidebar from "./left-sidebar";
 import RightSidebar from "./right-sidebar";
+import BrainstormPanel from "@/components/brainstorm/brainstorm-panel";
 import ConceptionPanel from "@/components/conception/conception-panel";
 import MaturationPanel from "@/components/maturation/maturation-panel";
 import LandscapePanel from "@/components/landscape/landscape-panel";
@@ -99,7 +100,9 @@ export default function Triptych() {
         <Divider onMouseDown={onMouseDown("left")} />
       )}
       <div className="h-screen overflow-hidden bg-bg">
-        {stage === "showcase" ? (
+        {stage === "brainstorm" ? (
+          <BrainstormPanel maxW={maxW} />
+        ) : stage === "showcase" ? (
           <ShowcasePanel projectId={projectId} maxW={maxW} />
         ) : stage === "differentiation" ? (
           <DifferentiationPanel projectId={projectId} maxW={maxW} />

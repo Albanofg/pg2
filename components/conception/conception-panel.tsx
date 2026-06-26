@@ -39,6 +39,8 @@ export default function ConceptionPanel({
 }) {
   const { view, busy, error, act, tell, reset } = useConception(projectId);
   const setStage = useWorkspace((s) => s.setStage);
+  // Entry routing for the empty state: choose a route, THEN reveal its input.
+  const [entryMode, setEntryMode] = useState<"choose" | "idea">("choose");
 
   const hasStatement = !!view.statement;
   const candidateCards = view.cards.filter(
@@ -114,25 +116,45 @@ export default function ConceptionPanel({
         </div>
       )}
 
-      {/* Onboarding — the input IS the start. Everything flows from it. */}
+      {/* Onboarding — brainstorm is the hero; "I have one" is the quiet sibling. */}
       {!hasStatement && (
         <div className="flex flex-col gap-4 py-2">
-          <div>
-            <h3 className="font-sans text-lg font-semibold text-ink">
-              In one line, what does your software do?
-            </h3>
-            <p className="mt-1.5 font-mono text-xs leading-relaxed text-ink-muted">
-              No detail needed yet — type it, paste rough notes, or tap the mic.
-              I&apos;ll read it back and ask about the rest as we go.
-            </p>
-          </div>
+          {entryMode === "choose" ? (
+            <>
+              <button
+                onClick={() => setStage("brainstorm")}
+                className="block w-full rounded-md border border-accent/50 bg-accent/10 px-5 py-5 text-left font-sans text-base font-semibold text-ink transition-colors duration-150 ease-util hover:border-accent hover:bg-accent/15"
+              >
+                Brainstorm with AI →
+              </button>
 
-          {/* The input, front and center — the first thing the inventor does. */}
-          <HelperComposer
-            placeholder={conceptionPlaceholder(view.phase)}
-            busy={busy}
-            onSend={tell}
-          />
+              <button
+                onClick={() => setEntryMode("idea")}
+                className="block w-full rounded-md border border-border bg-panel px-5 py-5 text-left font-sans text-base font-semibold text-ink transition-colors duration-150 ease-util hover:border-action hover:bg-action/5"
+              >
+                I already have an invention →
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-sans text-lg font-semibold text-ink">
+                  Describe your invention
+                </h3>
+                <button
+                  onClick={() => setEntryMode("choose")}
+                  className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+                >
+                  ← Back
+                </button>
+              </div>
+              <HelperComposer
+                placeholder={conceptionPlaceholder(view.phase)}
+                busy={busy}
+                onSend={tell}
+              />
+            </>
+          )}
         </div>
       )}
 
@@ -238,7 +260,7 @@ function conceptionPlaceholder(phase: Module1Phase): string {
     case "complete":
       return "Ask anything, or add an idea…";
     default:
-      return "Type your idea here…";
+      return "Describe your invention, or paste your notes — as much as you have…";
   }
 }
 

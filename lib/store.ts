@@ -55,6 +55,7 @@ export type MeshStatus = {
 export type ConnectionState = "online" | "reconnecting";
 
 export type ModuleStage =
+  | "brainstorm" // Module 0 — the pre-Conception Socratic brainstorming window (skippable)
   | "conception"
   | "maturation"
   | "landscape"
