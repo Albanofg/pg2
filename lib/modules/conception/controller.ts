@@ -1103,7 +1103,15 @@ export class ConceptionModule {
     };
     this.concepts.set(id, concept);
     this.ledger.recordMachineEvent("concept_created", ["leap-concept"], { id });
-    this.emitCandidate(concept);
+    // The inventor authored this in their OWN words — it is theirs, so it goes
+    // straight into the concepts they own. We do NOT re-surface it as a
+    // Keep/Drop/Merge candidate card: that review is for the AI-extracted
+    // concepts, and asking the inventor to "keep" what they just wrote is
+    // redundant and risks it being overlooked or dropped.
+    this.confirmed.add(id);
+    this.ledger.recordDecision("candidate_action", ["leap-concept", "keep"], {
+      conceptId: id,
+    });
     await this.recordConceptToConsciousness(concept);
     await this.screenAdditions(id, formalized.added_substance);
   }

@@ -51,18 +51,22 @@ export default function ConceptionPanel({
 
   const strength = strengthOf(view, keptConcepts.length);
 
-  // Keep the Helper's latest reply in view ONLY when the conversation actually
-  // grows (a new turn). Card actions like Keep/Drop/Merge just toggle `busy` and
-  // must NOT yank the page to the footer.
+  // Scroll into view ONLY when the HELPER posts a new reply — that's the only
+  // time there's something new to read at the bottom. We deliberately do NOT
+  // scroll on the inventor's own turns (typing/answering/developing a concept) or
+  // on Keep/Drop/Merge, so working in the concept list never yanks the view down.
   const endRef = useRef<HTMLDivElement>(null);
-  const prevTurnCount = useRef(0);
+  const prevHelperCount = useRef(0);
   useEffect(() => {
-    const count = view.conversation.length;
-    if (count > prevTurnCount.current) {
+    const helperCount = view.conversation.reduce(
+      (n, t) => (t.role === "helper" ? n + 1 : n),
+      0,
+    );
+    if (helperCount > prevHelperCount.current) {
       endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
     }
-    prevTurnCount.current = count;
-  }, [view.conversation.length]);
+    prevHelperCount.current = helperCount;
+  }, [view.conversation]);
 
   return (
     <div className="flex h-full flex-col">
@@ -391,7 +395,7 @@ function BrainstormCardView({
                       setText("");
                     }}
                   >
-                    Develop this
+                    In your own words
                   </Button>
                 </div>
               )}

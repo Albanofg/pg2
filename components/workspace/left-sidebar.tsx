@@ -16,13 +16,14 @@ export default function LeftSidebar({
 }) {
   const {
     title,
-    currentIdea,
+    proofIdea,
     files,
     projectId,
     addFile,
     updateFile,
     removeFile,
   } = useWorkspace();
+  const currentIdea = proofIdea.core;
   const inputRef = useRef<HTMLInputElement>(null);
 
   if (collapsed) {
