@@ -80,34 +80,40 @@ export type DerivationTrace = {
   steps: DerivationStep[];
 };
 
-/** One question in the Socratic walk — poses a choice, never the answer. */
-export type ReversalQuestion = {
-  order: number;
-  /** Shown to the user. */
+/** One question in the adaptive walk — a situation to think through + reactable sparks. */
+export type WalkQuestion = {
+  /** The situation, as an open question (no jammed-in menu). */
   prompt: string;
-  analogy?: string;
-  /** HIDDEN: the choice that moves toward the mechanism. */
-  intended_choice: string;
-  /** Other plausible choices — divergence is allowed. */
+  /** Optional one-line why-it-matters. */
+  why?: string;
+  /** 2–4 short sparks the inventor can tap, edit, or ignore — never the answer flagged as right. */
   alternatives: string[];
-  reverses_step: string;
 };
 
-/** The full Socratic walk for one champion. */
-export type ReversalScript = {
-  questions: ReversalQuestion[];
-  /** The open invitation to state the idea in their own words (verbatim capture). */
-  final_prompt: string;
-  /** HIDDEN target the user should arrive at — for later verbatim comparison. */
-  arrival_target: string;
-  minimality_note: string;
+/**
+ * One adaptive step the brainstorming partner emits, given the conversation so
+ * far. The walk is generated one step at a time and REACTS to the inventor's
+ * actual answers — there is no pre-baked question list and no fixed count.
+ */
+export type ReversalStep = {
+  /** A short reaction to the inventor's last answer (empty on the opening move). */
+  reaction: string;
+  /** True when the inventor has effectively produced the mechanism in their own words. */
+  done: boolean;
+  /** The next question, if not done. */
+  question?: WalkQuestion;
+  /** When done: the open invitation to state the invention in their own words. */
+  arrivalPrompt?: string;
 };
 
-/** A champion plus its reconstructed derivation and the Socratic walk for it. */
+/** One turn of the walk, sent back so the next step can react to it. */
+export type WalkTurn = { question: string; answer: string };
+
+/** A champion + its (backstage) derivation + the OPENING step of its walk. */
 export type FrontierItem = {
   champion: Champion;
   trace: DerivationTrace;
-  script: ReversalScript;
+  opener: ReversalStep;
 };
 
 /** The backstage engine's full output. The front-of-house renders only the walk. */

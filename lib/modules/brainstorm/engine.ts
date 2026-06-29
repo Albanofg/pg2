@@ -3,7 +3,7 @@ import { buildGrid, fullGridSize } from "./grid";
 import {
   runDerivationTracer,
   runIdeaScorer,
-  runReversalCompiler,
+  runReversalStep,
   runStubGenerator,
 } from "./agents";
 import type {
@@ -105,7 +105,9 @@ export async function runBrainstormEngine(
   const elites = mapElites(scored);
   const champions = pickFrontier(elites);
 
-  // 4) REVERSE — reconstruct each champion's derivation, then compile the walk.
+  // 4) REVERSE — reconstruct each champion's derivation, then open its walk with
+  // the FIRST adaptive step (empty conversation). The rest of the walk is
+  // generated step-by-step as the inventor answers (see the step route).
   const frontier: FrontierItem[] = [];
   for (const champ of champions) {
     try {
@@ -114,11 +116,12 @@ export async function runBrainstormEngine(
         mechanism: champ.mechanism,
         operatesOn: champ.operatesOn,
       });
-      const script = await runReversalCompiler(runAgent, {
+      const opener = await runReversalStep(runAgent, {
         trace,
         backpack: input.backpack,
+        conversation: [],
       });
-      frontier.push({ champion: champ, trace, script });
+      frontier.push({ champion: champ, trace, opener });
     } catch (err) {
       console.error("[brainstorm] reverse failed for", champ.handle, err);
     }

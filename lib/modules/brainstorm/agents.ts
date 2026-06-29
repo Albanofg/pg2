@@ -8,8 +8,9 @@ import type {
   Backpack,
   DerivationTrace,
   GridCell,
-  ReversalScript,
+  ReversalStep,
   Stub,
+  WalkTurn,
 } from "./types";
 
 /**
@@ -88,22 +89,17 @@ export const DerivationTracerOutput = z.object({
     .default([]),
 });
 
-export const ReversalOutput = z.object({
-  questions: z
-    .array(
-      z.object({
-        order: z.number().default(0),
-        prompt: z.string().default(""),
-        analogy: z.string().default(""),
-        intended_choice: z.string().default(""),
-        alternatives: z.array(z.string()).default([]),
-        reverses_step: z.string().default(""),
-      }),
-    )
-    .default([]),
-  final_prompt: z.string().default(""),
-  arrival_target: z.string().default(""),
-  minimality_note: z.string().default(""),
+export const ReversalStepOutput = z.object({
+  reaction: z.string().default(""),
+  done: z.boolean().default(false),
+  question: z
+    .object({
+      prompt: z.string().default(""),
+      why: z.string().default(""),
+      alternatives: z.array(z.string()).default([]),
+    })
+    .default({ prompt: "", why: "", alternatives: [] }),
+  arrival_prompt: z.string().default(""),
 });
 
 /* ------------------------------------------------------------------ *
@@ -204,36 +200,73 @@ export async function runDerivationTracer(
   };
 }
 
-/** Reverse a derivation trace into the minimal Socratic walk for THIS user. */
-export async function runReversalCompiler(
+/**
+ * Emit ONE adaptive step of the walk for THIS user, given the conversation so far.
+ * Reacts to their last answer and steers toward the (backstage) mechanism — no
+ * pre-baked list, no fixed count. Empty conversation = the opening move.
+ */
+export async function runReversalStep(
   runAgent: AgentRunner,
-  input: { trace: DerivationTrace; backpack: Backpack },
-): Promise<ReversalScript> {
+  input: {
+    trace: DerivationTrace;
+    backpack: Backpack;
+    conversation: WalkTurn[];
+    /** The inventor pressed "keep pushing" — they don't feel done; never declare arrival. */
+    pushDeeper?: boolean;
+  },
+): Promise<ReversalStep> {
   const system = await loadPrompt("reversal-compiler");
   const t = input.trace;
   const prompt = [
     `PROBLEM: ${t.problem}`,
-    `MECHANISM (the destination — NEVER reveal it): ${t.mechanism}`,
+    `MECHANISM (the destination — NEVER reveal or name it): ${t.mechanism}`,
     ...(t.operatesOn ? [`OPERATES_ON: ${t.operatesOn}`] : []),
     "",
-    "DERIVATION TRACE (the forks to reverse):",
+    "DERIVATION TRACE (your private map of where to steer):",
     ...t.steps.map(
       (s) =>
         `- [${s.id}] ${s.question}\n    options: ${s.options.join(" | ")}\n    chosen: ${s.chosen}\n    why: ${s.why}`,
     ),
     "",
-    "BACKPACK (who this user is — pick analogies they will get):",
+    "BACKPACK (who this user is — pick analogies + level):",
     `- background: ${input.backpack.background}`,
     `- domain familiarity: ${input.backpack.domainFamiliarity}`,
     ...(input.backpack.notes ? [`- notes: ${input.backpack.notes}`] : []),
+    "",
+    "CONVERSATION SO FAR (oldest first):",
+    input.conversation.length
+      ? input.conversation
+          .map((c, i) => `Q${i + 1}: ${c.question}\nA${i + 1}: ${c.answer}`)
+          .join("\n")
+      : "(none yet — this is the opening move; no reaction)",
+    ...(input.pushDeeper
+      ? [
+          "",
+          "THE INVENTOR PRESSED 'KEEP PUSHING' — they do NOT feel done yet. Do NOT set done=true. React to where they are, then ask ONE more question that deepens, extends, or stress-tests the idea (a facet they haven't pinned down, an edge case, or a sharper version) — still describing the situation, never naming the answer.",
+        ]
+      : []),
   ].join("\n");
-  return runAgent({
+  const out = await runAgent({
     agent: "reversal-compiler",
     system,
     prompt,
-    schema: ReversalOutput,
-    temperature: 0.4,
+    schema: ReversalStepOutput,
+    temperature: 0.5,
   });
+  return {
+    reaction: out.reaction,
+    done: out.done,
+    ...(out.question.prompt
+      ? {
+          question: {
+            prompt: out.question.prompt,
+            ...(out.question.why ? { why: out.question.why } : {}),
+            alternatives: out.question.alternatives,
+          },
+        }
+      : {}),
+    ...(out.arrival_prompt ? { arrivalPrompt: out.arrival_prompt } : {}),
+  };
 }
 
 function clamp01(n: number): number {

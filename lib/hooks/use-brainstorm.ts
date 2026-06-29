@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import type { Backpack, BrainstormResult } from "@/lib/modules/brainstorm/types";
+import type {
+  Backpack,
+  BrainstormResult,
+  DerivationTrace,
+  ReversalStep,
+  WalkTurn,
+} from "@/lib/modules/brainstorm/types";
 
 /**
  * Drives the Module 0 backstage engine over /api/brainstorm. The engine is
@@ -43,5 +49,38 @@ export function useBrainstorm() {
     [],
   );
 
-  return { result, busy, error, run, reset: () => setResult(null) };
+  /** One adaptive walk step — reacts to the conversation so far. */
+  const step = useCallback(
+    async (input: {
+      trace: DerivationTrace;
+      backpack: Backpack;
+      conversation: WalkTurn[];
+      pushDeeper?: boolean;
+    }): Promise<ReversalStep | null> => {
+      setBusy(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/brainstorm", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ op: "step", ...input }),
+        });
+        if (res.status === 401) {
+          setError("Your session timed out. Please log in again and retry.");
+          return null;
+        }
+        if (!res.ok) throw new Error(`step failed (${res.status})`);
+        return (await res.json()) as ReversalStep;
+      } catch (e) {
+        setError("I lost the thread there — try answering once more.");
+        console.error(e);
+        return null;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
+  return { result, busy, error, run, step, reset: () => setResult(null) };
 }

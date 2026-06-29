@@ -6,7 +6,11 @@ import { useBrainstorm } from "@/lib/hooks/use-brainstorm";
 import { Button } from "@/components/ui/button";
 import { VoiceTextarea } from "@/components/ui/voice-textarea";
 import { cn } from "@/lib/utils";
-import type { FrontierItem } from "@/lib/modules/brainstorm/types";
+import type {
+  FrontierItem,
+  ReversalStep,
+  WalkTurn,
+} from "@/lib/modules/brainstorm/types";
 
 type Phase = "guide" | "intro" | "thinking" | "frontier" | "walk" | "capture";
 
@@ -26,13 +30,15 @@ const GUIDE_KEY = "geyser_brainstorm_guide";
 export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string }) {
   const projectId = useWorkspace((s) => s.projectId);
   const setStage = useWorkspace((s) => s.setStage);
-  const { result, busy, error, run } = useBrainstorm();
+  const { result, busy, error, run, step } = useBrainstorm();
 
   const [phase, setPhase] = useState<Phase>("guide");
   const [guide, setGuide] = useState("");
   const [problem, setProblem] = useState("");
   const [chosen, setChosen] = useState<number | null>(null);
-  const [walkIdx, setWalkIdx] = useState(0);
+  const [stepData, setStepData] = useState<ReversalStep | null>(null);
+  const [conversation, setConversation] = useState<WalkTurn[]>([]);
+  const [arrivalPrompt, setArrivalPrompt] = useState("");
   const [articulation, setArticulation] = useState("");
   const [custom, setCustom] = useState("");
   const [handoffBusy, setHandoffBusy] = useState(false);
@@ -53,7 +59,10 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
 
   const item: FrontierItem | null =
     result && chosen != null ? result.frontier[chosen] ?? null : null;
-  const question = item?.script.questions[walkIdx] ?? null;
+  const backpack = {
+    background: guide.trim() || "(not specified)",
+    domainFamiliarity: guide.trim() || "(not specified)",
+  };
 
   const saveGuide = () => {
     if (!guide.trim()) return;
@@ -79,10 +88,36 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
     setPhase(data && data.frontier.length ? "frontier" : "intro");
   };
 
-  const advanceWalk = (text: string) => {
-    if (!text.trim() || !item) return;
-    if (walkIdx + 1 < item.script.questions.length) setWalkIdx(walkIdx + 1);
-    else setPhase("capture");
+  const answerWalk = async (text: string) => {
+    const t = text.trim();
+    if (!t || !item || !stepData?.question) return;
+    const nextConv: WalkTurn[] = [
+      ...conversation,
+      { question: stepData.question.prompt, answer: t },
+    ];
+    setConversation(nextConv);
+    const next = await step({ trace: item.trace, backpack, conversation: nextConv });
+    if (!next) return; // error surfaced by the hook
+    if (next.done) {
+      setArrivalPrompt(next.arrivalPrompt ?? "");
+      setPhase("capture");
+    } else {
+      setStepData(next);
+    }
+  };
+
+  // Arrival is a checkpoint, not a dead-end: the inventor — not the AI's `done` —
+  // decides when they're sure. "Keep pushing" re-enters the walk and goes deeper.
+  const keepPushing = async () => {
+    if (!item) return;
+    setPhase("walk");
+    const next = await step({
+      trace: item.trace,
+      backpack,
+      conversation,
+      pushDeeper: true,
+    });
+    if (next?.question) setStepData(next);
   };
 
   const finishConception = async () => {
@@ -168,16 +203,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
             </div>
           )}
 
-          {phase === "thinking" && (
-            <div className="rounded-md border border-border bg-panel p-6 text-center">
-              <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
-                Thinking it through
-              </div>
-              <p className="font-mono text-xs leading-relaxed text-ink-muted">
-                Working through a few directions inside your problem — one moment.
-              </p>
-            </div>
-          )}
+          {phase === "thinking" && <ThinkingState />}
 
           {phase === "frontier" && result && (
             <div className="space-y-3">
@@ -190,7 +216,8 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                   key={i}
                   onClick={() => {
                     setChosen(i);
-                    setWalkIdx(0);
+                    setConversation([]);
+                    setStepData(f.opener);
                     setPhase("walk");
                   }}
                   className="block w-full rounded-md border border-border bg-panel p-4 text-left transition-colors hover:border-accent hover:bg-accent/5"
@@ -199,7 +226,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                     Direction {i + 1}
                   </div>
                   <p className="mt-1 font-sans text-sm leading-relaxed text-ink">
-                    {f.script.questions[0]?.prompt ?? "A direction worth exploring."}
+                    {f.opener.question?.prompt ?? "A direction worth exploring."}
                   </p>
                 </button>
               ))}
@@ -223,8 +250,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                     variant="ghost"
                     onClick={() => {
                       setArticulation(custom.trim());
-                      setChosen(null);
-                      setWalkIdx(0);
+                      setArrivalPrompt("");
                       setPhase("capture");
                     }}
                     disabled={!custom.trim()}
@@ -241,17 +267,20 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
             </div>
           )}
 
-          {phase === "walk" && question && item && (
-            <WalkStep
-              key={walkIdx}
-              order={walkIdx + 1}
-              total={item.script.questions.length}
-              prompt={question.prompt}
-              options={question.alternatives}
-              busy={busy}
-              onAnswer={advanceWalk}
-            />
-          )}
+          {phase === "walk" &&
+            (stepData?.question ? (
+              <WalkStep
+                key={conversation.length}
+                stepNumber={conversation.length + 1}
+                reaction={stepData.reaction}
+                prompt={stepData.question.prompt}
+                options={stepData.question.alternatives}
+                busy={busy}
+                onAnswer={answerWalk}
+              />
+            ) : busy ? (
+              <ThinkingState />
+            ) : null)}
 
           {phase === "capture" && (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4">
@@ -259,7 +288,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                 Now say it in your own words
               </div>
               <p className="mt-1 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-muted">
-                {item?.script.final_prompt ??
+                {arrivalPrompt ||
                   "Say your invention in your own words — exactly as you see it."}
               </p>
               <VoiceTextarea
@@ -270,9 +299,21 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                 className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
               />
               <p className="mt-2 font-mono text-[11px] italic text-ink-muted">
-                This becomes your conception — captured exactly as you write it.
+                This becomes your conception — captured exactly as you write it. No
+                rush — if it doesn&apos;t feel finished, keep going.
               </p>
-              <div className="mt-2 flex justify-end">
+              <div className="mt-2 flex items-center justify-between gap-2">
+                {item && conversation.length > 0 ? (
+                  <Button
+                    variant="ghost"
+                    onClick={keepPushing}
+                    disabled={busy || handoffBusy}
+                  >
+                    Not there yet — keep going
+                  </Button>
+                ) : (
+                  <span />
+                )}
                 <Button
                   variant="primary"
                   onClick={finishConception}
@@ -289,16 +330,45 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
   );
 }
 
+/** Lines cycle while the engine works (it can take a while) so it never reads as
+ *  frozen. Curtain-safe — describes the experience, never the backstage engine. */
+const THINKING_LINES = [
+  "Thinking through your problem…",
+  "Exploring a few different angles…",
+  "Weighing which directions look most promising…",
+  "Shaping the questions to walk you through…",
+  "Almost there…",
+];
+
+function ThinkingState() {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(
+      () => setI((n) => Math.min(n + 1, THINKING_LINES.length - 1)),
+      3000,
+    );
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-accent/30 bg-accent/5 p-5">
+      <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+      <span className="font-mono text-xs leading-relaxed text-ink-muted">
+        {THINKING_LINES[i]}
+      </span>
+    </div>
+  );
+}
+
 function WalkStep({
-  order,
-  total,
+  stepNumber,
+  reaction,
   prompt,
   options,
   busy,
   onAnswer,
 }: {
-  order: number;
-  total: number;
+  stepNumber: number;
+  reaction: string;
   prompt: string;
   options: string[];
   busy: boolean;
@@ -307,12 +377,20 @@ function WalkStep({
   const [text, setText] = useState("");
   return (
     <div className="rounded-md border border-action/30 bg-action/5 p-4">
+      {/* The partner reacts to your last answer, then asks the next thing. */}
+      {reaction && (
+        <p className="mb-3 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-muted">
+          {reaction}
+        </p>
+      )}
       <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-action">
-        Question {order} of {total}
+        Question {stepNumber}
       </div>
       <p className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink">
         {prompt}
       </p>
+      {/* Sparks to react to — tap one, edit it, or type your own. Not the answer
+          flagged as right; just starting points. */}
       {options.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {options.map((opt, j) => (
@@ -341,7 +419,7 @@ function WalkStep({
           onClick={() => onAnswer(text)}
           disabled={busy || !text.trim()}
         >
-          {order < total ? "Next →" : "I've got it →"}
+          {busy ? "Thinking…" : "Continue →"}
         </Button>
       </div>
     </div>
