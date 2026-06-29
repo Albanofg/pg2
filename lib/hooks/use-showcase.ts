@@ -56,7 +56,7 @@ export function useShowcase(projectId: string | null) {
         );
         return data;
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Showcase request failed.");
+        setError("The Helper couldn't finish that just now. Please try again in a moment.");
         console.error(e);
         return null;
       } finally {
@@ -97,7 +97,7 @@ export function useShowcase(projectId: string | null) {
       }
       return await res.json();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Export failed.");
+      setError("Couldn't export your draft just now. Please try again in a moment.");
       console.error(e);
       return null;
     } finally {

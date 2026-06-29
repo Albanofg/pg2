@@ -62,7 +62,7 @@ export function useMaturation(projectId: string | null) {
         return data;
       } catch (e) {
         setError(
-          "The Helper couldn't expand these. Check the dev server logs and try again."
+          "The Helper couldn't expand these just now. Please try again in a moment."
         );
         console.error(e);
         return null;

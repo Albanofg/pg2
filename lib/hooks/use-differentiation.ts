@@ -60,7 +60,7 @@ export function useDifferentiation(projectId: string | null) {
         );
         return data;
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Differentiation request failed.");
+        setError("The Helper couldn't respond just now. Please try again in a moment.");
         console.error(e);
         return null;
       } finally {

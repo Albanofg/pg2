@@ -24,12 +24,16 @@ export function useBrainstorm() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(input),
         });
+        if (res.status === 401) {
+          setError("Your session timed out. Please log in again and retry.");
+          return null;
+        }
         if (!res.ok) throw new Error(`brainstorm failed (${res.status})`);
         const data = (await res.json()) as BrainstormResult;
         setResult(data);
         return data;
       } catch (e) {
-        setError("Couldn't work through the directions — check the dev server logs and try again.");
+        setError("I couldn't work through that just now. Give it another go in a moment.");
         console.error(e);
         return null;
       } finally {

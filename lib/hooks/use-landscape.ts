@@ -49,7 +49,7 @@ export function useLandscape(projectId: string | null) {
         return data;
       } catch (e) {
         setError(
-          "The Landscape search couldn't run. Check the search service and try again.",
+          "The prior-art search couldn't run just now. Please try again in a moment.",
         );
         console.error(e);
         return null;

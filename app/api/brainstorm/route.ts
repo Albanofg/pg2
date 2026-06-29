@@ -1,30 +1,26 @@
 import { NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth";
 import { runBrainstormEngine } from "@/lib/modules/brainstorm/engine";
 import { brainstormRunner } from "@/lib/modules/brainstorm/runner.openai";
 import { sampleBackpack, sampleProblem } from "@/lib/modules/brainstorm/fixtures";
 import type { Backpack, SubProblem } from "@/lib/modules/brainstorm/types";
 
 /**
- * Dev harness for the Module 0 backstage engine — runs the whole pipeline (grid →
- * generate → score → select frontier → trace → reverse) and returns the result.
+ * Module 0 backstage engine — grid → generate → score → select frontier → trace →
+ * reverse. Returns a small frontier of directions, each with its Socratic walk.
  *
- *   GET  /api/brainstorm                 → runs on the sample problem + backpack
+ *   GET  /api/brainstorm                 → runs on the sample problem (quick check)
  *   POST /api/brainstorm { problem, backpack?, subProblems?, n? }
  *
- * Disabled in production: it is an unauthenticated, token-spending demo endpoint.
- * The real entry point will be the front-of-house Socratic panel.
+ * Auth required (it spends model tokens). API routes enforce their own session
+ * check — middleware only gates pages.
  */
+export const runtime = "nodejs";
 export const maxDuration = 300;
 
-function blockInProd() {
-  return process.env.NODE_ENV === "production"
-    ? NextResponse.json({ error: "disabled in production" }, { status: 404 })
-    : null;
-}
-
 export async function GET() {
-  const blocked = blockInProd();
-  if (blocked) return blocked;
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const result = await runBrainstormEngine(brainstormRunner, {
     problem: sampleProblem,
     backpack: sampleBackpack,
@@ -34,8 +30,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const blocked = blockInProd();
-  if (blocked) return blocked;
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const body = (await req.json().catch(() => ({}))) as {
     problem?: string;
     backpack?: Backpack;

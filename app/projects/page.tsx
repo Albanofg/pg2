@@ -28,6 +28,11 @@ export default function ProjectsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
+  // Non-blocking confirm/rename — never window.confirm/prompt (they freeze the
+  // main thread, which also wrecks interaction timing).
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [renameId, setRenameId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -97,14 +102,11 @@ export default function ProjectsPage() {
     }
   }, [newTitle, open, refresh]);
 
+  // The destructive step itself — confirmation is handled by the inline two-step
+  // UI (setConfirmId), so no blocking dialog.
   const remove = useCallback(
-    async (id: string, title: string) => {
-      if (
-        !window.confirm(
-          `Delete "${title}"? This permanently removes the project, its draft, transcript, and notebook. This cannot be undone.`
-        )
-      )
-        return;
+    async (id: string) => {
+      setConfirmId(null);
       setBusyId(id);
       setError(null);
       try {
@@ -122,12 +124,14 @@ export default function ProjectsPage() {
     [activeProjectId, setActiveProject, refresh]
   );
 
-  const rename = useCallback(
-    async (id: string, current: string) => {
-      const next = window.prompt("Rename project", current);
-      if (next === null) return;
-      const title = next.trim();
-      if (!title || title === current) return;
+  const saveRename = useCallback(
+    async (id: string) => {
+      const title = renameDraft.trim();
+      if (!title) {
+        setRenameId(null);
+        return;
+      }
+      setRenameId(null);
       setBusyId(id);
       setError(null);
       try {
@@ -145,7 +149,7 @@ export default function ProjectsPage() {
         setBusyId(null);
       }
     },
-    [refresh]
+    [renameDraft, refresh]
   );
 
   return (
@@ -213,47 +217,102 @@ export default function ProjectsPage() {
               key={p.id}
               className="flex items-center justify-between gap-4 rounded-md border border-border bg-panel p-4"
             >
-              <button
-                onClick={() => open(p.id)}
-                className="min-w-0 flex-1 text-left"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="truncate font-sans text-sm font-semibold text-ink">
-                    {p.title}
-                  </span>
-                  {p.id === activeProjectId && (
-                    <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-accent">
-                      active
-                    </span>
-                  )}
-                </div>
-                <div className="mt-1 font-mono text-xs text-ink-muted">
-                  {phaseLabel(p.currentPhase)} · updated{" "}
-                  {new Date(p.updatedAt).toLocaleString()}
-                </div>
-              </button>
-
-              <div className="flex shrink-0 items-center gap-2">
+              {renameId === p.id ? (
+                <input
+                  value={renameDraft}
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void saveRename(p.id);
+                    if (e.key === "Escape") setRenameId(null);
+                  }}
+                  autoFocus
+                  className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2 font-sans text-sm text-ink focus:border-accent focus:outline-none"
+                />
+              ) : (
                 <button
                   onClick={() => open(p.id)}
-                  className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand transition-colors hover:bg-accent/90"
+                  className="min-w-0 flex-1 text-left"
                 >
-                  Open
+                  <div className="flex items-center gap-2">
+                    <span className="truncate font-sans text-sm font-semibold text-ink">
+                      {p.title}
+                    </span>
+                    {p.id === activeProjectId && (
+                      <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-accent">
+                        active
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 font-mono text-xs text-ink-muted">
+                    {phaseLabel(p.currentPhase)} · updated{" "}
+                    {new Date(p.updatedAt).toLocaleString()}
+                  </div>
                 </button>
-                <button
-                  onClick={() => void rename(p.id, p.title)}
-                  disabled={busyId === p.id}
-                  className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted transition-colors hover:text-ink disabled:opacity-50"
-                >
-                  Rename
-                </button>
-                <button
-                  onClick={() => void remove(p.id, p.title)}
-                  disabled={busyId === p.id}
-                  className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-red-300 transition-colors hover:border-red-500/40 hover:bg-red-500/10 disabled:opacity-50"
-                >
-                  {busyId === p.id ? "…" : "Delete"}
-                </button>
+              )}
+
+              <div className="flex shrink-0 items-center gap-2">
+                {renameId === p.id ? (
+                  <>
+                    <button
+                      onClick={() => void saveRename(p.id)}
+                      disabled={busyId === p.id}
+                      className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand transition-colors hover:bg-accent/90 disabled:opacity-50"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setRenameId(null)}
+                      className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted transition-colors hover:text-ink"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : confirmId === p.id ? (
+                  <>
+                    <span className="font-mono text-[11px] text-ink-muted">
+                      Delete for good?
+                    </span>
+                    <button
+                      onClick={() => void remove(p.id)}
+                      disabled={busyId === p.id}
+                      className="rounded-md border border-red-500/50 bg-red-500/15 px-3 py-1.5 font-sans text-xs text-red-300 transition-colors hover:bg-red-500/25 disabled:opacity-50"
+                    >
+                      {busyId === p.id ? "…" : "Delete"}
+                    </button>
+                    <button
+                      onClick={() => setConfirmId(null)}
+                      className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted transition-colors hover:text-ink"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => open(p.id)}
+                      className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand transition-colors hover:bg-accent/90"
+                    >
+                      Open
+                    </button>
+                    <button
+                      onClick={() => {
+                        setRenameId(p.id);
+                        setRenameDraft(p.title);
+                      }}
+                      disabled={busyId === p.id}
+                      className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted transition-colors hover:text-ink disabled:opacity-50"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      onClick={() => setConfirmId(p.id)}
+                      disabled={busyId === p.id}
+                      className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-red-300 transition-colors hover:border-red-500/40 hover:bg-red-500/10 disabled:opacity-50"
+                    >
+                      Delete
+                    </button>
+                  </>
+                )}
               </div>
             </li>
           ))}

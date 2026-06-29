@@ -41,6 +41,8 @@ export default function ConceptionPanel({
   const setStage = useWorkspace((s) => s.setStage);
   // Entry routing for the empty state: choose a route, THEN reveal its input.
   const [entryMode, setEntryMode] = useState<"choose" | "idea">("choose");
+  // Inline (non-blocking) confirm for "Start over" — no window.confirm.
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const hasStatement = !!view.statement;
   const candidateCards = view.cards.filter(
@@ -85,18 +87,38 @@ export default function ConceptionPanel({
             Turn your idea into concepts you own
           </h2>
         </div>
-        {hasStatement && (
-          <button
-            onClick={() => {
-              if (window.confirm("Start this idea over? The current session is cleared."))
-                void reset();
-            }}
-            disabled={busy}
-            className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
-          >
-            Start over
-          </button>
-        )}
+        {hasStatement &&
+          (confirmReset ? (
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+                Clear and start over?
+              </span>
+              <button
+                onClick={() => {
+                  setConfirmReset(false);
+                  void reset();
+                }}
+                disabled={busy}
+                className="font-mono text-[10px] uppercase tracking-[0.1em] text-red-300 transition-colors hover:text-red-200 disabled:opacity-50"
+              >
+                Confirm
+              </button>
+              <button
+                onClick={() => setConfirmReset(false)}
+                className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-ink"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmReset(true)}
+              disabled={busy}
+              className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
+            >
+              Start over
+            </button>
+          ))}
       </header>
 
       {hasStatement && <StrengthMeter pct={strength.pct} label={strength.label} />}
