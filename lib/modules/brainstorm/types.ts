@@ -96,6 +96,8 @@ export type WalkQuestion = {
  * actual answers — there is no pre-baked question list and no fixed count.
  */
 export type ReversalStep = {
+  /** Opening move only: a short, curtain-safe framing of this direction for the frontier card. */
+  angle?: string;
   /** A short reaction to the inventor's last answer (empty on the opening move). */
   reaction: string;
   /** True when the inventor has effectively produced the mechanism in their own words. */
@@ -109,11 +111,54 @@ export type ReversalStep = {
 /** One turn of the walk, sent back so the next step can react to it. */
 export type WalkTurn = { question: string; answer: string };
 
-/** A champion + its (backstage) derivation + the OPENING step of its walk. */
+export type MarketIncumbent = { name: string; what: string };
+
+/** The honest competitive "market read" shown on a frontier card. */
+export type MarketRead = {
+  incumbents: MarketIncumbent[];
+  whitespace: string;
+  /** "searched" = grounded in live web results; "model" = the model's own knowledge (verify). */
+  confidence: "searched" | "model";
+};
+
+/**
+ * The three excavation lenses (the doc's Step-1): the latent NEED under the noun,
+ * a claimable MECHANISM (how + constraint), and a strategic MARKET fork.
+ */
+export type Lens = "need" | "mechanism" | "market";
+
+/** One Step-1 card — a sharper restatement of the spark through one lens. */
+export type LensCard = {
+  lens: Lens;
+  label: string;
+  /** The idea handed back sharper, in the inventor's world (the delight). */
+  restatement: string;
+  /** The part that would survive an examiner — plain language, no statutes. */
+  mechanism: string;
+  marketRead?: MarketRead;
+  recommended?: boolean;
+};
+
+/** The single optional clarifier chip-row that sharpens all three cards. */
+export type Clarifier = { prompt: string; chips: string[] };
+
+/** The Step-1 frontier: three lens cards + an optional clarifier. */
+export type ExcavationFrontier = {
+  spark: string;
+  clarifier?: Clarifier;
+  cards: LensCard[];
+  notes: string[];
+};
+
+/** A champion + its (backstage) derivation + the OPENING step of its walk + market read. */
 export type FrontierItem = {
   champion: Champion;
   trace: DerivationTrace;
   opener: ReversalStep;
+  /** The competitive read for this direction (incumbents + whitespace). */
+  marketRead?: MarketRead;
+  /** One direction is flagged recommended (cleanest whitespace / strongest mechanism). */
+  recommended?: boolean;
 };
 
 /** The backstage engine's full output. The front-of-house renders only the walk. */
@@ -130,7 +175,10 @@ export type AgentName =
   | "stub-generator"
   | "idea-scorer"
   | "derivation-tracer"
-  | "reversal-compiler";
+  | "reversal-compiler"
+  | "market-analyst"
+  | "excavator"
+  | "section-101";
 
 export type BrainstormDeps = {
   runAgent: AgentRunner;

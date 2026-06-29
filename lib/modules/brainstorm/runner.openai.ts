@@ -15,6 +15,12 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   "idea-scorer": MODELS.drafter,
   "derivation-tracer": MODELS.drafter,
   "reversal-compiler": MODELS.drafter,
+  // The market read is the trust-critical, knowledge-heavy step — strong model.
+  "market-analyst": MODELS.drafter,
+  // The first-sixty-seconds excavation — the delight + §101 reasoning. Strong model.
+  excavator: MODELS.drafter,
+  // The §101 eligibility gate + constraint-injector — legal-reasoning-heavy. Strong model.
+  "section-101": MODELS.drafter,
 };
 
 export const brainstormRunner: AgentRunner = async (req) => {

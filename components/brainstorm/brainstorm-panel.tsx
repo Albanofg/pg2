@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/lib/store";
 import { useBrainstorm } from "@/lib/hooks/use-brainstorm";
 import { Button } from "@/components/ui/button";
 import { VoiceTextarea } from "@/components/ui/voice-textarea";
 import { cn } from "@/lib/utils";
 import type {
-  FrontierItem,
+  DerivationTrace,
+  ExcavationFrontier,
+  LensCard,
   ReversalStep,
   WalkTurn,
 } from "@/lib/modules/brainstorm/types";
@@ -30,13 +32,14 @@ const GUIDE_KEY = "geyser_brainstorm_guide";
 export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string }) {
   const projectId = useWorkspace((s) => s.projectId);
   const setStage = useWorkspace((s) => s.setStage);
-  const { result, busy, error, run, step } = useBrainstorm();
+  const { result, busy, error, run, open, step, hydrate } = useBrainstorm();
 
   const [phase, setPhase] = useState<Phase>("guide");
   const [guide, setGuide] = useState("");
   const [problem, setProblem] = useState("");
-  const [chosen, setChosen] = useState<number | null>(null);
+  const [chosenTrace, setChosenTrace] = useState<DerivationTrace | null>(null);
   const [stepData, setStepData] = useState<ReversalStep | null>(null);
+  const [stepSeq, setStepSeq] = useState(0);
   const [conversation, setConversation] = useState<WalkTurn[]>([]);
   const [arrivalPrompt, setArrivalPrompt] = useState("");
   const [articulation, setArticulation] = useState("");
@@ -57,11 +60,116 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
     }
   }, []);
 
-  const item: FrontierItem | null =
-    result && chosen != null ? result.frontier[chosen] ?? null : null;
+  // Module 0 crash recovery — the whole brainstorm session (spark, cards, where
+  // you are in the walk) is saved per-project, so a freeze/reload drops you right
+  // back in. The 5 main modules persist to the DB; this is their localStorage
+  // equivalent for the pre-conception step.
+  const loadedRef = useRef(false);
+  useEffect(() => {
+    if (!projectId || loadedRef.current) return;
+    loadedRef.current = true;
+    try {
+      const raw = window.localStorage.getItem(`geyser_brainstorm_session_${projectId}`);
+      if (!raw) return;
+      const s = JSON.parse(raw) as {
+        phase: Phase;
+        problem: string;
+        result: ExcavationFrontier | null;
+        chosenTrace: DerivationTrace | null;
+        stepData: ReversalStep | null;
+        stepSeq: number;
+        conversation: WalkTurn[];
+        arrivalPrompt: string;
+        articulation: string;
+        custom: string;
+      };
+      setProblem(s.problem ?? "");
+      if (s.result) hydrate(s.result);
+      setChosenTrace(s.chosenTrace ?? null);
+      setStepData(s.stepData ?? null);
+      setStepSeq(s.stepSeq ?? 0);
+      setConversation(Array.isArray(s.conversation) ? s.conversation : []);
+      setArrivalPrompt(s.arrivalPrompt ?? "");
+      setArticulation(s.articulation ?? "");
+      setCustom(s.custom ?? "");
+      // Never restore into the transient "thinking" state — it would spin forever.
+      setPhase(s.phase === "thinking" ? (s.result ? "frontier" : "intro") : s.phase);
+    } catch {
+      /* corrupt session — start fresh */
+    }
+  }, [projectId, hydrate]);
+
+  useEffect(() => {
+    if (!projectId || !loadedRef.current) return;
+    if (!problem.trim() && !result) return; // nothing worth saving yet
+    try {
+      window.localStorage.setItem(
+        `geyser_brainstorm_session_${projectId}`,
+        JSON.stringify({
+          phase,
+          problem,
+          result,
+          chosenTrace,
+          stepData,
+          stepSeq,
+          conversation,
+          arrivalPrompt,
+          articulation,
+          custom,
+        }),
+      );
+    } catch {
+      /* quota / unavailable — best effort */
+    }
+  }, [
+    projectId,
+    phase,
+    problem,
+    result,
+    chosenTrace,
+    stepData,
+    stepSeq,
+    conversation,
+    arrivalPrompt,
+    articulation,
+    custom,
+  ]);
+
+  const clearSession = () => {
+    if (!projectId) return;
+    try {
+      window.localStorage.removeItem(`geyser_brainstorm_session_${projectId}`);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // Clear the saved session and return to a blank spark (so a restored session
+  // never traps you — you can always start a fresh idea).
+  const startOver = () => {
+    clearSession();
+    hydrate(null);
+    setProblem("");
+    setChosenTrace(null);
+    setStepData(null);
+    setStepSeq(0);
+    setConversation([]);
+    setArrivalPrompt("");
+    setArticulation("");
+    setCustom("");
+    setPhase("intro");
+  };
+
   const backpack = {
     background: guide.trim() || "(not specified)",
     domainFamiliarity: guide.trim() || "(not specified)",
+  };
+
+  // Show a NEW walk step and bump the sequence so the step UI re-mounts fresh
+  // (clears the input box; guarantees the screen advances on every new question).
+  const showStep = (s: ReversalStep) => {
+    setStepData(s);
+    setStepSeq((n) => n + 1);
   };
 
   const saveGuide = () => {
@@ -77,47 +185,68 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
   const startEngine = async () => {
     if (!problem.trim()) return;
     setPhase("thinking");
-    const data = await run({
-      problem: problem.trim(),
-      // Real backpack — the fuel for the reversal's analogies (spec §2).
-      backpack: {
-        background: guide.trim() || "(not specified)",
-        domainFamiliarity: guide.trim() || "(not specified)",
-      },
-    });
-    setPhase(data && data.frontier.length ? "frontier" : "intro");
+    const data = await run({ spark: problem.trim() });
+    setPhase(data && data.cards.length ? "frontier" : "intro");
+  };
+
+  // Optional clarifier chip — re-runs the excavation, sharpened by the answer.
+  const sharpen = async (chip: string) => {
+    setPhase("thinking");
+    await run({ spark: problem.trim(), clarifierAnswer: chip });
+    setPhase("frontier");
+  };
+
+  // Picked a card — reconstruct its derivation and open the adaptive walk.
+  const pickCard = async (card: LensCard) => {
+    setPhase("thinking");
+    setConversation([]);
+    const opened = await open({ spark: problem.trim(), card, backpack });
+    if (!opened) {
+      setPhase("frontier");
+      return;
+    }
+    setChosenTrace(opened.trace);
+    showStep(opened.opener);
+    setPhase("walk");
   };
 
   const answerWalk = async (text: string) => {
     const t = text.trim();
-    if (!t || !item || !stepData?.question) return;
+    if (!t || !chosenTrace || !stepData?.question) return;
     const nextConv: WalkTurn[] = [
       ...conversation,
       { question: stepData.question.prompt, answer: t },
     ];
     setConversation(nextConv);
-    const next = await step({ trace: item.trace, backpack, conversation: nextConv });
+    const next = await step({ trace: chosenTrace, backpack, conversation: nextConv });
     if (!next) return; // error surfaced by the hook
     if (next.done) {
       setArrivalPrompt(next.arrivalPrompt ?? "");
       setPhase("capture");
     } else {
-      setStepData(next);
+      showStep(next);
     }
   };
 
   // Arrival is a checkpoint, not a dead-end: the inventor — not the AI's `done` —
-  // decides when they're sure. "Keep pushing" re-enters the walk and goes deeper.
+  // decides when they're sure. "Keep pushing" re-enters the walk on a NEW edge.
   const keepPushing = async () => {
-    if (!item) return;
+    if (!chosenTrace) return;
     setPhase("walk");
     const next = await step({
-      trace: item.trace,
+      trace: chosenTrace,
       backpack,
       conversation,
       pushDeeper: true,
     });
-    if (next?.question) setStepData(next);
+    if (next?.question) {
+      showStep(next);
+    } else {
+      // No new edge came back (or the call errored) — return to arrival rather
+      // than leave the previous question stranded on screen.
+      if (next?.arrivalPrompt) setArrivalPrompt(next.arrivalPrompt);
+      setPhase("capture");
+    }
   };
 
   const finishConception = async () => {
@@ -130,6 +259,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ op: "ingest", raw: text, projectId }),
       });
+      clearSession(); // handed off — the brainstorm session is done.
       setStage("conception");
     } catch (e) {
       console.error(e);
@@ -151,12 +281,22 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                 Let&apos;s find the invention together
               </h2>
             </div>
-            <button
-              onClick={() => setStage("conception")}
-              className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
-            >
-              I already have a concept →
-            </button>
+            <div className="flex items-center gap-3">
+              {phase !== "guide" && phase !== "intro" && (
+                <button
+                  onClick={startOver}
+                  className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+                >
+                  Start over
+                </button>
+              )}
+              <button
+                onClick={() => setStage("conception")}
+                className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+              >
+                I already have a concept →
+              </button>
+            </div>
           </header>
 
           {error && (
@@ -207,27 +347,99 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
 
           {phase === "frontier" && result && (
             <div className="space-y-3">
-              <p className="font-mono text-xs leading-relaxed text-ink-muted">
-                A few different ways into your problem. Which one pulls at you? Pick
-                the one you want to think through.
+              {/* Your spark, quoted back. */}
+              <div className="rounded-md border border-border bg-bg/40 p-3">
+                <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+                  Your spark
+                </div>
+                <p className="mt-1 font-mono text-xs italic leading-relaxed text-ink">
+                  &ldquo;{result.spark}&rdquo;
+                </p>
+              </div>
+
+              {/* The single optional clarifier — cards already give a strong default,
+                  so this never blocks. Progress by default, refine if you want. */}
+              {result.clarifier?.prompt && (
+                <div>
+                  <p className="font-mono text-xs leading-relaxed text-ink-muted">
+                    {result.clarifier.prompt}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {result.clarifier.chips.map((chip, j) => (
+                      <button
+                        key={j}
+                        type="button"
+                        onClick={() => void sharpen(chip)}
+                        disabled={busy}
+                        className="rounded-full border border-border bg-panel px-2.5 py-1 font-mono text-[11px] text-ink-muted hover:border-accent hover:text-ink disabled:opacity-50"
+                      >
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <p className="font-sans text-sm font-semibold text-ink">
+                Three sharper ways to frame it — each mapped to the market. Pick one
+                to keep going.
               </p>
-              {result.frontier.map((f, i) => (
+
+              {result.cards.map((card, i) => (
                 <button
                   key={i}
-                  onClick={() => {
-                    setChosen(i);
-                    setConversation([]);
-                    setStepData(f.opener);
-                    setPhase("walk");
-                  }}
-                  className="block w-full rounded-md border border-border bg-panel p-4 text-left transition-colors hover:border-accent hover:bg-accent/5"
+                  onClick={() => void pickCard(card)}
+                  disabled={busy}
+                  className={cn(
+                    "block w-full rounded-md border bg-panel p-4 text-left transition-colors hover:bg-accent/5 disabled:opacity-60",
+                    card.recommended
+                      ? "border-accent/50"
+                      : "border-border hover:border-accent",
+                  )}
                 >
-                  <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
-                    Direction {i + 1}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-action">
+                      {card.label}
+                    </div>
+                    {card.recommended && (
+                      <span className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-accent">
+                        Recommended
+                      </span>
+                    )}
                   </div>
-                  <p className="mt-1 font-sans text-sm leading-relaxed text-ink">
-                    {f.opener.question?.prompt ?? "A direction worth exploring."}
+                  <p className="mt-1.5 font-sans text-sm leading-relaxed text-ink">
+                    {card.restatement}
                   </p>
+                  {card.mechanism && (
+                    <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-ink-muted">
+                      <span className="text-ink-muted/80">The mechanism — </span>
+                      {card.mechanism}
+                    </p>
+                  )}
+                  {card.marketRead && (
+                    <div className="mt-2 border-t border-border/60 pt-2">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+                        Market read
+                        {card.marketRead.confidence === "model" && (
+                          <span className="ml-1 text-ink-muted/70">· unverified</span>
+                        )}
+                      </div>
+                      {card.marketRead.incumbents.length > 0 && (
+                        <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
+                          Already here:{" "}
+                          {card.marketRead.incumbents.map((c) => c.name).join(", ")}.
+                        </p>
+                      )}
+                      {card.marketRead.whitespace && (
+                        <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
+                          {card.marketRead.whitespace}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  <div className="mt-2 text-right font-mono text-[11px] text-accent">
+                    Choose this →
+                  </div>
                 </button>
               ))}
               {/* Human input — never only the AI's three. Bring your own angle. */}
@@ -268,18 +480,21 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
           )}
 
           {phase === "walk" &&
-            (stepData?.question ? (
+            (busy ? (
+              // While a step is in flight, show a clean loading state — never the
+              // PREVIOUS question under the NEXT question's number (that's the
+              // "Q8 shown as Q9" bug). The new question appears only once it loads.
+              <ThinkingState />
+            ) : stepData?.question ? (
               <WalkStep
-                key={conversation.length}
-                stepNumber={conversation.length + 1}
+                key={stepSeq}
+                stepNumber={stepSeq}
                 reaction={stepData.reaction}
                 prompt={stepData.question.prompt}
                 options={stepData.question.alternatives}
                 busy={busy}
                 onAnswer={answerWalk}
               />
-            ) : busy ? (
-              <ThinkingState />
             ) : null)}
 
           {phase === "capture" && (
@@ -303,7 +518,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                 rush — if it doesn&apos;t feel finished, keep going.
               </p>
               <div className="mt-2 flex items-center justify-between gap-2">
-                {item && conversation.length > 0 ? (
+                {chosenTrace && conversation.length > 0 ? (
                   <Button
                     variant="ghost"
                     onClick={keepPushing}

@@ -3,9 +3,11 @@ import { buildGrid, fullGridSize } from "./grid";
 import {
   runDerivationTracer,
   runIdeaScorer,
+  runMarketAnalyst,
   runReversalStep,
   runStubGenerator,
 } from "./agents";
+import { marketSearchEnabled, searchMarket } from "./market";
 import type {
   AgentRunner,
   Backpack,
@@ -95,9 +97,6 @@ export async function runBrainstormEngine(
       marketConfidence: "thin" as const,
     }));
   }
-  notes.push(
-    "Market / willingness-to-pay is not yet grounded (web retrieval is a seam) — treat it as thin.",
-  );
 
   // 3) SELECT — MAP-Elites (best per descriptor cell), then a frontier of three
   // genuinely-different champions (not three flavors of one). Never a single
@@ -125,6 +124,36 @@ export async function runBrainstormEngine(
     } catch (err) {
       console.error("[brainstorm] reverse failed for", champ.handle, err);
     }
+  }
+
+  // 5) MARKET READ — ground each direction in real competition at the ideation
+  // moment (the differentiator: nobody else front-loads this). Parallel; a search
+  // key makes it live, else the analyst falls back to model knowledge.
+  await Promise.all(
+    frontier.map(async (item) => {
+      try {
+        const query = `${item.champion.problemDesc} ${item.champion.handle} — existing products, competitors, tools`;
+        const evidence = await searchMarket(query);
+        item.marketRead = await runMarketAnalyst(runAgent, {
+          problem: item.champion.problemDesc,
+          direction: `${item.champion.handle}: ${item.champion.mechanism}`,
+          evidence,
+        });
+      } catch (err) {
+        console.error("[brainstorm] market read failed for", item.champion.handle, err);
+      }
+    }),
+  );
+
+  // Recommend the strongest-mechanism direction — the cleanest claimable whitespace.
+  const rec =
+    frontier.find((f) => f.champion.reason === "strongest-mechanism") ?? frontier[0];
+  if (rec) rec.recommended = true;
+
+  if (!marketSearchEnabled() && frontier.some((f) => f.marketRead)) {
+    notes.push(
+      "Market reads are from the model's knowledge (no live search wired yet) — verify the competitors before relying on them.",
+    );
   }
 
   return {
