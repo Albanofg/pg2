@@ -156,6 +156,11 @@ export type Module2View = {
   ledger: LedgerEntry[];
   /** True once every surviving concept has a decision and ≥1 is carried forward. */
   complete: boolean;
+  /**
+   * Where the inventor is in the one-at-a-time flow ("concept 3 of 12"), so the
+   * stage shows progress instead of a wall of every concept at once.
+   */
+  progress?: { current: number; total: number };
 };
 
 /** The sub-agents Module 2 calls. Never user-facing. */

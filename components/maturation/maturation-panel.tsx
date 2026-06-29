@@ -94,6 +94,13 @@ export default function MaturationPanel({
             </div>
           )}
 
+          {view.progress && view.cards.length > 0 && (
+            <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+              {view.phase === "selecting" ? "Choosing" : "Expanding"} · concept{" "}
+              {view.progress.current} of {view.progress.total}
+            </div>
+          )}
+
           <div className="flex flex-col gap-4">
             {view.cards.map((card) => (
               <CardView key={card.id} card={card} busy={busy} onAct={act} />

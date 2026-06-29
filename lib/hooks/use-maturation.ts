@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/lib/store";
 import type {
   CardActionInput,
@@ -30,46 +30,62 @@ export function useMaturation(projectId: string | null) {
   const [ready, setReady] = useState(false);
   const setProof = useWorkspace((s) => s.setProof);
 
+  // Serialize ops through a promise chain (not blocked by `busy`): one concept can
+  // show a deepen card + Sparks at once, and each op is load→mutate→save server-
+  // side, so two concurrent acts would let the 2nd clobber the 1st. The chain keeps
+  // them strictly ordered while staying responsive.
+  const chainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const pendingRef = useRef(0);
+
   const post = useCallback(
-    async (payload: Record<string, unknown>): Promise<Module2View | null> => {
-      if (!projectId) return null;
+    (payload: Record<string, unknown>): Promise<Module2View | null> => {
+      if (!projectId) return Promise.resolve(null);
+      pendingRef.current += 1;
       setBusy(true);
-      setError(null);
-      try {
-        const res = await fetch("/api/maturation", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ ...payload, projectId }),
-        });
-        if (!res.ok) throw new Error(`maturation request failed (${res.status})`);
-        const data = (await res.json()) as Module2View;
-        setView(data);
-        // Feed the right panel: each matured concept (deepened) + the notebook.
-        setProof(
-          {
-            core: null,
-            concepts: data.concepts
-              .filter((c) => c.status.state === "active")
-              .map((c) => ({
-                title: c.title,
-                text: c.deepened_statement || c.formalized_statement,
-                ...(c.reasons ? { reasons: c.reasons } : {}),
-                ...(c.grade ? { grade: c.grade } : {}),
-              })),
-          },
-          data.ledger,
-        );
-        return data;
-      } catch (e) {
-        setError(
-          "The Helper couldn't expand these just now. Please try again in a moment."
-        );
-        console.error(e);
-        return null;
-      } finally {
-        setBusy(false);
-        setReady(true);
-      }
+      const run = chainRef.current.then(async (): Promise<Module2View | null> => {
+        setError(null);
+        try {
+          const res = await fetch("/api/maturation", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ ...payload, projectId }),
+          });
+          if (!res.ok) throw new Error(`maturation request failed (${res.status})`);
+          const data = (await res.json()) as Module2View;
+          setView(data);
+          // Feed the right panel: each matured concept (deepened) + the notebook.
+          setProof(
+            {
+              core: null,
+              concepts: data.concepts
+                .filter((c) => c.status.state === "active")
+                .map((c) => ({
+                  title: c.title,
+                  text: c.deepened_statement || c.formalized_statement,
+                  ...(c.reasons ? { reasons: c.reasons } : {}),
+                  ...(c.grade ? { grade: c.grade } : {}),
+                })),
+            },
+            data.ledger,
+          );
+          return data;
+        } catch (e) {
+          setError(
+            "The Helper couldn't expand these just now. Please try again in a moment."
+          );
+          console.error(e);
+          return null;
+        } finally {
+          pendingRef.current -= 1;
+          if (pendingRef.current === 0) setBusy(false);
+          setReady(true);
+        }
+      });
+      chainRef.current = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      return run;
     },
     [projectId, setProof]
   );

@@ -194,6 +194,12 @@ export type BrainstormCard = {
   /** One short sentence introducing the directions, in the Helper's voice. */
   intro: string;
   directions: BrainstormDirection[];
+  /**
+   * Names of directions the inventor has already developed ("This is mine").
+   * The card shows these as done so a taken direction isn't offered again.
+   * Persisted in the snapshot, so "done" survives a reload.
+   */
+  developed?: string[];
 };
 
 export type Module1Card =

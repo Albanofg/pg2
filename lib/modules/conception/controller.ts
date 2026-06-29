@@ -948,7 +948,13 @@ export class ConceptionModule {
     this.pushTurn({ role: "inventor", text });
     this.material.push(text);
     await this.materializeLeapConcept(text, entry.id, input.direction);
-    // Keep the brainstorm card open so the inventor can develop more directions.
+    // Mark this direction as developed so the card shows it done (and doesn't
+    // re-offer it). The card stays open for the OTHER directions. Persists in the
+    // snapshot, so "done" survives a reload.
+    const card = this.openCards.get(cardId);
+    if (card && card.type === "brainstorm") {
+      card.developed = Array.from(new Set([...(card.developed ?? []), input.direction]));
+    }
   }
 
   /* ------------------------------------------------------------------ *

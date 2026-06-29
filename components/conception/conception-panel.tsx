@@ -376,6 +376,12 @@ function BrainstormCardView({
 }) {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
   const [text, setText] = useState("");
+  // Optimistic "Captured" marks: flip the instant the inventor clicks, instead of
+  // waiting several seconds for the server to build the concept and return the
+  // `developed` flag. The server's flag reconciles (and persists) when it arrives.
+  const [taken, setTaken] = useState<Set<string>>(() => new Set());
+  const isDone = (dir: string) => (card.developed?.includes(dir) ?? false) || taken.has(dir);
+  const allDone = card.directions.length > 0 && card.directions.every((d) => isDone(d.direction));
   return (
     <div className="rounded-md border border-accent/40 bg-accent/5 p-4">
       <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
@@ -385,16 +391,31 @@ function BrainstormCardView({
       <div className="mt-3 space-y-2">
         {card.directions.map((d, i) => {
           const open = openIdx === i;
+          const done = isDone(d.direction);
           return (
-            <div key={i} className="rounded-md border border-border bg-bg p-3">
-              <div className="font-sans text-sm font-semibold text-ink">{d.direction}</div>
+            <div
+              key={i}
+              className={`rounded-md border p-3 ${
+                done ? "border-accent/30 bg-accent/5 opacity-60" : "border-border bg-bg"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="font-sans text-sm font-semibold text-ink">{d.direction}</div>
+                {done && (
+                  <span className="shrink-0 whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
+                    ✓ Captured
+                  </span>
+                )}
+              </div>
               <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
                 {d.why_it_might_be_patentable}
               </p>
-              <p className="mt-2 font-mono text-[11px] italic text-ink-muted">
-                {d.invite_to_develop}
-              </p>
-              {open ? (
+              {!done && (
+                <p className="mt-2 font-mono text-[11px] italic text-ink-muted">
+                  {d.invite_to_develop}
+                </p>
+              )}
+              {done ? null : open ? (
                 <>
                   <VoiceTextarea
                     value={text}
@@ -416,6 +437,9 @@ function BrainstormCardView({
                     <Button
                       variant="primary"
                       onClick={() => {
+                        // Mark done immediately (optimistic) — don't wait for the
+                        // concept to build server-side.
+                        setTaken((prev) => new Set(prev).add(d.direction));
                         onAct(card.id, {
                           action: "develop",
                           direction: d.direction,
@@ -424,7 +448,11 @@ function BrainstormCardView({
                         setOpenIdx(null);
                         setText("");
                       }}
-                      disabled={busy || !text.trim()}
+                      // Not gated on `busy`: submitting queues the request (it runs
+                      // in order in the background) so you can develop the next
+                      // direction immediately. Re-submitting THIS one is blocked by
+                      // its instant "✓ Captured" state, which removes this button.
+                      disabled={!text.trim()}
                     >
                       This is mine →
                     </Button>
@@ -449,11 +477,11 @@ function BrainstormCardView({
       </div>
       <div className="mt-3 flex justify-end">
         <Button
-          variant="ghost"
+          variant={allDone ? "primary" : "ghost"}
           onClick={() => onAct(card.id, { action: "dismiss" } as never)}
           disabled={busy}
         >
-          Done — move on
+          {allDone ? "All captured — move on →" : "Done — move on"}
         </Button>
       </div>
     </div>
