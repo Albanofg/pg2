@@ -70,6 +70,9 @@ export const DeepenerOutput = z.object({
   deepened_statement: z.string(),
   search_ready: z.boolean(),
   missing_for_search: z.string().default(""),
+  /** A concrete, plausible way to specify the search gap, for the inventor to
+   *  accept or revise (a starting point, not a ruling). "" when search_ready. */
+  search_suggestion: z.string().default(""),
   /**
    * 2–4 short reasons, each anchored to the inventor's verbatim, for WHY the
    * deepened statement is the way it is. Carried into the Shared Consciousness so
@@ -81,6 +84,9 @@ export const DeepenerOutput = z.object({
       z.object({
         missing_element: z.string(),
         why_routine_insufficient: z.string(),
+        /** A concrete candidate fill the inventor can adopt, tweak, or replace —
+         *  offered separately (NOT baked into deepened_statement). */
+        suggestion: z.string().default(""),
       }),
     )
     .default([]),

@@ -48,14 +48,50 @@ export function useBrainstorm() {
     [],
   );
 
-  /** The Step-1 frontier: three lens cards from a raw spark (+ optional clarifier answer). */
+  /**
+   * The frontier: three lens cards from a spark. `clarifierAnswer` re-runs sharpened by
+   * a chip; `skipClassify` is set when DRILLING into a chosen direction (always three
+   * sharper cards — never re-route a pick through the formed-input fast-path).
+   */
   const run = useCallback(
-    async (input: { spark: string; clarifierAnswer?: string }): Promise<ExcavationFrontier | null> => {
+    async (input: {
+      spark: string;
+      clarifierAnswer?: string;
+      skipClassify?: boolean;
+    }): Promise<ExcavationFrontier | null> => {
       const data = await post<ExcavationFrontier>({
         problem: input.spark,
         ...(input.clarifierAnswer ? { clarifierAnswer: input.clarifierAnswer } : {}),
+        ...(input.skipClassify ? { skipClassify: true } : {}),
       });
       if (data) setResult(data);
+      return data;
+    },
+    [post],
+  );
+
+  /**
+   * "Go deeper": narrow a chosen direction into three sharper sub-directions (light).
+   * Optional `options` (the sibling cards) + `steer` (combine / redirect / "(you decide)")
+   * let the inventor combine options or hand the AI the wheel for the step.
+   */
+  const deepen = useCallback(
+    async (input: {
+      problem: string;
+      direction: string;
+      options?: string[];
+      steer?: string;
+    }): Promise<ExcavationFrontier | null> => {
+      const data = await post<ExcavationFrontier>({
+        op: "deepen",
+        problem: input.problem,
+        direction: input.direction,
+        ...(input.options ? { options: input.options } : {}),
+        ...(input.steer ? { steer: input.steer } : {}),
+      });
+      // Only replace the current cards when the deepen actually produced some — an empty
+      // result must NOT blank out the screen the inventor is on (goDeeper undoes the descent).
+      if (data && data.cards.length) setResult(data);
       return data;
     },
     [post],
@@ -80,6 +116,9 @@ export function useBrainstorm() {
       backpack: Backpack;
       conversation: WalkTurn[];
       pushDeeper?: boolean;
+      stallTier?: number;
+      /** This answer came from a teaching click-game, not the typed collision question. */
+      teaching?: boolean;
     }) => post<ReversalStep>({ op: "step", ...input }),
     [post],
   );
@@ -87,5 +126,5 @@ export function useBrainstorm() {
   /** Restore a previously-saved frontier (crash recovery) without a network call. */
   const hydrate = useCallback((f: ExcavationFrontier | null) => setResult(f), []);
 
-  return { result, busy, error, run, open, step, hydrate, reset: () => setResult(null) };
+  return { result, busy, error, run, deepen, open, step, hydrate, reset: () => setResult(null) };
 }

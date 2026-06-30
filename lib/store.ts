@@ -83,6 +83,12 @@ type WorkspaceState = {
   /** Text the user highlighted in the Live Draft, pending disavowal. */
   pendingQuote: string | null;
   input: string;
+  /**
+   * The one idea the inventor typed at the entry, handed to Module 0 so the
+   * brainstorm step never asks them to type again — it just runs (research + 3
+   * options). Transient (not persisted); cleared once the panel consumes it.
+   */
+  brainstormSeed: string | null;
 
   // actions
   setProject: (id: string, title: string) => void;
@@ -105,6 +111,7 @@ type WorkspaceState = {
   clearMeshLog: () => void;
   setConnection: (state: ConnectionState) => void;
   setPendingQuote: (quote: string | null) => void;
+  setBrainstormSeed: (seed: string | null) => void;
   reset: () => void;
 };
 
@@ -124,6 +131,7 @@ const initial = {
   connection: "online" as ConnectionState,
   pendingQuote: null as string | null,
   input: "",
+  brainstormSeed: null as string | null,
 };
 
 export const useWorkspace = create<WorkspaceState>()(
@@ -188,6 +196,7 @@ export const useWorkspace = create<WorkspaceState>()(
 
       setConnection: (connection) => set({ connection }),
       setPendingQuote: (pendingQuote) => set({ pendingQuote }),
+      setBrainstormSeed: (brainstormSeed) => set({ brainstormSeed }),
 
       reset: () => set({ ...initial }),
     }),

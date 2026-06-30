@@ -40,11 +40,12 @@
                           "deepened_statement": "<the fuller technical statement, from the inventor's material + routine elaboration; placeholders where an inventive choice would be required>",
                           "search_ready": <true if concrete enough to search>,
                           "missing_for_search": "<the one concrete thing to specify if not ready; empty string if ready>",
+                          "search_suggestion": "<a concrete, plausible way to specify it the inventor can accept or revise; empty string if ready>",
                           "reasons": [
                             "<short reason, anchored to the inventor's words, for why the statement is the way it is>"
                           ],
                           "inventive_gaps": [
-                            { "missing_element": "<the named hole>", "why_routine_insufficient": "<why a routine choice can't fill it>" }
+                            { "missing_element": "<the named hole>", "why_routine_insufficient": "<why a routine choice can't fill it>", "suggestion": "<ONE concrete candidate fill the inventor can adopt, tweak, or replace — a starting point, not the final answer>" }
                           ]
                         }
                         reasons holds 2–4 entries. inventive_gaps is [] when there are none.

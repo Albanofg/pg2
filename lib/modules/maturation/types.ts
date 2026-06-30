@@ -66,6 +66,7 @@ export type LedgerEntryType =
   // Inventor decisions — explicit, never auto-accepted:
   | "deepen_action" // approve / discard / request_edit on a deepen-review card
   | "concept_decision" // carry_forward / set_aside on a selection card
+  | "suggestion_accepted" // the inventor accepted an AI-suggested fill for a gap
   // Machine events:
   | "maturation_started"
   | "agent_deepened"
@@ -112,6 +113,13 @@ export type SparkCard = {
   prompt: string;
   /** The named missing piece. */
   missing: string;
+  /**
+   * The AI's suggested fill — a concrete starting point the inventor can accept in
+   * one click, tweak, or replace. Accepting it is recorded as
+   * `system_suggested_accepted` (honest: AI-suggested, inventor-accepted), NOT as
+   * the inventor's own verbatim.
+   */
+  suggestion?: string;
 };
 
 /** One matured concept for the inventor to carry forward or set aside. */
@@ -136,7 +144,11 @@ export type DeepenReviewInput =
   | { action: "discard" }
   | { action: "request_edit"; correction: string };
 
-export type SparkInput = { answer: string };
+export type SparkInput =
+  | { action: "use_suggestion" } // accept the AI's suggested fill (system_suggested_accepted)
+  | { action: "skip" } // leave the concept as deepened; it still carries forward
+  | { action: "set_aside" } // drop this concept
+  | { answer: string }; // the inventor's own words (inventor_conceived)
 export type SelectionInput = { choice: SelectionAction };
 
 export type CardActionInput = DeepenReviewInput | SparkInput | SelectionInput;

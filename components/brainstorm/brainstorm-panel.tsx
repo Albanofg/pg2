@@ -10,11 +10,34 @@ import type {
   DerivationTrace,
   ExcavationFrontier,
   LensCard,
+  MarketRead,
   ReversalStep,
+  WalkInteractionKind,
   WalkTurn,
 } from "@/lib/modules/brainstorm/types";
 
-type Phase = "guide" | "intro" | "thinking" | "frontier" | "walk" | "capture";
+type Phase =
+  | "guide"
+  | "intro"
+  | "thinking"
+  | "frontier"
+  | "formed"
+  | "walk"
+  | "capture"
+  | "failed";
+
+/**
+ * Route a frontier result to its phase: the three idea cards, or a failed research run
+ * (retry — never a bare text box). Every input gets the three ideas.
+ */
+function phaseFor(data: ExcavationFrontier | null): Phase {
+  if (!data) return "failed";
+  return data.cards.length ? "frontier" : "failed";
+}
+
+// The walk is HARD-CAPPED so it can never become an interrogation: after this many
+// steps it moves the inventor forward to say the core (or skip), never more questions.
+const MAX_WALK_STEPS = 6;
 
 /**
  * The backpack — collected ONCE per browser (spec §2: "store browser-side"), then
@@ -22,6 +45,16 @@ type Phase = "guide" | "intro" | "thinking" | "frontier" | "walk" | "capture";
  * neutral; but it is framed as "setting up your guide," never a form.
  */
 const GUIDE_KEY = "geyser_brainstorm_guide";
+
+/**
+ * Hold a loading state visible for at least `ms` so a fast/cached response never
+ * flashes past — the inventor always sees "Reading the market…" register before the
+ * cards appear (fixes "cards showed up, nothing told me they were loading").
+ */
+async function withMinSpinner<T>(p: Promise<T>, ms = 700): Promise<T> {
+  const [res] = await Promise.all([p, new Promise((r) => setTimeout(r, ms))]);
+  return res as T;
+}
 
 /**
  * Module 0 — the Socratic brainstorming window. The user with a vague problem
@@ -32,9 +65,14 @@ const GUIDE_KEY = "geyser_brainstorm_guide";
 export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string }) {
   const projectId = useWorkspace((s) => s.projectId);
   const setStage = useWorkspace((s) => s.setStage);
-  const { result, busy, error, run, open, step, hydrate } = useBrainstorm();
+  const brainstormSeed = useWorkspace((s) => s.brainstormSeed);
+  const setBrainstormSeed = useWorkspace((s) => s.setBrainstormSeed);
+  const { result, busy, error, run, deepen, open, step, hydrate } = useBrainstorm();
 
-  const [phase, setPhase] = useState<Phase>("guide");
+  // We never land on a text box here. Start on a neutral spinner and let the mount
+  // effect route: run a fresh spark, restore real in-progress work, or bounce to the
+  // entry. The inventor types their idea once at the entry, never on this screen.
+  const [phase, setPhase] = useState<Phase>("thinking");
   const [guide, setGuide] = useState("");
   const [problem, setProblem] = useState("");
   const [chosenTrace, setChosenTrace] = useState<DerivationTrace | null>(null);
@@ -45,18 +83,31 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
   const [articulation, setArticulation] = useState("");
   const [custom, setCustom] = useState("");
   const [handoffBusy, setHandoffBusy] = useState(false);
+  // The no-Tier-4 stall tier (deep spec §6.5), threaded through the walk so the gate
+  // advances the floor across steps; routes to a human after tier 3.
+  const [stallTier, setStallTier] = useState(0);
+  // Which direction card's detail is shown in the right panel (the deep dive). The
+  // cards stay slim; clicking one opens its market read + the real claim on the right.
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  // "Give me more options" → reveal the orientation chips → regenerate.
+  const [showMore, setShowMore] = useState(false);
+  // The inventor's own orientation for "more options" (free text, not just the chips).
+  const [moreInput, setMoreInput] = useState("");
+  // The drill stack: each entry is the frontier we drilled DOWN from, so "← Up a level"
+  // can climb back out. Picking a card drills into three sharper directions of that pick;
+  // the three-ideas pattern repeats at increasing depth (no walk, no interrogation).
+  const [drillStack, setDrillStack] = useState<ExcavationFrontier[]>([]);
+  // Deeper-level free text: combine the options, or steer the next narrowing in your words.
+  const [steerInput, setSteerInput] = useState("");
 
-  // The backpack is set up once and remembered (spec §2, browser-side). If it's
-  // already there, skip straight to the problem.
+  // Load the saved guide (used for the walk's analogies). It no longer drives the
+  // phase — routing is handled by the mount effect below, which never shows a text box.
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(GUIDE_KEY);
-      if (saved && saved.trim()) {
-        setGuide(saved);
-        setPhase("intro");
-      }
+      if (saved && saved.trim()) setGuide(saved);
     } catch {
-      /* localStorage unavailable — just collect it this session */
+      /* localStorage unavailable — collect it this session if needed */
     }
   }, []);
 
@@ -68,36 +119,99 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
   useEffect(() => {
     if (!projectId || loadedRef.current) return;
     loadedRef.current = true;
+
+    // A fresh spark handed in from the entry ALWAYS starts a new brainstorm — it wins
+    // over any stale saved session, and it NEVER lands on a text box: it just runs
+    // (research → cards), or shows a retry if the research can't complete.
+    if (brainstormSeed && brainstormSeed.trim()) {
+      const sparkText = brainstormSeed.trim();
+      setBrainstormSeed(null);
+      try {
+        window.localStorage.removeItem(`geyser_brainstorm_session_${projectId}`);
+      } catch {
+        /* ignore */
+      }
+      setProblem(sparkText);
+      setPhase("thinking");
+      void (async () => {
+        const data = await withMinSpinner(run({ spark: sparkText }));
+        setPhase(phaseFor(data));
+      })();
+      return;
+    }
+
+    // No fresh spark — restore only a REAL in-progress brainstorm (cards, or mid
+    // walk/capture). Anything else is a stranded/empty session: discard it and bounce
+    // to the entry, so we never drop the inventor onto a bare text box.
     try {
       const raw = window.localStorage.getItem(`geyser_brainstorm_session_${projectId}`);
-      if (!raw) return;
-      const s = JSON.parse(raw) as {
-        phase: Phase;
-        problem: string;
-        result: ExcavationFrontier | null;
-        chosenTrace: DerivationTrace | null;
-        stepData: ReversalStep | null;
-        stepSeq: number;
-        conversation: WalkTurn[];
-        arrivalPrompt: string;
-        articulation: string;
-        custom: string;
-      };
-      setProblem(s.problem ?? "");
-      if (s.result) hydrate(s.result);
-      setChosenTrace(s.chosenTrace ?? null);
-      setStepData(s.stepData ?? null);
-      setStepSeq(s.stepSeq ?? 0);
-      setConversation(Array.isArray(s.conversation) ? s.conversation : []);
-      setArrivalPrompt(s.arrivalPrompt ?? "");
-      setArticulation(s.articulation ?? "");
-      setCustom(s.custom ?? "");
-      // Never restore into the transient "thinking" state — it would spin forever.
-      setPhase(s.phase === "thinking" ? (s.result ? "frontier" : "intro") : s.phase);
+      if (raw) {
+        const s = JSON.parse(raw) as {
+          phase: Phase;
+          problem: string;
+          result: ExcavationFrontier | null;
+          chosenTrace: DerivationTrace | null;
+          stepData: ReversalStep | null;
+          stepSeq: number;
+          conversation: WalkTurn[];
+          arrivalPrompt: string;
+          articulation: string;
+          custom: string;
+          stallTier?: number;
+          drillStack?: ExcavationFrontier[];
+        };
+        const meaningful =
+          !!s.result ||
+          s.phase === "walk" ||
+          s.phase === "capture" ||
+          s.phase === "frontier";
+        if (meaningful) {
+          setProblem(s.problem ?? "");
+          if (s.result) hydrate(s.result);
+          setChosenTrace(s.chosenTrace ?? null);
+          setStepData(s.stepData ?? null);
+          setStepSeq(s.stepSeq ?? 0);
+          setConversation(Array.isArray(s.conversation) ? s.conversation : []);
+          setArrivalPrompt(s.arrivalPrompt ?? "");
+          setArticulation(s.articulation ?? "");
+          setCustom(s.custom ?? "");
+          setStallTier(typeof s.stallTier === "number" ? s.stallTier : 0);
+          // Restore the drill depth so a deeper level renders as a deeper level (light list
+          // + "← Up a level"), not mislabeled as the top "Your spark" screen.
+          setDrillStack(Array.isArray(s.drillStack) ? s.drillStack : []);
+          // A session that died before producing cards retries the research, never a box.
+          // Old sessions saved mid-walk/capture (now removed) land back on the directions.
+          setPhase(
+            s.phase === "thinking" ||
+              s.phase === "walk" ||
+              s.phase === "capture"
+              ? s.result
+                ? "frontier"
+                : "failed"
+              : s.phase,
+          );
+          return;
+        }
+        window.localStorage.removeItem(`geyser_brainstorm_session_${projectId}`);
+      }
     } catch {
-      /* corrupt session — start fresh */
+      /* corrupt — fall through to the entry */
     }
-  }, [projectId, hydrate]);
+
+    // Nothing to brainstorm here (no spark, no in-progress work). Send the inventor
+    // back to the entry, where the one-line "Brainstorm with AI" flow lives.
+    setStage("conception");
+  }, [projectId, hydrate, brainstormSeed, setBrainstormSeed, run, setStage]);
+
+  // When the cards arrive (or regenerate), open the first one's detail by default so
+  // the right panel is never empty, and collapse the "more options" widget. (No
+  // "recommended" — the three directions are equals; the inventor chooses.)
+  useEffect(() => {
+    if (phase !== "frontier" || !result?.cards.length) return;
+    setSelectedIdx(0);
+    setShowMore(false);
+    setMoreInput("");
+  }, [phase, result]);
 
   useEffect(() => {
     if (!projectId || !loadedRef.current) return;
@@ -116,6 +230,8 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
           arrivalPrompt,
           articulation,
           custom,
+          stallTier,
+          drillStack,
         }),
       );
     } catch {
@@ -133,6 +249,8 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
     arrivalPrompt,
     articulation,
     custom,
+    stallTier,
+    drillStack,
   ]);
 
   const clearSession = () => {
@@ -157,7 +275,12 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
     setArrivalPrompt("");
     setArticulation("");
     setCustom("");
-    setPhase("intro");
+    setStallTier(0);
+    setSelectedIdx(null);
+    setShowMore(false);
+    setDrillStack([]);
+    // Start a fresh idea from the entry — never drop onto a bare text box here.
+    setStage("conception");
   };
 
   const backpack = {
@@ -185,32 +308,86 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
   const startEngine = async () => {
     if (!problem.trim()) return;
     setPhase("thinking");
-    const data = await run({ spark: problem.trim() });
-    setPhase(data && data.cards.length ? "frontier" : "intro");
+    const data = await withMinSpinner(run({ spark: problem.trim() }));
+    setPhase(data ? phaseFor(data) : "intro");
   };
 
-  // Optional clarifier chip — re-runs the excavation, sharpened by the answer.
+  // Re-run the market research on the spark we already have — used when the auto-run
+  // couldn't produce cards. The brainstorm step never falls back to a text box.
+  const retryExcavation = async () => {
+    if (!problem.trim()) return;
+    setPhase("thinking");
+    const data = await withMinSpinner(run({ spark: problem.trim() }));
+    setPhase(phaseFor(data));
+  };
+
+  // Optional clarifier chip — re-runs the excavation, sharpened by the answer. (Refining
+  // is always the vague path; the classifier only runs on the first, un-clarified spark.)
   const sharpen = async (chip: string) => {
     setPhase("thinking");
-    await run({ spark: problem.trim(), clarifierAnswer: chip });
+    const data = await withMinSpinner(
+      run({ spark: problem.trim(), clarifierAnswer: chip }),
+    );
+    setPhase(phaseFor(data));
+  };
+
+  // Drill into a chosen direction — three SHARPER directions of that pick (the same
+  // three-ideas pattern, one level deeper). Never re-routes through the formed fast-path.
+  // Narrow one level deeper. `direction` is what we sharpen FROM (a tapped option, the
+  // inventor's own text, or — for combine / "you decide" — the current parent), with the
+  // sibling `options` + optional `steer` so the AI can combine them or take the wheel.
+  const goDeeper = async (opts: {
+    direction: string;
+    options?: string[];
+    steer?: string;
+  }) => {
+    const d = opts.direction.trim();
+    if (!d) return;
+    // The deepener's "ORIGINAL PROBLEM" context must stay the inventor's REAL spark, not the
+    // level we're drilling from — drillStack[0] is the top frontier (its spark is the
+    // original); at level 0 it's the current frontier's spark.
+    const originalProblem = drillStack[0]?.spark ?? result?.spark ?? d;
+    const parentSpark = result?.spark ?? null;
+    if (result) setDrillStack((s) => [...s, result]);
+    setProblem(d);
+    setSelectedIdx(null);
+    setSteerInput("");
+    setPhase("thinking");
+    const data = await withMinSpinner(
+      deepen({
+        problem: originalProblem,
+        direction: d,
+        ...(opts.options ? { options: opts.options } : {}),
+        ...(opts.steer ? { steer: opts.steer } : {}),
+      }),
+    );
+    if (!data || !data.cards.length) {
+      // Couldn't sharpen (empty result) — UNDO the descent: pop the level we just pushed and
+      // restore the parent's spark. The hook leaves `result` untouched on an empty deepen, so
+      // the three cards we were on stay intact — the inventor is never stranded on a blank.
+      setDrillStack((s) => s.slice(0, -1));
+      if (parentSpark) setProblem(parentSpark);
+    }
     setPhase("frontier");
   };
 
-  // Picked a card — reconstruct its derivation and open the adaptive walk.
-  const pickCard = async (card: LensCard) => {
-    setPhase("thinking");
-    setConversation([]);
-    const opened = await open({ spark: problem.trim(), card, backpack });
-    if (!opened) {
-      setPhase("frontier");
-      return;
-    }
-    setChosenTrace(opened.trace);
-    showStep(opened.opener);
-    setPhase("walk");
+  // Climb back out one drill level (the parent's cards are still in memory — no re-call).
+  const upLevel = () => {
+    setDrillStack((s) => {
+      const parent = s[s.length - 1];
+      if (parent) {
+        hydrate(parent);
+        setProblem(parent.spark);
+      }
+      return s.slice(0, -1);
+    });
+    setSelectedIdx(null);
+    setPhase("frontier");
   };
 
-  const answerWalk = async (text: string) => {
+  // A teaching click (this_or_that / pick) passes teaching:true so the engine skips the
+  // conditionality gate — only the typed collision answer (say_it) is a conception attempt.
+  const answerWalk = async (text: string, opts?: { teaching?: boolean }) => {
     const t = text.trim();
     if (!t || !chosenTrace || !stepData?.question) return;
     const nextConv: WalkTurn[] = [
@@ -218,10 +395,31 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
       { question: stepData.question.prompt, answer: t },
     ];
     setConversation(nextConv);
-    const next = await step({ trace: chosenTrace, backpack, conversation: nextConv });
+    const next = await step({
+      trace: chosenTrace,
+      backpack,
+      conversation: nextConv,
+      stallTier,
+      ...(opts?.teaching ? { teaching: true } : {}),
+    });
     if (!next) return; // error surfaced by the hook
-    if (next.done) {
+    if (typeof next.stallTier === "number") setStallTier(next.stallTier);
+    // No Tier 4 (deep spec §6.5): the ladder is exhausted — calm hand-off, not a block.
+    // The inventor can still say it in their own words; the machine never states it.
+    if (next.routeToHuman) {
       setArrivalPrompt(next.arrivalPrompt ?? "");
+      setPhase("capture");
+    } else if (next.done) {
+      // Arrival is governed by the strict conditionality gate, not the generator.
+      setArrivalPrompt(next.arrivalPrompt ?? "");
+      setPhase("capture");
+    } else if (nextConv.length >= MAX_WALK_STEPS) {
+      // Hard cap — never interrogate past this. Move the inventor forward to say the core
+      // in their own words (or skip), instead of facing yet more questions.
+      setArrivalPrompt(
+        next.arrivalPrompt ||
+          "You've done the thinking. Say the core idea in your own words — or skip, and we'll flag this part for an expert.",
+      );
       setPhase("capture");
     } else {
       showStep(next);
@@ -238,6 +436,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
       backpack,
       conversation,
       pushDeeper: true,
+      stallTier,
     });
     if (next?.question) {
       showStep(next);
@@ -271,7 +470,14 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto">
-        <div className={cn("mx-auto flex w-full flex-col gap-5 p-6", maxW)}>
+        <div
+          className={cn(
+            "mx-auto flex w-full flex-col gap-5 p-6",
+            // The frontier is a two-column layout (cards + right-hand detail), so it
+            // needs more room than the single-column phases.
+            phase === "frontier" ? "max-w-5xl" : maxW,
+          )}
+        >
           <header className="flex items-center justify-between">
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-action">
@@ -281,23 +487,46 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                 Let&apos;s find the invention together
               </h2>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              {/* Back to the three directions mid-walk — no delete, no restart (cards
+                  are still in memory). Only shown once you've left the directions. */}
+              {phase === "frontier" && drillStack.length > 0 && (
+                <button
+                  onClick={upLevel}
+                  className="rounded-md border border-border bg-panel px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:border-accent hover:text-ink"
+                >
+                  ← Up a level
+                </button>
+              )}
+              {/* Reset to a fresh idea (clears this brainstorm). Red on hover = it discards. */}
               {phase !== "guide" && phase !== "intro" && (
                 <button
                   onClick={startOver}
-                  className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+                  className="rounded-md border border-border bg-panel px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:border-red-500/50 hover:text-red-300"
                 >
                   Start over
                 </button>
               )}
-              <button
-                onClick={() => setStage("conception")}
-                className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
-              >
-                I already have a concept →
-              </button>
             </div>
           </header>
+
+          {/* "You are here" — the meeting's progress-meter rule: never let the
+              inventor feel they're on a never-ending journey. Honest stages of the
+              whole brainstorm, current one lit. (No fake per-question count — the
+              walk is adaptive, so we mark the journey, not the steps.) */}
+          {phase !== "guide" && (
+            <JourneyRibbon
+              active={
+                phase === "formed"
+                  ? 2
+                  : phase === "frontier" || phase === "failed"
+                    ? 1
+                    : phase === "thinking" && result
+                      ? 1
+                      : 0
+              }
+            />
+          )}
 
           {error && (
             <div className="rounded-md border border-red-500/40 bg-red-500/5 p-3 font-mono text-xs text-red-300">
@@ -345,7 +574,120 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
 
           {phase === "thinking" && <ThinkingState />}
 
-          {phase === "frontier" && result && (
+          {/* Research couldn't complete — retry on the spark we already have. Never a
+              text box: the inventor already gave their idea; they don't re-type it. */}
+          {phase === "failed" && (
+            <div className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-4">
+              <p className="font-sans text-sm font-medium text-ink">
+                I couldn&apos;t read the market just now.
+              </p>
+              {problem.trim() && (
+                <div className="rounded-md border border-border bg-bg/40 p-3">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+                    Your spark
+                  </div>
+                  <p className="mt-1 font-mono text-xs italic leading-relaxed text-ink">
+                    &ldquo;{problem.trim()}&rdquo;
+                  </p>
+                </div>
+              )}
+              <p className="font-mono text-[11px] leading-relaxed text-ink-muted">
+                Your idea is saved — let me try the research again.
+              </p>
+              <div className="flex justify-end">
+                <Button variant="primary" onClick={retryExcavation} disabled={busy}>
+                  Try again →
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Deeper levels — a LIGHT, quick narrowing decision (no market wall of text).
+              The rich three-card screen happens ONCE, at the top; here you just tap to
+              sharpen, so you're never reading a wall of text at every level. */}
+          {phase === "frontier" && result && drillStack.length > 0 && (
+            <div className="space-y-3">
+              <p className="font-sans text-sm font-semibold text-ink">
+                Narrowing in — tap the sharper one, combine them, or let the AI take it.
+              </p>
+              <div className="space-y-2">
+                {result.cards.map((card, i) => (
+                  <button
+                    key={i}
+                    onClick={() =>
+                      void goDeeper({
+                        direction: card.restatement,
+                        options: result.cards.map((c) => c.restatement),
+                      })
+                    }
+                    disabled={busy}
+                    className="block w-full rounded-md border border-border bg-panel p-3 text-left transition-colors hover:border-accent hover:bg-accent/5 disabled:opacity-50"
+                  >
+                    <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-action">
+                      {card.label}
+                    </span>
+                    <p className="mt-1 font-sans text-sm leading-relaxed text-ink">
+                      {card.restatement}
+                    </p>
+                  </button>
+                ))}
+              </div>
+
+              {/* Human input: combine the options or steer the next narrowing in your own
+                  words; or hand the AI the wheel for this one step. */}
+              <div className="space-y-2 rounded-md border border-dashed border-border bg-bg/30 p-3">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={steerInput}
+                    onChange={(e) => setSteerInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && steerInput.trim() && !busy) {
+                        void goDeeper({
+                          direction: result.spark,
+                          options: result.cards.map((c) => c.restatement),
+                          steer: steerInput.trim(),
+                        });
+                      }
+                    }}
+                    placeholder="Combine them (e.g. “first two together”), or say your own focus…"
+                    className="min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 py-1.5 font-mono text-[11px] text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (steerInput.trim() && !busy) {
+                        void goDeeper({
+                          direction: result.spark,
+                          options: result.cards.map((c) => c.restatement),
+                          steer: steerInput.trim(),
+                        });
+                      }
+                    }}
+                    disabled={busy || !steerInput.trim()}
+                    className="shrink-0 rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1.5 font-mono text-[11px] text-accent hover:bg-accent/20 disabled:opacity-50"
+                  >
+                    Go →
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void goDeeper({
+                      direction: result.spark,
+                      options: result.cards.map((c) => c.restatement),
+                      steer: "(you decide)",
+                    })
+                  }
+                  disabled={busy}
+                  className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
+                >
+                  Or — let the AI decide this one →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {phase === "frontier" && result && drillStack.length === 0 && (
             <div className="space-y-3">
               {/* Your spark, quoted back. */}
               <div className="rounded-md border border-border bg-bg/40 p-3">
@@ -357,120 +699,163 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                 </p>
               </div>
 
-              {/* The single optional clarifier — cards already give a strong default,
-                  so this never blocks. Progress by default, refine if you want. */}
-              {result.clarifier?.prompt && (
-                <div>
-                  <p className="font-mono text-xs leading-relaxed text-ink-muted">
-                    {result.clarifier.prompt}
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {result.clarifier.chips.map((chip, j) => (
-                      <button
-                        key={j}
-                        type="button"
-                        onClick={() => void sharpen(chip)}
-                        disabled={busy}
-                        className="rounded-full border border-border bg-panel px-2.5 py-1 font-mono text-[11px] text-ink-muted hover:border-accent hover:text-ink disabled:opacity-50"
-                      >
-                        {chip}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               <p className="font-sans text-sm font-semibold text-ink">
-                Three sharper ways to frame it — each mapped to the market. Pick one
-                to keep going.
+                Three sharper ways to frame it — each mapped to the market. Click one to open
+                it, then go deeper.
               </p>
 
-              {result.cards.map((card, i) => (
-                <button
-                  key={i}
-                  onClick={() => void pickCard(card)}
-                  disabled={busy}
-                  className={cn(
-                    "block w-full rounded-md border bg-panel p-4 text-left transition-colors hover:bg-accent/5 disabled:opacity-60",
-                    card.recommended
-                      ? "border-accent/50"
-                      : "border-border hover:border-accent",
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-action">
-                      {card.label}
-                    </div>
-                    {card.recommended && (
-                      <span className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-accent">
-                        Recommended
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1.5 font-sans text-sm leading-relaxed text-ink">
-                    {card.restatement}
-                  </p>
-                  {card.mechanism && (
-                    <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-ink-muted">
-                      <span className="text-ink-muted/80">The mechanism — </span>
-                      {card.mechanism}
-                    </p>
-                  )}
-                  {card.marketRead && (
-                    <div className="mt-2 border-t border-border/60 pt-2">
-                      <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
-                        Market read
-                        {card.marketRead.confidence === "model" && (
-                          <span className="ml-1 text-ink-muted/70">· unverified</span>
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                {/* LEFT — slim cards (the main idea only) + the one "more" control + escape. */}
+                <div className="space-y-3">
+                  {result.cards.map((card, i) => {
+                    const selected = selectedIdx === i;
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => setSelectedIdx(i)}
+                        className={cn(
+                          "block w-full rounded-md border p-4 text-left transition-colors",
+                          selected
+                            ? "border-accent bg-accent/10"
+                            : "border-border bg-panel hover:border-accent hover:bg-accent/5",
                         )}
-                      </div>
-                      {card.marketRead.incumbents.length > 0 && (
-                        <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
-                          Already here:{" "}
-                          {card.marketRead.incumbents.map((c) => c.name).join(", ")}.
+                      >
+                        <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-action">
+                          {card.label}
+                        </div>
+                        <p className="mt-1.5 font-sans text-sm leading-relaxed text-ink">
+                          {card.restatement}
                         </p>
-                      )}
-                      {card.marketRead.whitespace && (
-                        <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
-                          {card.marketRead.whitespace}
-                        </p>
+                        {card.marketRead && (
+                          <div className="mt-2 flex items-center gap-2">
+                            <VerdictChip verdict={card.marketRead.verdict} />
+                            <span className="font-mono text-[10px] text-accent">
+                              {selected ? "Showing detail →" : "See detail →"}
+                            </span>
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+
+                  {/* ONE control — "give me more options" → pick an orientation → regenerate.
+                      Sits right above the user's own-angle box (the meeting's single-button rule). */}
+                  {result.clarifier?.chips?.length ? (
+                    <div className="rounded-md border border-dashed border-border bg-bg/30 p-3">
+                      {!showMore ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowMore(true)}
+                          disabled={busy}
+                          className="w-full text-left font-mono text-xs text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
+                        >
+                          + Give me more options
+                        </button>
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="font-mono text-[11px] leading-relaxed text-ink-muted">
+                            {result.clarifier.prompt ||
+                              "Where should I aim the next set?"}
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {result.clarifier.chips.map((chip, j) => (
+                              <button
+                                key={j}
+                                type="button"
+                                onClick={() => void sharpen(chip)}
+                                disabled={busy}
+                                className="rounded-full border border-border bg-panel px-2.5 py-1 font-mono text-[11px] text-ink-muted hover:border-accent hover:text-ink disabled:opacity-50"
+                              >
+                                {chip}
+                              </button>
+                            ))}
+                          </div>
+                          {/* Human input — steer the next set in your own words. */}
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              value={moreInput}
+                              onChange={(e) => setMoreInput(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && moreInput.trim() && !busy) {
+                                  void sharpen(moreInput.trim());
+                                  setMoreInput("");
+                                }
+                              }}
+                              placeholder="…or type your own focus"
+                              className="min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 py-1 font-mono text-[11px] text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (moreInput.trim() && !busy) {
+                                  void sharpen(moreInput.trim());
+                                  setMoreInput("");
+                                }
+                              }}
+                              disabled={busy || !moreInput.trim()}
+                              className="shrink-0 rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1 font-mono text-[11px] text-accent hover:bg-accent/20 disabled:opacity-50"
+                            >
+                              Go →
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShowMore(false)}
+                            className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted hover:text-accent"
+                          >
+                            ← Never mind
+                          </button>
+                        </div>
                       )}
                     </div>
-                  )}
-                  <div className="mt-2 text-right font-mono text-[11px] text-accent">
-                    Choose this →
+                  ) : null}
+
+                  {/* Optional escape — your own angle (the doc keeps "say it your way"). */}
+                  <div className="rounded-md border border-dashed border-border bg-bg/40 p-4">
+                    <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+                      Or — your own angle
+                    </div>
+                    <VoiceTextarea
+                      value={custom}
+                      onChange={setCustom}
+                      rows={2}
+                      placeholder="See it differently? Say it your way…"
+                      className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    />
+                    <div className="mt-2 flex justify-end">
+                      <Button
+                        variant="ghost"
+                        onClick={() => void goDeeper({ direction: custom })}
+                        disabled={!custom.trim() || busy}
+                      >
+                        Use my own →
+                      </Button>
+                    </div>
                   </div>
-                </button>
-              ))}
-              {/* Human input — never only the AI's three. Bring your own angle. */}
-              <div className="rounded-md border border-dashed border-border bg-bg/40 p-4">
-                <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
-                  Or — your own angle
                 </div>
-                <p className="mt-1 font-mono text-xs leading-relaxed text-ink-muted">
-                  See it differently, or already have the idea? Say it your way.
-                </p>
-                <VoiceTextarea
-                  value={custom}
-                  onChange={setCustom}
-                  rows={3}
-                  placeholder="Your own direction or idea, in your own words…"
-                  className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
-                />
-                <div className="mt-2 flex justify-end">
-                  <Button
-                    variant="ghost"
-                    onClick={() => {
-                      setArticulation(custom.trim());
-                      setArrivalPrompt("");
-                      setPhase("capture");
-                    }}
-                    disabled={!custom.trim()}
-                  >
-                    Use my own →
-                  </Button>
+
+                {/* RIGHT — the deep dive for the selected card (mechanism + market read). */}
+                <div className="lg:sticky lg:top-2 lg:self-start">
+                  {selectedIdx !== null && result.cards[selectedIdx] ? (
+                    <CardDetail
+                      card={result.cards[selectedIdx]}
+                      busy={busy}
+                      onDeeper={() =>
+                        void goDeeper({
+                          direction: result.cards[selectedIdx]!.restatement,
+                          options: result.cards.map((c) => c.restatement),
+                        })
+                      }
+                    />
+                  ) : (
+                    <div className="rounded-md border border-dashed border-border bg-bg/30 p-4 font-mono text-xs leading-relaxed text-ink-muted">
+                      Click a direction to see its market read and the real claim to
+                      aim at.
+                    </div>
+                  )}
                 </div>
               </div>
+
               {result.notes.length > 0 && (
                 <p className="font-mono text-[10px] italic leading-relaxed text-ink-muted">
                   {result.notes.join(" ")}
@@ -488,9 +873,10 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
             ) : stepData?.question ? (
               <WalkStep
                 key={stepSeq}
-                stepNumber={stepSeq}
                 reaction={stepData.reaction}
                 prompt={stepData.question.prompt}
+                why={stepData.question.why}
+                kind={stepData.question.kind}
                 options={stepData.question.alternatives}
                 busy={busy}
                 onAnswer={answerWalk}
@@ -545,13 +931,201 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
   );
 }
 
+/**
+ * "You are here." The meeting's progress-meter rule — the inventor must always see
+ * how far along the journey they are, or it reads as never-ending. These are the
+ * honest stages of the whole brainstorm (not a fake per-question count, since the
+ * walk is adaptive): Spark → Directions → Reasoning → Your idea.
+ */
+const JOURNEY_STAGES = ["Spark", "Directions", "Develop"];
+
+function JourneyRibbon({ active }: { active: number }) {
+  return (
+    <div className="flex items-center">
+      {JOURNEY_STAGES.map((label, i) => {
+        const done = i < active;
+        const current = i === active;
+        return (
+          <div key={label} className="flex flex-1 items-center last:flex-none">
+            <div className="flex items-center gap-1.5">
+              <span
+                className={cn(
+                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border font-mono text-[8px]",
+                  current
+                    ? "border-accent bg-accent/15 text-accent"
+                    : done
+                      ? "border-accent/40 bg-accent/10 text-accent/80"
+                      : "border-border bg-bg text-ink-muted/60",
+                )}
+              >
+                {done ? "✓" : i + 1}
+              </span>
+              <span
+                className={cn(
+                  "whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.1em]",
+                  current ? "text-ink" : done ? "text-ink-muted" : "text-ink-muted/50",
+                )}
+              >
+                {label}
+              </span>
+            </div>
+            {i < JOURNEY_STAGES.length - 1 && (
+              <div
+                className={cn("mx-2 h-px flex-1", done ? "bg-accent/40" : "bg-border")}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Market temperature meter. The meeting: "show how hot/cold the market is as a
+ * graphic, not words." Open (cool) ↔ Crowded (hot). Position is driven by the
+ * honest breakthrough verdict, nudged by how many incumbents are already there.
+ */
+function MarketMeter({ read }: { read: MarketRead }) {
+  const base =
+    read.verdict === "crowded" ? 0.85 : read.verdict === "durable" ? 0.55 : 0.22;
+  const heat = Math.min(0.96, base + Math.min(read.incumbents.length * 0.05, 0.13));
+  const verdictLabel =
+    read.verdict === "crowded"
+      ? "Crowded"
+      : read.verdict === "durable"
+        ? "Durable"
+        : "Open";
+  const verdictTone =
+    read.verdict === "crowded"
+      ? "border-amber-400/40 bg-amber-400/10 text-amber-400"
+      : read.verdict === "durable"
+        ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
+        : "border-accent/40 bg-accent/10 text-accent";
+  return (
+    <div className="mt-1.5">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted/70">
+          Open
+        </span>
+        <span
+          className={cn(
+            "rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em]",
+            verdictTone,
+          )}
+        >
+          {verdictLabel}
+        </span>
+        <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted/70">
+          Crowded
+        </span>
+      </div>
+      <div className="relative h-2 rounded-full bg-gradient-to-r from-emerald-500/60 via-amber-400/60 to-red-500/60">
+        <div
+          className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg bg-ink shadow"
+          style={{ left: `${heat * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** A small honest verdict chip (Open / Durable / Crowded) for the slim card. */
+function VerdictChip({ verdict }: { verdict: MarketRead["verdict"] }) {
+  const label =
+    verdict === "crowded" ? "Crowded" : verdict === "durable" ? "Durable" : "Open";
+  const tone =
+    verdict === "crowded"
+      ? "border-amber-400/40 bg-amber-400/10 text-amber-400"
+      : verdict === "durable"
+        ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
+        : "border-accent/40 bg-accent/10 text-accent";
+  return (
+    <span
+      className={cn(
+        "rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em]",
+        tone,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+/**
+ * The right-hand deep dive for the selected direction (the meeting's "click a card →
+ * detail on the right" rule). The cards stay slim with just the main idea; the
+ * mechanism + full market read + the real claim live here, and "Choose this" starts
+ * the walk.
+ */
+function CardDetail({
+  card,
+  busy,
+  onDeeper,
+}: {
+  card: LensCard;
+  busy: boolean;
+  onDeeper: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-accent/40 bg-panel p-4">
+      <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-action">
+        {card.label}
+      </div>
+      <p className="mt-1.5 font-sans text-sm leading-relaxed text-ink">
+        {card.restatement}
+      </p>
+      {card.mechanism && (
+        <p className="mt-2 font-mono text-[11px] leading-relaxed text-ink-muted">
+          <span className="text-ink-muted/80">The mechanism — </span>
+          {card.mechanism}
+        </p>
+      )}
+      {card.marketRead && (
+        <div className="mt-3 border-t border-border/60 pt-3">
+          <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            Market read
+            {card.marketRead.confidence === "model" && (
+              <span className="ml-1 text-ink-muted/70">· unverified</span>
+            )}
+          </div>
+          <MarketMeter read={card.marketRead} />
+          {card.marketRead.incumbents.length > 0 && (
+            <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-ink-muted">
+              Already here:{" "}
+              {card.marketRead.incumbents.map((c) => c.name).join(", ")}.
+            </p>
+          )}
+          {card.marketRead.whitespace && (
+            <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
+              {card.marketRead.whitespace}
+            </p>
+          )}
+          {card.marketRead.steer && (
+            <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-accent">
+              <span className="text-ink-muted/80">The real claim — </span>
+              {card.marketRead.steer}
+            </p>
+          )}
+        </div>
+      )}
+      <div className="mt-3 flex justify-end">
+        {/* The only move: narrow further — three sharper directions of this pick. */}
+        <Button variant="primary" onClick={onDeeper} disabled={busy}>
+          Go deeper →
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /** Lines cycle while the engine works (it can take a while) so it never reads as
  *  frozen. Curtain-safe — describes the experience, never the backstage engine. */
 const THINKING_LINES = [
-  "Thinking through your problem…",
-  "Exploring a few different angles…",
-  "Weighing which directions look most promising…",
-  "Shaping the questions to walk you through…",
+  "Reading the market for your idea…",
+  "Checking who's already there…",
+  "Finding the sharper, defensible angles…",
+  "Shaping three directions for you…",
   "Almost there…",
 ];
 
@@ -574,45 +1148,122 @@ function ThinkingState() {
   );
 }
 
+/**
+ * One step of the walk, rendered as a small connect-the-dots GAME (§7), not an
+ * interrogation. Teaching moves are pure CLICKS — `this_or_that` (two big tappable
+ * options) or `pick` (a few options); tapping IS the answer and never advances the
+ * stall floor. Only the collision question (`say_it`) gives a text box, because the
+ * conditional core that becomes the claim must be the inventor's OWN words.
+ */
 function WalkStep({
-  stepNumber,
   reaction,
   prompt,
+  why,
+  kind,
   options,
   busy,
   onAnswer,
 }: {
-  stepNumber: number;
   reaction: string;
   prompt: string;
+  why?: string;
+  kind?: WalkInteractionKind;
   options: string[];
   busy: boolean;
-  onAnswer: (text: string) => void;
+  onAnswer: (text: string, opts?: { teaching?: boolean }) => void;
 }) {
   const [text, setText] = useState("");
-  return (
-    <div className="rounded-md border border-action/30 bg-action/5 p-4">
-      {/* The partner reacts to your last answer, then asks the next thing. */}
+  const k = kind ?? "say_it";
+
+  // "You decide" on a teaching step: the inventor defers a detail that isn't theirs to
+  // settle — the AI picks and moves on (teaching:true skips the gate, no stall, no flood).
+  const youDecide = (
+    <button
+      type="button"
+      onClick={() => onAnswer("I'm not sure — you decide.", { teaching: true })}
+      disabled={busy}
+      className="mt-3 block font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
+    >
+      Not sure? — you decide →
+    </button>
+  );
+
+  const head = (
+    <>
       {reaction && (
         <p className="mb-3 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-muted">
           {reaction}
         </p>
       )}
-      <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-action">
-        Question {stepNumber}
-      </div>
       <p className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink">
         {prompt}
       </p>
-      {/* Sparks to react to — tap one, edit it, or type your own. Not the answer
-          flagged as right; just starting points. */}
+      {why && (
+        <p className="mt-1 font-mono text-[11px] italic leading-relaxed text-ink-muted">
+          {why}
+        </p>
+      )}
+    </>
+  );
+
+  // this_or_that — two big tappable options; clicking IS the answer (no typing).
+  if (k === "this_or_that" && options.length >= 2) {
+    return (
+      <div className="rounded-md border border-action/30 bg-action/5 p-4">
+        {head}
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {options.slice(0, 2).map((opt, j) => (
+            <button
+              key={j}
+              type="button"
+              onClick={() => onAnswer(opt, { teaching: true })}
+              disabled={busy}
+              className="rounded-md border border-accent/40 bg-panel p-3 text-left font-sans text-sm leading-relaxed text-ink transition-colors hover:border-accent hover:bg-accent/10 disabled:opacity-50"
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+        {youDecide}
+      </div>
+    );
+  }
+
+  // pick — a few tappable options stacked; clicking IS the answer.
+  if (k === "pick" && options.length > 0) {
+    return (
+      <div className="rounded-md border border-action/30 bg-action/5 p-4">
+        {head}
+        <div className="mt-3 flex flex-col gap-2">
+          {options.map((opt, j) => (
+            <button
+              key={j}
+              type="button"
+              onClick={() => onAnswer(opt, { teaching: true })}
+              disabled={busy}
+              className="rounded-md border border-accent/40 bg-panel px-3 py-2 text-left font-sans text-sm leading-relaxed text-ink transition-colors hover:border-accent hover:bg-accent/10 disabled:opacity-50"
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+        {youDecide}
+      </div>
+    );
+  }
+
+  // say_it — the collision/conception moment. Optional sparks are only starting points
+  // to edit; the inventor types the conditional core in their OWN words (the claim).
+  return (
+    <div className="rounded-md border border-action/30 bg-action/5 p-4">
+      {head}
       {options.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {options.map((opt, j) => (
             <button
               key={j}
               type="button"
-              onClick={() => onAnswer(opt)}
+              onClick={() => setText(opt)}
               disabled={busy}
               className="rounded-full border border-accent/40 bg-accent/10 px-2.5 py-1 font-mono text-[11px] text-ink hover:bg-accent/20 disabled:opacity-50"
             >
@@ -625,10 +1276,22 @@ function WalkStep({
         value={text}
         onChange={setText}
         rows={3}
-        placeholder="…or answer in your own words"
+        placeholder="…say it in your own words"
         className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
       />
-      <div className="mt-2 flex justify-end">
+      <div className="mt-2 flex items-center justify-between gap-2">
+        {/* Defer the core gracefully: ask to be SHOWN the ways it could resolve (the
+            stall ladder), instead of being left stuck. Never floods — it's hard-capped. */}
+        <button
+          type="button"
+          onClick={() =>
+            onAnswer("I'm not sure — what are the ways this could go?")
+          }
+          disabled={busy}
+          className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
+        >
+          Not sure — show me the ways
+        </button>
         <Button
           variant="primary"
           onClick={() => onAnswer(text)}

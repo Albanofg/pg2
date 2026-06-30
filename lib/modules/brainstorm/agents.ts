@@ -11,8 +11,10 @@ import type {
   MarketRead,
   ReversalStep,
   Stub,
+  Tensor,
   WalkTurn,
 } from "./types";
+import { runConceptionEvaluator } from "./conception-evaluator";
 import type { MarketEvidence } from "./market";
 
 /**
@@ -34,11 +36,15 @@ const PROMPT_FILES: Record<AgentName, string> = {
   "market-analyst": `${DIR}/04-market-analyst.md`,
   excavator: `${DIR}/05-excavator.md`,
   "section-101": `${DIR}/06-section-101.md`,
+  "tensor-finder": `${DIR}/07-tensor-finder.md`,
+  "conception-evaluator": `${DIR}/08-conception-evaluator.md`,
+  "input-classifier": `${DIR}/09-input-classifier.md`,
+  deepener: `${DIR}/10-deepener.md`,
 };
 
 const promptCache = new Map<AgentName, string>();
 
-async function loadPrompt(agent: AgentName): Promise<string> {
+export async function loadPrompt(agent: AgentName): Promise<string> {
   let contents = promptCache.get(agent);
   if (!contents) {
     const file = path.join(process.cwd(), "prompts", ...PROMPT_FILES[agent].split("/"));
@@ -132,6 +138,8 @@ export const MarketReadOutput = z.object({
     )
     .default([]),
   whitespace: z.string().default(""),
+  verdict: z.enum(["clean", "crowded", "durable"]).default("clean"),
+  steer: z.string().default(""),
 });
 
 export const ReversalStepOutput = z.object({
@@ -142,9 +150,12 @@ export const ReversalStepOutput = z.object({
     .object({
       prompt: z.string().default(""),
       why: z.string().default(""),
+      // The game shape (§7): teaching moves are clicks (this_or_that / pick); only the
+      // collision question is say_it (the inventor types the conditional core).
+      kind: z.enum(["this_or_that", "pick", "say_it"]).default("say_it"),
       alternatives: z.array(z.string()).default([]),
     })
-    .default({ prompt: "", why: "", alternatives: [] }),
+    .default({ prompt: "", why: "", kind: "say_it", alternatives: [] }),
   arrival_prompt: z.string().default(""),
 });
 
@@ -277,6 +288,14 @@ function repeatsPriorQuestion(candidate: string, prior: string[]): boolean {
   return false;
 }
 
+/** The open invitation shown at arrival when the generator didn't supply its own. */
+const ARRIVAL_DEFAULT =
+  "That's it — say your invention in your own words, exactly as you see it.";
+
+/** The calm message when the stall ladder is exhausted (no Tier 4). */
+const ROUTE_TO_HUMAN_PROMPT =
+  "This last step — the exact rule that settles it — is the part worth a human expert's eye. No rush: say what you've got in your own words, or come back to it.";
+
 export async function runReversalStep(
   runAgent: AgentRunner,
   input: {
@@ -285,6 +304,15 @@ export async function runReversalStep(
     conversation: WalkTurn[];
     /** The inventor pressed "keep pushing" — they don't feel done; never declare arrival. */
     pushDeeper?: boolean;
+    /** The current stall tier, threaded so the no-Tier-4 floor advances across steps. */
+    stallTier?: number;
+    /**
+     * The answer being judged came from a TEACHING click-game (this_or_that / pick), not
+     * the typed collision question. Teaching clicks are not conception attempts, so the
+     * conditionality gate + no-Tier-4 stall floor must NOT run on them — just advance to
+     * the next move. Arrival is only ever judged on a typed (say_it) answer.
+     */
+    teaching?: boolean;
   },
 ): Promise<ReversalStep> {
   const system = await loadPrompt("reversal-compiler");
@@ -293,6 +321,17 @@ export async function runReversalStep(
     `PROBLEM: ${t.problem}`,
     `MECHANISM (the destination — NEVER reveal or name it): ${t.mechanism}`,
     ...(t.operatesOn ? [`OPERATES_ON: ${t.operatesOn}`] : []),
+    ...(t.tensor
+      ? [
+          "",
+          "TENSOR (the grounded two poles + constraint to TEACH; the conditionalCore is BACKSTAGE — lead them to it, never say it):",
+          `- POLE A: ${t.tensor.poleA}`,
+          `- POLE B: ${t.tensor.poleB}`,
+          `- CONSTRAINT (assumed away by rivals): ${t.tensor.constraint}`,
+          `- COLLISION SCENE (stage this): ${t.tensor.collisionScene}`,
+          `- conditionalCore (BACKSTAGE target, never shown): ${t.tensor.conditionalCore}`,
+        ]
+      : []),
     "",
     "DERIVATION TRACE (your private map of where to steer):",
     ...t.steps.map(
@@ -350,21 +389,88 @@ That fork is already resolved — re-serving it (even reworded, even with the sa
     });
   }
 
-  return {
-    reaction: out.reaction,
-    done: out.done,
-    ...(out.angle ? { angle: out.angle } : {}),
-    ...(out.question.prompt
+  const mapStep = (
+    o: z.infer<typeof ReversalStepOutput>,
+    extra: Partial<ReversalStep> = {},
+  ): ReversalStep => ({
+    reaction: o.reaction,
+    done: o.done,
+    ...(o.angle ? { angle: o.angle } : {}),
+    ...(o.question.prompt
       ? {
           question: {
-            prompt: out.question.prompt,
-            ...(out.question.why ? { why: out.question.why } : {}),
-            alternatives: out.question.alternatives,
+            prompt: o.question.prompt,
+            ...(o.question.why ? { why: o.question.why } : {}),
+            kind: o.question.kind,
+            alternatives: o.question.alternatives,
           },
         }
       : {}),
-    ...(out.arrival_prompt ? { arrivalPrompt: out.arrival_prompt } : {}),
-  };
+    ...(o.arrival_prompt ? { arrivalPrompt: o.arrival_prompt } : {}),
+    ...extra,
+  });
+
+  const lastAnswer = input.conversation[input.conversation.length - 1]?.answer?.trim();
+  const tensor = t.tensor;
+
+  // Opening move, "keep pushing", a teaching click, or a trace without a tensor → the
+  // generator's step stands (and push-deeper / teaching never declare arrival). The
+  // strict gate governs arrival ONLY when there is a TYPED answer to judge AND a tensor
+  // to judge it against. Teaching clicks (this_or_that / pick) are not conception
+  // attempts, so they never run the gate or advance the no-Tier-4 stall floor.
+  if (!lastAnswer || !tensor || input.pushDeeper || input.teaching) {
+    return mapStep(out, input.pushDeeper || input.teaching ? { done: false } : {});
+  }
+
+  // THE CONDITIONALITY GATE governs arrival — not the generator's self-judgment (deep
+  // spec §11: the strict evaluator runs in a SEPARATE call). It judges the inventor's
+  // last answer against the tension, and the no-Tier-4 floor is enforced in code.
+  const verdict = await runConceptionEvaluator(runAgent, {
+    reply: lastAnswer,
+    tension: {
+      poleA: tensor.poleA,
+      poleB: tensor.poleB,
+      constraint: tensor.constraint,
+      ...(tensor.collisionScene ? { collisionScene: tensor.collisionScene } : {}),
+    },
+    priorStallTier: input.stallTier ?? 0,
+  });
+
+  // No Tier 4 (§6.5): the ladder is exhausted → route to a human. Never state the answer.
+  if (verdict.routeToHuman) {
+    return {
+      reaction: out.reaction,
+      done: false,
+      routeToHuman: true,
+      arrivalPrompt: ROUTE_TO_HUMAN_PROMPT,
+      stallTier: verdict.nextStallTier,
+    };
+  }
+
+  // Arrival: the inventor's OWN words conditionally resolved the tension.
+  if (verdict.isConditional) {
+    return mapStep(out, {
+      done: true,
+      stallTier: 0,
+      arrivalPrompt: out.arrival_prompt || ARRIVAL_DEFAULT,
+    });
+  }
+
+  // Not yet. Keep teaching. If the generator (over-eagerly) declared arrival and gave no
+  // next question, re-run it forced NOT to arrive — react, stage the collision, and ask
+  // the collision question (or run the stall ladder). It never states the resolution.
+  if (!out.question.prompt) {
+    out = await runAgent({
+      agent: "reversal-compiler",
+      system,
+      prompt: `${prompt}
+
+THE INVENTOR HAS NOT YET NAMED A CONDITIONAL RESOLUTION. Do NOT declare arrival (do not set done). React briefly to their last answer, then stage the concrete collision and ask the collision question ("when the two can't both win, what has to happen?") — OR, if they have already faced this exact collision, run the stall ladder: offer 2–4 candidate sparks where EXACTLY ONE is the conditional resolution and invite them to pick it and say why in their own words. Never state the resolution.`,
+      schema: ReversalStepOutput,
+      temperature: 0.7,
+    });
+  }
+  return mapStep(out, { done: false, stallTier: verdict.nextStallTier });
 }
 
 /** The Step-1 excavation: a raw spark → 3 lens cards + one optional clarifier chip-row. */
@@ -386,6 +492,100 @@ export async function runExcavator(
     schema: ExcavatorOutput,
     temperature: 0.6,
   });
+}
+
+export const InputClassifierOutput = z.object({
+  formed: z.boolean().default(false),
+  reflected: z.string().default(""),
+});
+
+export const DeepenerOutput = z.object({
+  cards: z
+    .array(
+      z.object({
+        label: z.string().default(""),
+        restatement: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
+
+/**
+ * "Go deeper": narrow ONE chosen direction into three SHARPER, more specific sub-directions
+ * — short, scannable, tap-to-pick. Distinct from the top excavator (which re-lenses into
+ * need/mechanism/market, so re-running it just rephrases). No market read here — deeper
+ * levels stay light so the inventor isn't reading a wall of text at every step.
+ */
+export async function runDeepener(
+  runAgent: AgentRunner,
+  input: {
+    problem: string;
+    direction: string;
+    /** The sibling options the inventor is choosing among (context for a STEER). */
+    options?: string[];
+    /**
+     * Optional free-text steer: combine/merge options, redirect ("more like X"), or the
+     * exact marker "(you decide)" to hand the AI the wheel for this step.
+     */
+    steer?: string;
+  },
+): Promise<{ cards: { label: string; restatement: string }[] }> {
+  const system = await loadPrompt("deepener");
+  const prompt = [
+    `ORIGINAL PROBLEM (context): ${input.problem}`,
+    `PARENT DIRECTION to sharpen: ${input.direction}`,
+    input.options?.length
+      ? `CURRENT OPTIONS the inventor is choosing among:\n${input.options
+          .map((o, i) => `  ${i + 1}. ${o}`)
+          .join("\n")}`
+      : "CURRENT OPTIONS: (none)",
+    `STEER: ${input.steer?.trim() || "(none)"}`,
+  ].join("\n");
+  let out = await runAgent({
+    agent: "deepener",
+    system,
+    prompt,
+    schema: DeepenerOutput,
+    temperature: 0.7,
+  });
+  let cards = out.cards.filter((c) => c.restatement.trim());
+  // Floor: never silently return nothing (a hedge / refusal / sub-3 reply would dead-end the
+  // UI). Re-run ONCE, harder, demanding exactly three — mirrors the reversal-compiler retry.
+  if (cards.length < 3) {
+    out = await runAgent({
+      agent: "deepener",
+      system,
+      prompt: `${prompt}
+
+YOUR PREVIOUS REPLY DID NOT GIVE THREE USABLE OPTIONS. Output EXACTLY THREE distinct cards, each a SHORT one-line narrowing of the parent. Never refuse, never hedge, never explain instead of choosing — always produce three.`,
+      schema: DeepenerOutput,
+      temperature: 0.9,
+    });
+    const retry = out.cards.filter((c) => c.restatement.trim());
+    if (retry.length > cards.length) cards = retry;
+  }
+  return { cards: cards.slice(0, 3) };
+}
+
+/**
+ * The front-door router: is this input already a FORMED invention (a concrete
+ * mechanism — e.g. a patent abstract), or a VAGUE problem to excavate? A formed input
+ * skips the whole discovery walk (excavating a finished invention just wastes the
+ * inventor's time). Cheap + fast — runs before anything else.
+ */
+export async function runInputClassifier(
+  runAgent: AgentRunner,
+  input: { spark: string },
+): Promise<{ formed: boolean; reflected: string }> {
+  const system = await loadPrompt("input-classifier");
+  const out = await runAgent({
+    agent: "input-classifier",
+    system,
+    prompt: `INPUT (exactly what the user typed):\n${input.spark}`,
+    schema: InputClassifierOutput,
+    temperature: 0.1,
+  });
+  return { formed: out.formed, reflected: out.reflected.trim() };
 }
 
 /**
@@ -439,7 +639,60 @@ export async function runMarketAnalyst(
   return {
     incumbents: out.incumbents.filter((c) => c.name.trim()),
     whitespace: out.whitespace,
+    verdict: out.verdict,
+    steer: out.steer,
     confidence: input.evidence.length ? "searched" : "model",
+  };
+}
+
+export const TensorFinderOutput = z.object({
+  poleA: z.string().default(""),
+  poleB: z.string().default(""),
+  constraint: z.string().default(""),
+  collisionScene: z.string().default(""),
+  conditionalCore: z.string().default(""),
+});
+
+/**
+ * Reverse a chosen mechanism into its TENSOR — the two poles + the assumed-away
+ * constraint + a collision scene + the backstage conditional core. This is the
+ * private map the teach-the-tensor walk teaches from.
+ */
+export async function runTensorFinder(
+  runAgent: AgentRunner,
+  input: { problem: string; mechanism: string; restatement: string; market?: MarketRead },
+): Promise<Tensor> {
+  const system = await loadPrompt("tensor-finder");
+  const m = input.market;
+  const prompt = [
+    `PROBLEM: ${input.problem}`,
+    `MECHANISM (the chosen direction's claimable how): ${input.mechanism}`,
+    `RESTATEMENT: ${input.restatement}`,
+    "",
+    "MARKET (what do these rivals quietly ASSUME? the assumed-away one is your constraint):",
+    m
+      ? [
+          m.incumbents.length
+            ? `- incumbents: ${m.incumbents.map((c) => `${c.name} (${c.what})`).join("; ")}`
+            : "- incumbents: (none identified)",
+          `- whitespace: ${m.whitespace}`,
+          `- steer (what the claim must rest on): ${m.steer}`,
+        ].join("\n")
+      : "(no market read available — infer the most likely assumed-away constraint for this domain)",
+  ].join("\n");
+  const out = await runAgent({
+    agent: "tensor-finder",
+    system,
+    prompt,
+    schema: TensorFinderOutput,
+    temperature: 0.3,
+  });
+  return {
+    poleA: out.poleA,
+    poleB: out.poleB,
+    constraint: out.constraint,
+    collisionScene: out.collisionScene,
+    conditionalCore: out.conditionalCore,
   };
 }
 

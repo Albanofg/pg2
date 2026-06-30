@@ -42,9 +42,7 @@ export default function MaturationPanel({
                 Stage 2 · Expansion
               </div>
               <h2 className="mt-1 font-sans text-lg font-semibold text-ink">
-                {view.phase === "selecting"
-                  ? "Choose which concepts move forward"
-                  : "Expand each concept until it's ready to search"}
+                Maturing your concepts
               </h2>
             </div>
             <button
@@ -96,8 +94,7 @@ export default function MaturationPanel({
 
           {view.progress && view.cards.length > 0 && (
             <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
-              {view.phase === "selecting" ? "Choosing" : "Expanding"} · concept{" "}
-              {view.progress.current} of {view.progress.total}
+              Needs your input · concept {view.progress.current} of {view.progress.total}
             </div>
           )}
 
@@ -266,8 +263,10 @@ function SparkView({
   busy: boolean;
   onAct: (cardId: string, input: never) => void;
 }) {
-  const [text, setText] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(card.suggestion ?? "");
   const isLeap = card.kind === "leap";
+  const hasSuggestion = !!card.suggestion?.trim();
   return (
     <div
       className={`rounded-md border p-4 ${
@@ -279,31 +278,81 @@ function SparkView({
           isLeap ? "text-amber-400" : "text-accent"
         }`}
       >
-        {isLeap ? "Your idea needed here" : "One quick specific"}
+        {isLeap ? "One thing to make yours" : "One quick specific"}
       </div>
       <div className="font-sans text-sm font-semibold text-ink">{card.missing}</div>
       <p className="mt-2 font-mono text-xs leading-relaxed text-ink-muted">{card.prompt}</p>
-      {isLeap && (
-        <p className="mt-2 font-mono text-[11px] italic text-ink-muted">
-          This has to be your idea, in your own words — the Helper won&apos;t suggest it.
-        </p>
+
+      {/* The AI's suggested fill — accept in one click, tweak, or write your own. */}
+      {hasSuggestion && !editing && (
+        <div className="mt-3 rounded-md border border-border bg-bg/60 p-3">
+          <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+            Suggestion
+          </div>
+          <p className="font-mono text-xs leading-relaxed text-ink">{card.suggestion}</p>
+        </div>
       )}
-      <VoiceTextarea
-        value={text}
-        onChange={setText}
-        rows={3}
-        placeholder={isLeap ? "Describe it yourself…" : "Answer in your own words…"}
-        className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
-      />
-      <div className="mt-2 flex justify-end">
-        <button
-          onClick={() => onAct(card.id, { answer: text.trim() } as never)}
-          disabled={busy || !text.trim()}
-          className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
-        >
-          {isLeap ? "This is mine" : "Answer"}
-        </button>
-      </div>
+
+      {editing || !hasSuggestion ? (
+        <>
+          <VoiceTextarea
+            value={text}
+            onChange={setText}
+            rows={3}
+            placeholder={
+              isLeap ? "Make it yours — in your own words…" : "Answer in your own words…"
+            }
+            className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+          />
+          <div className="mt-2 flex flex-wrap justify-end gap-2">
+            <button
+              onClick={() => onAct(card.id, { answer: text.trim() } as never)}
+              disabled={busy || !text.trim()}
+              className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+            >
+              This is mine
+            </button>
+            <button
+              onClick={() => onAct(card.id, { action: "skip" } as never)}
+              disabled={busy}
+              className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
+            >
+              Skip
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            onClick={() => onAct(card.id, { action: "use_suggestion" } as never)}
+            disabled={busy}
+            className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+          >
+            Use this
+          </button>
+          <button
+            onClick={() => setEditing(true)}
+            disabled={busy}
+            className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
+          >
+            Tweak / write my own
+          </button>
+          <button
+            onClick={() => onAct(card.id, { action: "skip" } as never)}
+            disabled={busy}
+            className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
+          >
+            Skip
+          </button>
+          <button
+            onClick={() => onAct(card.id, { action: "set_aside" } as never)}
+            disabled={busy}
+            className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-red-300 hover:border-red-500/40 hover:bg-red-500/10 disabled:opacity-50"
+          >
+            Set aside
+          </button>
+        </div>
+      )}
     </div>
   );
 }

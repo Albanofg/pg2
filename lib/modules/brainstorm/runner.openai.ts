@@ -21,6 +21,18 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   excavator: MODELS.drafter,
   // The §101 eligibility gate + constraint-injector — legal-reasoning-heavy. Strong model.
   "section-101": MODELS.drafter,
+  // Reverses a mechanism into its tensor (two poles + assumed-away constraint) — the
+  // private map the walk teaches from. Reasoning-heavy. Strong model.
+  "tensor-finder": MODELS.drafter,
+  // The conditionality gate — the legally load-bearing judgment of whether the
+  // inventor's words conditionally resolve the tension. Strict, run at temp 0. Strong model.
+  "conception-evaluator": MODELS.drafter,
+  // The front-door router (formed invention vs vague problem) — a fast, simple call so
+  // the inventor moves immediately. Cheap model.
+  "input-classifier": MODELS.distiller,
+  // "Go deeper" — narrows a chosen direction into three sharper sub-directions. Needs real
+  // reasoning to genuinely narrow (not rephrase). Strong model.
+  deepener: MODELS.drafter,
 };
 
 export const brainstormRunner: AgentRunner = async (req) => {

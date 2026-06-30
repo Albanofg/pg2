@@ -42,9 +42,7 @@ export type MaturationSnapshot = {
   ledger: import("@/lib/modules/shared").LedgerEntry[];
   // One-at-a-time flow state (optional for backward-compat with old snapshots).
   queue?: string[];
-  selectionQueue?: string[];
   maturingTotal?: number;
-  selectionTotal?: number;
 };
 
 export class MaturationModule {
@@ -61,12 +59,10 @@ export class MaturationModule {
   private openCards = new Map<string, Module2Card>();
   private intents = new Map<string, Intent>();
   private conversation: HelperTurn[] = [];
-  // One concept at a time: concept IDs still waiting to be matured / selected, and
-  // the totals so the view can show "concept N of M" instead of a wall.
+  // Concept IDs still waiting to be matured, and the total, so the view can show
+  // "concept N of M" instead of a wall.
   private queue: string[] = [];
-  private selectionQueue: string[] = [];
   private maturingTotal = 0;
-  private selectionTotal = 0;
 
   constructor(deps: MaturationDeps) {
     this.runAgent = deps.runAgent;
@@ -126,14 +122,12 @@ export class MaturationModule {
       this.handleSelection(cardId, intent, input as SelectionInput);
 
     if (this.phase === "maturing") {
-      // Move to the next concept only once THIS concept's cards (its deepen review
-      // and any sparks) are all resolved — so one concept is on screen at a time.
+      // Once this concept's card is resolved, move on — deepening the next ones,
+      // auto-carrying those that need nothing, pausing on the next that does.
       const stillOnThisConcept = [...this.intents.values()].some(
         (i) => i.kind === "deepen" || i.kind === "spark",
       );
       if (!stillOnThisConcept) await this.surfaceNextConcept();
-    } else if (this.phase === "selecting") {
-      this.surfaceNextSelection();
     }
     this.maybeCheckpoint();
     return this.view();
@@ -249,9 +243,7 @@ export class MaturationModule {
       conversation: this.conversation.map((t) => ({ ...t })),
       ledger: this.ledger.serialize(),
       queue: [...this.queue],
-      selectionQueue: [...this.selectionQueue],
       maturingTotal: this.maturingTotal,
-      selectionTotal: this.selectionTotal,
     };
   }
 
@@ -272,9 +264,7 @@ export class MaturationModule {
     m.intents = new Map(snap.intents);
     m.conversation = (snap.conversation ?? []).map((t) => ({ ...t }));
     m.queue = snap.queue ?? [];
-    m.selectionQueue = snap.selectionQueue ?? [];
     m.maturingTotal = snap.maturingTotal ?? snap.concepts.length;
-    m.selectionTotal = snap.selectionTotal ?? 0;
     return m;
   }
 
@@ -282,27 +272,39 @@ export class MaturationModule {
    * Deepen
    * ------------------------------------------------------------------ */
 
-  /** Deepen and surface the NEXT concept (one on screen at a time). */
+  /**
+   * Deepen the next concept(s), AUTO-ACCEPTING the routine deepening, and pause
+   * only when one genuinely needs the inventor (a single suggestion card). A
+   * concept that needs nothing flows straight through to carried-forward — no card,
+   * no click. So the inventor only ever sees the few concepts that need a look.
+   */
   private async surfaceNextConcept(): Promise<void> {
     while (this.queue.length) {
       const id = this.queue.shift()!;
       const concept = this.concepts.get(id);
       if (!concept || concept.status.state !== "active") continue;
-      await this.deepenOne(concept);
-      return;
+      const needsInventor = await this.deepenOne(concept);
+      if (needsInventor) return; // pause on this concept's suggestion card
+      // else: nothing needed — it carries forward; keep going
     }
-    // Every concept matured — move to the (also one-at-a-time) selection step.
-    this.advanceToSelecting();
+    // Nothing left to deepen — carry everything forward.
+    this.finalizeAll();
   }
 
-  private async deepenOne(concept: MaturedConcept): Promise<void> {
+  /**
+   * Deepen ONE concept and auto-accept the result (deepening only formalizes the
+   * inventor's own words, and the verifier cross-checks it — so no approve-click).
+   * Returns true iff a genuine gap remains and a single suggestion card was
+   * surfaced for the inventor (use the AI's suggested fill, tweak it, or skip).
+   */
+  private async deepenOne(concept: MaturedConcept): Promise<boolean> {
     const part = `concept:${concept.id}`;
     const statement = concept.formalized_statement;
     const verbatim = concept.conception_trail.map((t) => t.verbatim_text);
     let deepened = statement;
     let isDeepened = false;
-    let leapGap: { missing: string; why: string } | null = null;
-    let clarifyGap: { missing: string; why: string } | null = null;
+    let gap: { kind: "leap" | "clarify"; missing: string; why: string; suggestion: string } | null =
+      null;
     try {
       const r = await runDeepener(this.runAgent, {
         statement,
@@ -322,14 +324,22 @@ export class MaturationModule {
       // The reasons the deepening rests on — carried forward so the grade (and
       // downstream modules) can check the statement never drifts from them.
       if (r.reasons?.length) concept.reasons = [...r.reasons];
-      // One sharp inventive Spark, if any (not a wall).
-      const gap = r.inventive_gaps[0];
-      if (gap) leapGap = { missing: gap.missing_element, why: gap.why_routine_insufficient };
-      // A clarify Spark when it isn't concrete enough to search.
-      if (!r.search_ready && r.missing_for_search.trim()) {
-        clarifyGap = {
+      // At most ONE card per concept: the inventive gap (more important) if there
+      // is one, else the search-specificity gap. Each carries an AI suggestion.
+      const inv = r.inventive_gaps[0];
+      if (inv) {
+        gap = {
+          kind: "leap",
+          missing: inv.missing_element,
+          why: inv.why_routine_insufficient,
+          suggestion: inv.suggestion ?? "",
+        };
+      } else if (!r.search_ready && r.missing_for_search.trim()) {
+        gap = {
+          kind: "clarify",
           missing: r.missing_for_search,
           why: "A search needs this to return relevant results rather than noise.",
+          suggestion: r.search_suggestion ?? "",
         };
       }
     } catch (err) {
@@ -339,15 +349,22 @@ export class MaturationModule {
         error: String(err),
       });
     }
+    // Auto-accept the deepened statement (it only formalizes the inventor's words).
     concept.deepened_statement = deepened;
-    // Deepen review leads; any sparks follow it (for THIS concept only).
-    this.emitDeepenReview(concept.id, statement, deepened, isDeepened);
-    if (leapGap) this.emitSpark(concept.id, "leap", leapGap.missing, leapGap.why);
-    if (clarifyGap) this.emitSpark(concept.id, "clarify", clarifyGap.missing, clarifyGap.why);
-
-    // Record the deepening to the Shared Consciousness and cross-verify it
-    // (supersedes the Concept's core from Conception, propagating staleness).
-    if (isDeepened) await this.syncDeepenedToConsciousness(concept);
+    if (isDeepened) {
+      concept.provenance.push({
+        excerpt: deepened,
+        provenance: "system_formalized",
+        derivedFrom: concept.conception_trail.map((t) => t.ledgerId),
+      });
+      // Cross-verify the deepening (a DIFFERENT agent), propagating staleness.
+      await this.syncDeepenedToConsciousness(concept);
+    }
+    if (gap) {
+      this.emitSpark(concept.id, gap.kind, gap.missing, gap.why, gap.suggestion);
+      return true;
+    }
+    return false; // no gap — carries forward by default
   }
 
   /**
@@ -450,27 +467,60 @@ export class MaturationModule {
   private handleSpark(cardId: string, intent: Intent, input: SparkInput): void {
     if (intent.kind !== "spark") return;
     const concept = this.concepts.get(intent.conceptId);
+    const card = this.openCards.get(cardId);
+    const suggestion = card?.type === "spark" ? (card.suggestion ?? "") : "";
     this.resolveCard(cardId);
-    const answer = input.answer.trim();
-    if (!concept || !answer) return;
-    const type = intent.sparkKind === "leap" ? "leap_input" : "clarity_answer";
-    const e = this.ledger.recordInventorSource(type, answer, [
-      "maturation",
-      intent.sparkKind,
-    ]);
-    // The inventor's words deepen the concept and make it search-ready.
-    concept.deepened_statement = `${concept.deepened_statement} ${answer}`.trim();
-    concept.searchReady = true;
-    concept.conception_trail.push({
-      ledgerId: e.id,
-      verbatim_text: answer,
-      timestamp: e.timestamp,
-    });
-    concept.provenance.push({
-      excerpt: answer,
-      provenance: "inventor_conceived",
-      derivedFrom: [e.id],
-    });
+    if (!concept) return;
+
+    // Set this concept aside — drop it.
+    if ("action" in input && input.action === "set_aside") {
+      concept.decision = "set_aside";
+      concept.status = { state: "dropped" };
+      this.ledger.recordDecision("concept_decision", ["maturation", "set_aside"], {
+        conceptId: concept.id,
+      });
+      return;
+    }
+    // Skip — leave the concept as deepened; it carries forward by default.
+    if ("action" in input && input.action === "skip") return;
+
+    // Accept the AI's suggested fill — recorded HONESTLY as system_suggested_accepted
+    // (the inventor accepted a suggestion; it is NOT logged as their own verbatim).
+    if ("action" in input && input.action === "use_suggestion") {
+      const answer = suggestion.trim();
+      if (!answer) return;
+      this.ledger.recordDecision("suggestion_accepted", ["maturation", intent.sparkKind], {
+        conceptId: concept.id,
+      });
+      concept.deepened_statement = `${concept.deepened_statement} ${answer}`.trim();
+      concept.searchReady = true;
+      concept.provenance.push({
+        excerpt: answer,
+        provenance: "system_suggested_accepted",
+        derivedFrom: [],
+      });
+      return;
+    }
+
+    // The inventor wrote their own — captured verbatim as theirs (inventor_conceived).
+    if ("answer" in input) {
+      const answer = input.answer.trim();
+      if (!answer) return;
+      const type = intent.sparkKind === "leap" ? "leap_input" : "clarity_answer";
+      const e = this.ledger.recordInventorSource(type, answer, ["maturation", intent.sparkKind]);
+      concept.deepened_statement = `${concept.deepened_statement} ${answer}`.trim();
+      concept.searchReady = true;
+      concept.conception_trail.push({
+        ledgerId: e.id,
+        verbatim_text: answer,
+        timestamp: e.timestamp,
+      });
+      concept.provenance.push({
+        excerpt: answer,
+        provenance: "inventor_conceived",
+        derivedFrom: [e.id],
+      });
+    }
   }
 
   private handleSelection(cardId: string, intent: Intent, input: SelectionInput): void {
@@ -490,27 +540,19 @@ export class MaturationModule {
    * Phase progression
    * ------------------------------------------------------------------ */
 
-  /** Maturing is done (queue drained) — enter the one-at-a-time selection step. */
-  private advanceToSelecting(): void {
-    if (this.phase !== "maturing") return;
-    this.phase = "selecting";
-    this.selectionQueue = [...this.concepts.values()]
-      .filter((c) => c.status.state === "active")
-      .map((c) => c.id);
-    this.selectionTotal = this.selectionQueue.length;
-    this.surfaceNextSelection();
-  }
-
-  /** Surface ONE selection card at a time (no wall of carry/set-aside cards). */
-  private surfaceNextSelection(): void {
-    if (this.phase !== "selecting") return;
-    if ([...this.intents.values()].some((i) => i.kind === "selection")) return;
-    while (this.selectionQueue.length) {
-      const id = this.selectionQueue.shift()!;
-      const concept = this.concepts.get(id);
-      if (!concept || concept.status.state !== "active") continue;
-      this.emitSelection(concept);
-      return;
+  /**
+   * Everything is deepened — carry ALL surviving concepts forward. There is no
+   * per-concept "carry forward / set aside" wall: the inventor kept depth, so the
+   * default is keep. Set-aside only happens when the inventor explicitly chose it
+   * on a concept's suggestion card.
+   */
+  private finalizeAll(): void {
+    this.phase = "complete";
+    for (const c of this.concepts.values()) {
+      if (c.status.state === "active" && c.decision === "undecided") {
+        c.decision = "carry_forward";
+        this.ledger.recordMachineEvent("concept_matured", ["auto_carry"], { conceptId: c.id });
+      }
     }
   }
 
@@ -544,9 +586,18 @@ export class MaturationModule {
     sparkKind: "clarify" | "leap",
     missing: string,
     prompt: string,
+    suggestion?: string,
   ): void {
     const id = this.genId();
-    const card: SparkCard = { id, type: "spark", conceptId, kind: sparkKind, prompt, missing };
+    const card: SparkCard = {
+      id,
+      type: "spark",
+      conceptId,
+      kind: sparkKind,
+      prompt,
+      missing,
+      ...(suggestion ? { suggestion } : {}),
+    };
     this.openCards.set(id, card);
     this.intents.set(id, { kind: "spark", conceptId, sparkKind });
   }
@@ -582,23 +633,16 @@ export class MaturationModule {
     }
   }
 
-  /** "Concept N of M" for the one-at-a-time flow. */
+  /** "Concept N of M" — progress through the concepts as they're matured. */
   private progress(): { current: number; total: number } | undefined {
     if (this.phase === "maturing" && this.maturingTotal > 0) {
       return { current: this.maturingTotal - this.queue.length, total: this.maturingTotal };
-    }
-    if (this.phase === "selecting" && this.selectionTotal > 0) {
-      return {
-        current: this.selectionTotal - this.selectionQueue.length,
-        total: this.selectionTotal,
-      };
     }
     return undefined;
   }
 
   private isComplete(): boolean {
-    if (this.phase === "maturing") return false;
-    if (this.queue.length || this.selectionQueue.length) return false;
+    if (this.phase !== "complete") return false;
     const open = [...this.intents.values()].some(
       (i) => i.kind === "deepen" || i.kind === "spark" || i.kind === "selection",
     );

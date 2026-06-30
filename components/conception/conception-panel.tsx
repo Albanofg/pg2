@@ -39,8 +39,18 @@ export default function ConceptionPanel({
 }) {
   const { view, busy, error, act, tell, reset } = useConception(projectId);
   const setStage = useWorkspace((s) => s.setStage);
+  const setBrainstormSeed = useWorkspace((s) => s.setBrainstormSeed);
   // Entry routing for the empty state: choose a route, THEN reveal its input.
-  const [entryMode, setEntryMode] = useState<"choose" | "idea">("choose");
+  const [entryMode, setEntryMode] = useState<"choose" | "idea" | "spark">("choose");
+  // The one idea typed at the entry before brainstorming — the only place the
+  // inventor types until conception. The brainstorm step itself never asks.
+  const [spark, setSpark] = useState("");
+
+  const startBrainstorm = () => {
+    if (!spark.trim()) return;
+    setBrainstormSeed(spark.trim());
+    setStage("brainstorm");
+  };
   // Inline (non-blocking) confirm for "Start over" — no window.confirm.
   const [confirmReset, setConfirmReset] = useState(false);
 
@@ -144,7 +154,7 @@ export default function ConceptionPanel({
           {entryMode === "choose" ? (
             <>
               <button
-                onClick={() => setStage("brainstorm")}
+                onClick={() => setEntryMode("spark")}
                 className="block w-full rounded-md border border-accent/50 bg-accent/10 px-5 py-5 text-left font-sans text-base font-semibold text-ink transition-colors duration-150 ease-util hover:border-accent hover:bg-accent/15"
               >
                 Brainstorm with AI →
@@ -156,6 +166,38 @@ export default function ConceptionPanel({
               >
                 I already have an invention →
               </button>
+            </>
+          ) : entryMode === "spark" ? (
+            <>
+              {/* The ONE input: a single vague line. Then Module 0 takes over —
+                  research + three options — and never asks the user to type again. */}
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-sans text-lg font-semibold text-ink">
+                  What do you want to crack?
+                </h3>
+                <button
+                  onClick={() => setEntryMode("choose")}
+                  className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+                >
+                  ← Back
+                </button>
+              </div>
+              <p className="font-mono text-xs leading-relaxed text-ink-muted">
+                One rough line is plenty — even a vague one. I&apos;ll read the
+                market and hand you three sharper directions to pick from.
+              </p>
+              <VoiceTextarea
+                value={spark}
+                onChange={setSpark}
+                rows={2}
+                placeholder="e.g. an app that tells me the weather…"
+                className="w-full resize-y rounded-md border border-border bg-bg p-3 font-mono text-sm leading-relaxed text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+              />
+              <div className="flex justify-end">
+                <Button variant="primary" onClick={startBrainstorm} disabled={!spark.trim()}>
+                  Find the invention →
+                </Button>
+              </div>
             </>
           ) : (
             <>

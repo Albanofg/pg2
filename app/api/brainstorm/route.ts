@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { openLens, runExcavationFrontier } from "@/lib/modules/brainstorm/frontier";
+import {
+  deepenFrontier,
+  openLens,
+  runExcavationFrontier,
+} from "@/lib/modules/brainstorm/frontier";
 import { runReversalStep } from "@/lib/modules/brainstorm/agents";
 import { brainstormRunner } from "@/lib/modules/brainstorm/runner.openai";
 import { sampleBackpack, sampleProblem } from "@/lib/modules/brainstorm/fixtures";
@@ -35,14 +39,20 @@ export async function POST(req: Request) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const body = (await req.json().catch(() => ({}))) as {
-    op?: "frontier" | "open" | "step";
+    op?: "frontier" | "open" | "step" | "deepen";
     problem?: string;
     clarifierAnswer?: string;
+    direction?: string;
+    options?: string[];
+    steer?: string;
+    skipClassify?: boolean;
     backpack?: Backpack;
     card?: LensCard;
     trace?: DerivationTrace;
     conversation?: WalkTurn[];
     pushDeeper?: boolean;
+    stallTier?: number;
+    teaching?: boolean;
   };
 
   // op: "open" — the inventor picked a card; reconstruct + open its walk.
@@ -58,6 +68,21 @@ export async function POST(req: Request) {
     return NextResponse.json(opened);
   }
 
+  // op: "deepen" — narrow a chosen direction into three sharper sub-directions (light, no
+  // market read). The repeating "go deeper" step; the rich card screen happens once on top.
+  if (body.op === "deepen") {
+    if (!body.direction?.trim()) {
+      return NextResponse.json({ error: "direction_required" }, { status: 400 });
+    }
+    const out = await deepenFrontier(brainstormRunner, {
+      problem: body.problem?.trim() || sampleProblem,
+      direction: body.direction.trim(),
+      ...(Array.isArray(body.options) ? { options: body.options } : {}),
+      ...(body.steer?.trim() ? { steer: body.steer.trim() } : {}),
+    });
+    return NextResponse.json(out);
+  }
+
   // op: "step" — one adaptive walk step, reacting to the conversation so far.
   if (body.op === "step") {
     if (!body.trace) {
@@ -68,6 +93,8 @@ export async function POST(req: Request) {
       backpack: body.backpack ?? sampleBackpack,
       conversation: Array.isArray(body.conversation) ? body.conversation : [],
       ...(body.pushDeeper ? { pushDeeper: true } : {}),
+      ...(typeof body.stallTier === "number" ? { stallTier: body.stallTier } : {}),
+      ...(body.teaching ? { teaching: true } : {}),
     });
     return NextResponse.json(step);
   }
@@ -76,6 +103,7 @@ export async function POST(req: Request) {
   const result = await runExcavationFrontier(brainstormRunner, {
     spark: body.problem?.trim() || sampleProblem,
     ...(body.clarifierAnswer ? { clarifierAnswer: body.clarifierAnswer } : {}),
+    ...(body.skipClassify ? { skipClassify: true } : {}),
   });
   return NextResponse.json(result);
 }
