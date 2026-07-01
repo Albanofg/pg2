@@ -126,6 +126,7 @@ export async function deepenFrontier(
   input: {
     problem: string;
     direction: string;
+    addition?: string;
     options?: string[];
     steer?: string;
   },
@@ -138,7 +139,8 @@ export async function deepenFrontier(
     mechanism: "",
   }));
   return {
-    spark: input.direction,
+    // spark = the EVOLVED key concept (accretes each step); shown as "Where you've landed".
+    spark: out.updatedKeyConcept,
     mode: "vague",
     cards,
     notes: [],

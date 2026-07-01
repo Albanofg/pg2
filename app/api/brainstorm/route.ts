@@ -43,6 +43,7 @@ export async function POST(req: Request) {
     problem?: string;
     clarifierAnswer?: string;
     direction?: string;
+    addition?: string;
     options?: string[];
     steer?: string;
     skipClassify?: boolean;
@@ -77,6 +78,7 @@ export async function POST(req: Request) {
     const out = await deepenFrontier(brainstormRunner, {
       problem: body.problem?.trim() || sampleProblem,
       direction: body.direction.trim(),
+      ...(body.addition?.trim() ? { addition: body.addition.trim() } : {}),
       ...(Array.isArray(body.options) ? { options: body.options } : {}),
       ...(body.steer?.trim() ? { steer: body.steer.trim() } : {}),
     });

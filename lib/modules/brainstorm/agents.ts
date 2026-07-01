@@ -500,9 +500,12 @@ export const InputClassifierOutput = z.object({
 });
 
 export const DeepenerOutput = z.object({
-  // The direction just narrowed is already a specific, buildable key concept — narrowing
-  // further would only add implementation detail. Drives the UI to offer the "lock it in"
-  // landing so the inventor converges in a few steps instead of drilling forever.
+  // The evolving key concept — the CURRENT concept with the inventor's newest pick/typed text
+  // folded in (accretes, never resets). Shown as "Where you've landed" + sealed on lock-in.
+  updated_key_concept: z.string().default(""),
+  // The updated concept is already a specific, buildable key concept — narrowing further would
+  // only add implementation detail. Drives the UI to offer the "lock it in" landing so the
+  // inventor converges in a few steps instead of drilling forever.
   specific_enough: z.boolean().default(false),
   cards: z
     .array(
@@ -524,23 +527,28 @@ export async function runDeepener(
   runAgent: AgentRunner,
   input: {
     problem: string;
+    /** The CURRENT KEY CONCEPT accumulated so far — the thing to EVOLVE (not replace). */
     direction: string;
+    /** The sharper option the inventor just tapped (the new thing to fold in). */
+    addition?: string;
     /** The sibling options the inventor is choosing among (context for a STEER). */
     options?: string[];
     /**
-     * Optional free-text steer: combine/merge options, redirect ("more like X"), or the
-     * exact marker "(you decide)" to hand the AI the wheel for this step.
+     * Optional free-text steer the inventor TYPED: combine/merge options, redirect
+     * ("more like X"), or the exact marker "(you decide)". Folded into the key concept too.
      */
     steer?: string;
   },
 ): Promise<{
+  updatedKeyConcept: string;
   cards: { label: string; restatement: string }[];
   specificEnough: boolean;
 }> {
   const system = await loadPrompt("deepener");
   const prompt = [
     `ORIGINAL PROBLEM (context): ${input.problem}`,
-    `PARENT DIRECTION to sharpen: ${input.direction}`,
+    `CURRENT KEY CONCEPT (evolve this, keep its substance): ${input.direction}`,
+    `THE ADDITION the inventor just chose (fold it in): ${input.addition?.trim() || "(none — this is the starting concept)"}`,
     input.options?.length
       ? `CURRENT OPTIONS the inventor is choosing among:\n${input.options
           .map((o, i) => `  ${i + 1}. ${o}`)
@@ -571,7 +579,12 @@ YOUR PREVIOUS REPLY DID NOT GIVE THREE USABLE OPTIONS. Output EXACTLY THREE dist
     const retry = out.cards.filter((c) => c.restatement.trim());
     if (retry.length > cards.length) cards = retry;
   }
-  return { cards: cards.slice(0, 3), specificEnough: out.specific_enough };
+  return {
+    // Fall back to the prior concept if the model didn't evolve it — never blank the landing.
+    updatedKeyConcept: out.updated_key_concept.trim() || input.direction,
+    cards: cards.slice(0, 3),
+    specificEnough: out.specific_enough,
+  };
 }
 
 /**

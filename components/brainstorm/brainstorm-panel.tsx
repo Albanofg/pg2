@@ -337,7 +337,10 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
   // inventor's own text, or — for combine / "you decide" — the current parent), with the
   // sibling `options` + optional `steer` so the AI can combine them or take the wheel.
   const goDeeper = async (opts: {
+    // The CURRENT key concept to EVOLVE (result.spark once drilling; the picked card on the
+    // first drill). `addition` = the sharper option just tapped, folded into the concept.
     direction: string;
+    addition?: string;
     options?: string[];
     steer?: string;
   }) => {
@@ -357,6 +360,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
       deepen({
         problem: originalProblem,
         direction: d,
+        ...(opts.addition ? { addition: opts.addition } : {}),
         ...(opts.options ? { options: opts.options } : {}),
         ...(opts.steer ? { steer: opts.steer } : {}),
       }),
@@ -632,8 +636,8 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
               <div className="flex items-center justify-between gap-2">
                 <p className="font-sans text-sm font-semibold text-ink">
                   {result.converged || drillStack.length >= 4
-                    ? "This is specific enough to build on — lock it in, or keep sharpening."
-                    : "Narrowing in — lock it in when it's sharp enough, or sharpen further."}
+                    ? "You've got a well-defined concept."
+                    : "Narrowing in — pick one, add a twist, or lock it in."}
                 </p>
                 <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted/70">
                   Step {drillStack.length}
@@ -657,29 +661,47 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                 <p className="mt-1 font-sans text-sm leading-relaxed text-ink">
                   {result.spark}
                 </p>
-                <div className="mt-2 flex justify-end">
+                {(result.converged || drillStack.length >= 4) && (
+                  <p className="mt-2 font-mono text-[11px] leading-relaxed text-ink-muted">
+                    This concept is now well defined — most further refinements become
+                    implementation details.
+                  </p>
+                )}
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  {(result.converged || drillStack.length >= 4) && (
+                    <span className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-accent">
+                      Recommended
+                    </span>
+                  )}
                   <Button
                     variant="primary"
                     onClick={() => void lockIn(result.spark)}
                     disabled={handoffBusy}
                   >
                     {handoffBusy
-                      ? "Locking in…"
-                      : "That's my key concept — lock it in →"}
+                      ? "Continuing…"
+                      : result.converged || drillStack.length >= 4
+                        ? "Continue to Development →"
+                        : "That's my key concept — lock it in →"}
                   </Button>
                 </div>
               </div>
 
               <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
-                Or sharpen further
+                {result.converged || drillStack.length >= 4
+                  ? "Keep refining"
+                  : "Or sharpen further"}
               </div>
               <div className="space-y-2">
                 {result.cards.map((card, i) => (
                   <button
                     key={i}
                     onClick={() =>
+                      // Deeper tap: keep the accumulated concept (result.spark) and FOLD IN
+                      // this pick as the addition — the concept grows, it doesn't reset.
                       void goDeeper({
-                        direction: card.restatement,
+                        direction: result.spark,
+                        addition: card.restatement,
                         options: result.cards.map((c) => c.restatement),
                       })
                     }
@@ -696,10 +718,13 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                 ))}
               </div>
 
-              {/* Human input: combine the options or steer the next narrowing in your own
-                  words; or hand the AI the wheel for this one step. */}
-              <div className="space-y-2 rounded-md border border-dashed border-border bg-bg/30 p-3">
-                <div className="flex items-center gap-1.5">
+              {/* Human input — big + noticeable: combine the options / add your own twist, or
+                  hand the AI the wheel. BOTH fold into the running key concept (via `steer`). */}
+              <div className="space-y-3 rounded-md border border-accent/30 bg-panel p-4">
+                <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+                  Add your own twist
+                </div>
+                <div className="flex items-center gap-2">
                   <input
                     value={steerInput}
                     onChange={(e) => setSteerInput(e.target.value)}
@@ -712,11 +737,11 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                         });
                       }
                     }}
-                    placeholder="Combine them (e.g. “first two together”), or say your own focus…"
-                    className="min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 py-1.5 font-mono text-[11px] text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                    placeholder="Combine them (“first two together”), or add your own focus…"
+                    className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-3 font-sans text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
                   />
-                  <button
-                    type="button"
+                  <Button
+                    variant="primary"
                     onClick={() => {
                       if (steerInput.trim() && !busy) {
                         void goDeeper({
@@ -727,10 +752,9 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                       }
                     }}
                     disabled={busy || !steerInput.trim()}
-                    className="shrink-0 rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1.5 font-mono text-[11px] text-accent hover:bg-accent/20 disabled:opacity-50"
                   >
-                    Go →
-                  </button>
+                    Add it →
+                  </Button>
                 </div>
                 <button
                   type="button"
@@ -742,7 +766,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                     })
                   }
                   disabled={busy}
-                  className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
+                  className="w-full rounded-md border border-border bg-bg px-3 py-2.5 font-mono text-[11px] uppercase tracking-[0.12em] text-ink-muted transition-colors hover:border-accent hover:text-ink disabled:opacity-50"
                 >
                   Or — let the AI decide this one →
                 </button>
@@ -904,9 +928,10 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                       card={result.cards[selectedIdx]}
                       busy={busy}
                       onDeeper={() =>
+                        // First drill: this card BECOMES the starting key concept (no prior
+                        // to fold into), so it's the direction, not an addition.
                         void goDeeper({
                           direction: result.cards[selectedIdx]!.restatement,
-                          options: result.cards.map((c) => c.restatement),
                         })
                       }
                     />

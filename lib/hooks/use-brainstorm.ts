@@ -79,6 +79,7 @@ export function useBrainstorm() {
     async (input: {
       problem: string;
       direction: string;
+      addition?: string;
       options?: string[];
       steer?: string;
     }): Promise<ExcavationFrontier | null> => {
@@ -86,6 +87,7 @@ export function useBrainstorm() {
         op: "deepen",
         problem: input.problem,
         direction: input.direction,
+        ...(input.addition ? { addition: input.addition } : {}),
         ...(input.options ? { options: input.options } : {}),
         ...(input.steer ? { steer: input.steer } : {}),
       });
