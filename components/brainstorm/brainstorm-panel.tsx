@@ -814,9 +814,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                           {card.restatement}
                         </p>
                         <div className="mt-2 flex items-center gap-2">
-                          {card.marketRead && (
-                            <VerdictChip verdict={card.marketRead.verdict} />
-                          )}
+                          {card.marketRead && <SignalChip read={card.marketRead} />}
                           <span className="font-mono text-[10px] text-accent">
                             {selected ? "Showing detail →" : "See detail →"}
                           </span>
@@ -1070,72 +1068,34 @@ function JourneyRibbon({ active }: { active: number }) {
 }
 
 /**
- * Market temperature meter. The meeting: "show how hot/cold the market is as a
- * graphic, not words." Open (cool) ↔ Crowded (hot). Position is driven by the
- * honest breakthrough verdict, nudged by how many incumbents are already there.
+ * Market signal — a language OPINION, not a gauge. No bar, no number, no fake precision.
+ * It scores the SPECIFIC ANGLE, not the broad category:
+ *   • Distinct angle    — the specific combination looks open.
+ *   • Competitive space — the category is busy, but this framing is still distinct.
+ *   • Very common framing — real players already do this specific thing.
  */
-function MarketMeter({ read }: { read: MarketRead }) {
-  const base =
-    read.verdict === "crowded" ? 0.85 : read.verdict === "durable" ? 0.55 : 0.22;
-  const heat = Math.min(0.96, base + Math.min(read.incumbents.length * 0.05, 0.13));
-  const verdictLabel =
+function SignalChip({ read }: { read: MarketRead }) {
+  const level =
     read.verdict === "crowded"
-      ? "Crowded"
-      : read.verdict === "durable"
-        ? "Durable"
-        : "Open";
-  const verdictTone =
-    read.verdict === "crowded"
-      ? "border-amber-400/40 bg-amber-400/10 text-amber-400"
-      : read.verdict === "durable"
-        ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
-        : "border-accent/40 bg-accent/10 text-accent";
-  return (
-    <div className="mt-1.5">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted/70">
-          Open
-        </span>
-        <span
-          className={cn(
-            "rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em]",
-            verdictTone,
-          )}
-        >
-          {verdictLabel}
-        </span>
-        <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted/70">
-          Crowded
-        </span>
-      </div>
-      <div className="relative h-2 rounded-full bg-gradient-to-r from-emerald-500/60 via-amber-400/60 to-red-500/60">
-        <div
-          className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg bg-ink shadow"
-          style={{ left: `${heat * 100}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-/** A small honest verdict chip (Open / Durable / Crowded) for the slim card. */
-function VerdictChip({ verdict }: { verdict: MarketRead["verdict"] }) {
-  const label =
-    verdict === "crowded" ? "Crowded" : verdict === "durable" ? "Durable" : "Open";
-  const tone =
-    verdict === "crowded"
-      ? "border-amber-400/40 bg-amber-400/10 text-amber-400"
-      : verdict === "durable"
-        ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
-        : "border-accent/40 bg-accent/10 text-accent";
+      ? "common"
+      : read.categoryCrowded
+        ? "competitive"
+        : "distinct";
+  const cfg =
+    level === "common"
+      ? { label: "Very common framing", dot: "bg-red-400", tone: "text-red-300" }
+      : level === "competitive"
+        ? { label: "Competitive space", dot: "bg-amber-400", tone: "text-amber-300" }
+        : { label: "Distinct angle", dot: "bg-emerald-400", tone: "text-emerald-300" };
   return (
     <span
       className={cn(
-        "rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em]",
-        tone,
+        "inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.1em]",
+        cfg.tone,
       )}
     >
-      {label}
+      <span className={cn("inline-block h-2 w-2 shrink-0 rounded-full", cfg.dot)} />
+      {cfg.label}
     </span>
   );
 }
@@ -1170,23 +1130,31 @@ function CardDetail({
       )}
       {card.marketRead && (
         <div className="mt-3 border-t border-border/60 pt-3">
-          <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
-            Market read
+          {/* Language OPINION, opportunity-first — no gauge, no fake precision. Lead with WHY
+              this could matter; the signal is a word, not a bar. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+              Market read
+            </span>
+            <SignalChip read={card.marketRead} />
             {card.marketRead.confidence === "model" && (
-              <span className="ml-1 text-ink-muted/70">· unverified</span>
+              <span className="font-mono text-[9px] text-ink-muted/70">· unverified</span>
             )}
           </div>
-          <MarketMeter read={card.marketRead} />
-          {card.marketRead.incumbents.length > 0 && (
-            <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-ink-muted">
-              Already here:{" "}
-              {card.marketRead.incumbents.map((c) => c.name).join(", ")}.
+          {(card.marketRead.whyItMatters ||
+            card.marketRead.categoryNote ||
+            card.marketRead.whitespace) && (
+            <p className="mt-2 font-sans text-sm leading-relaxed text-ink">
+              {card.marketRead.whyItMatters ||
+                card.marketRead.categoryNote ||
+                card.marketRead.whitespace}
             </p>
           )}
-          {/* The meter + the incumbent names already say "crowded" — don't restate it.
-              Spend the words on the one thing the UI can't show: WHY this opening matters.
-              UPL: never say "claim" / "patent" / "patentable" — this is market framing, not
-              legal advice. */}
+          {card.marketRead.incumbents.length > 0 && (
+            <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-ink-muted">
+              Similar: {card.marketRead.incumbents.map((c) => c.name).join(", ")}.
+            </p>
+          )}
           {card.marketRead.steer && (
             <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-accent">
               <span className="text-ink-muted/80">The opening — </span>

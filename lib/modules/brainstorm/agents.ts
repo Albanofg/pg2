@@ -137,6 +137,9 @@ export const MarketReadOutput = z.object({
       }),
     )
     .default([]),
+  category_note: z.string().default(""),
+  is_category_crowded: z.boolean().default(false),
+  why_it_matters: z.string().default(""),
   whitespace: z.string().default(""),
   verdict: z.enum(["clean", "crowded", "durable"]).default("clean"),
   steer: z.string().default(""),
@@ -658,6 +661,9 @@ export async function runMarketAnalyst(
   });
   return {
     incumbents: out.incumbents.filter((c) => c.name.trim()),
+    ...(out.category_note.trim() ? { categoryNote: out.category_note } : {}),
+    categoryCrowded: out.is_category_crowded,
+    ...(out.why_it_matters.trim() ? { whyItMatters: out.why_it_matters } : {}),
     whitespace: out.whitespace,
     verdict: out.verdict,
     steer: out.steer,

@@ -164,7 +164,14 @@ export type BreakthroughVerdict = "clean" | "crowded" | "durable";
 
 /** The honest competitive "market read" shown on a frontier card. */
 export type MarketRead = {
+  /** Players who do the SPECIFIC combination — NOT broad-category players. */
   incumbents: MarketIncumbent[];
+  /** The broad category's state + whether anyone does the specific combination. */
+  categoryNote?: string;
+  /** True when the broad category is busy even though the specific combination is open. */
+  categoryCrowded?: boolean;
+  /** The lead line: the OPPORTUNITY in plain language (what most do vs what this does). */
+  whyItMatters?: string;
   whitespace: string;
   /** Is there a breakthrough here, or is it occupied? Drives the recommendation
    *  and gates whether the inventor is questioned on this direction. */
