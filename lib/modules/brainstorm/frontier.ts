@@ -64,12 +64,22 @@ export async function runExcavationFrontier(
     }
   }
 
-  // Ground each card in real competition (the differentiator), in parallel.
+  // Ground each card in real competition (the differentiator), in parallel. SAFETY: we
+  // NEVER fabricate a market read. If live web search returns no evidence (no key, or the
+  // search failed), we attach NO market read for that card — we do NOT let the model
+  // guess competitors from memory and dress the guess as a finding. A missing read is
+  // shown honestly ("not checked"); a fake one is never shown.
+  let anyUnchecked = false;
   await Promise.all(
     cards.map(async (card) => {
       try {
         const query = `${input.spark} ${card.label} ${card.restatement} — existing products, competitors, tools`;
         const evidence = await searchMarket(query);
+        if (!evidence.length) {
+          // No real search results → do not invent a market read for this direction.
+          anyUnchecked = true;
+          return;
+        }
         card.marketRead = await runMarketAnalyst(runAgent, {
           problem: input.spark,
           direction: `${card.restatement} (mechanism: ${card.mechanism})`,
@@ -77,6 +87,7 @@ export async function runExcavationFrontier(
         });
       } catch (err) {
         console.error("[brainstorm] market read failed for", card.label, err);
+        anyUnchecked = true;
       }
     }),
   );
@@ -87,9 +98,11 @@ export async function runExcavationFrontier(
   // recommending at all. The honest market meter on each card carries the signal.)
 
   const notes: string[] = [];
-  if (!marketSearchEnabled() && cards.some((c) => c.marketRead)) {
+  if (anyUnchecked) {
     notes.push(
-      "Market reads are from the model's knowledge (no live search wired yet) — verify the competitors before relying on them.",
+      marketSearchEnabled()
+        ? "Couldn't check the live market for some directions right now — those aren't verified against real competitors, so no market read is shown for them."
+        : "Live market search isn't configured — these directions aren't checked against real competitors, so no market read is shown.",
     );
   }
 
@@ -124,7 +137,13 @@ export async function deepenFrontier(
     restatement: c.restatement,
     mechanism: "",
   }));
-  return { spark: input.direction, mode: "vague", cards, notes: [] };
+  return {
+    spark: input.direction,
+    mode: "vague",
+    cards,
+    notes: [],
+    converged: out.specificEnough,
+  };
 }
 
 /**

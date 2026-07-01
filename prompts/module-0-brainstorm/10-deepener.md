@@ -32,10 +32,21 @@ RULES:
 - KEEP IT SHORT: each `restatement` is ONE short line, scannable in a second — not a
   paragraph, not a clause-heavy sentence. The point is a fast tap, not more reading.
 - Concept altitude, not implementation detail (no code, data structures, step lists,
-  parameters). Plain language, no jargon, no statutes; never say something "is patentable".
+  parameters). Plain language, no jargon, no statutes.
+- UPL (hard): no output field may contain the words "claim", "patent", "patentable", "prior
+  art", "novelty", or "examiner", or any statement about whether something can be patented.
+  Describe the idea in plain product/technical language only — never legal advice.
+- CONVERGE FAST — a few questions, not thirty. Set `specific_enough: true` as soon as the
+  PARENT DIRECTION is already a specific, buildable key concept — i.e. narrowing it further
+  would only add implementation detail, not a sharper IDEA. This usually happens within TWO
+  or THREE narrowings from a vague start. Do NOT keep drilling into fine detail (which branch,
+  which threshold, which edge case) — that is a later stage's job, and it makes the inventor
+  feel trapped. When in doubt after a couple of levels, converge. (Still output three cards —
+  they become optional "sharpen even more" choices — but the true signal is `specific_enough`.)
 
 OUTPUT exactly this object and nothing else (no preamble, no code fences):
 {
+  "specific_enough": <true if the PARENT DIRECTION is already a specific, buildable key concept and further narrowing would only add implementation detail; false if it is still broad enough that one more narrowing yields a genuinely sharper IDEA>,
   "cards": [
     { "label": "<2–4 word tag>", "restatement": "<ONE short line — the narrower direction, scannable at a glance>" }
   ]

@@ -32,7 +32,7 @@ export const users = pg.table("users", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-// Projects — one provisional patent draft.
+// Projects — one Invention Concept Blueprint (ICB).
 export const projects = pg.table("projects", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: text("user_id")

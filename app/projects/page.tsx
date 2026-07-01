@@ -173,7 +173,7 @@ export default function ProjectsPage() {
           Projects
         </h1>
         <p className="mt-2 font-mono text-sm text-ink-muted">
-          Each project is one provisional patent draft, with its own transcript
+          Each project is one Invention Concept Blueprint, with its own transcript
           and Inventor&apos;s Notebook. Create a new one to start fresh.
         </p>
       </header>

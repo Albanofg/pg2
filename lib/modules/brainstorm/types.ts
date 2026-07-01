@@ -217,6 +217,12 @@ export type ExcavationFrontier = {
   reflected?: string;
   /** When mode === "formed": the honest market read on that invention. */
   formedMarket?: MarketRead;
+  /**
+   * Deepener signal: the direction just narrowed is already a specific, buildable KEY
+   * CONCEPT — narrowing further would only add implementation detail. The UI surfaces the
+   * "lock it in" landing so the inventor concludes in a few steps instead of drilling forever.
+   */
+  converged?: boolean;
 };
 
 /** A champion + its (backstage) derivation + the OPENING step of its walk + market read. */

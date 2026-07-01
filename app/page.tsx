@@ -5,7 +5,7 @@ export default function Home() {
     <main className="flex min-h-screen flex-col items-center justify-center px-6">
       <div className="max-w-2xl text-center animate-fade-in">
         <p className="mb-4 font-mono text-xs uppercase tracking-[0.2em] text-action">
-          Provisional Patent Drafting Mesh
+          Invention Concept Blueprint Mesh
         </p>
         <h1 className="font-sans text-5xl font-bold leading-tight tracking-tight text-ink">
           Patent Geyser <span className="text-accent">2.0</span>
@@ -13,7 +13,7 @@ export default function Home() {
         <p className="mx-auto mt-6 max-w-xl font-mono text-sm leading-relaxed text-ink-muted">
           The system does not write <span className="text-ink">for</span> you. It
           extracts the genius <span className="text-ink">from</span> you. A
-          rigorous Socratic mesh that produces a provisional patent application
+          rigorous Socratic mesh that produces an Invention Concept Blueprint
           mathematically guaranteed to be 100% human-conceived — sealed with a
           cryptographic timestamp.
         </p>

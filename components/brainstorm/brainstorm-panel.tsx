@@ -385,6 +385,28 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
     setPhase("frontier");
   };
 
+  // LOCK IN the current direction as the KEY CONCEPT — the brainstorm's output and its EXIT.
+  // Without this the drill never ends; this is how the inventor lands once it's sharp enough.
+  // Their own words for this direction are the seed. (Downstream is the Conception module.)
+  const lockIn = async (text: string) => {
+    const seed = text.trim();
+    if (!seed || !projectId) return;
+    setHandoffBusy(true);
+    try {
+      await fetch("/api/conception", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ op: "ingest", raw: seed, projectId }),
+      });
+      clearSession();
+      setStage("conception");
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setHandoffBusy(false);
+    }
+  };
+
   // A teaching click (this_or_that / pick) passes teaching:true so the engine skips the
   // conditionality gate — only the typed collision answer (say_it) is a conception attempt.
   const answerWalk = async (text: string, opts?: { teaching?: boolean }) => {
@@ -607,9 +629,50 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
               sharpen, so you're never reading a wall of text at every level. */}
           {phase === "frontier" && result && drillStack.length > 0 && (
             <div className="space-y-3">
-              <p className="font-sans text-sm font-semibold text-ink">
-                Narrowing in — tap the sharper one, combine them, or let the AI take it.
-              </p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-sans text-sm font-semibold text-ink">
+                  {result.converged || drillStack.length >= 4
+                    ? "This is specific enough to build on — lock it in, or keep sharpening."
+                    : "Narrowing in — lock it in when it's sharp enough, or sharpen further."}
+                </p>
+                <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted/70">
+                  Step {drillStack.length}
+                </span>
+              </div>
+
+              {/* THE EXIT — lock in what you've narrowed to as your key concept, at ANY step.
+                  Drilling has no other end; this is how the inventor lands (fixes the endless
+                  "how long does this take / I'm on the 10th question" trap). */}
+              <div
+                className={cn(
+                  "rounded-md border p-3",
+                  result.converged || drillStack.length >= 4
+                    ? "border-accent/60 bg-accent/10"
+                    : "border-accent/30 bg-accent/5",
+                )}
+              >
+                <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
+                  Where you&apos;ve landed
+                </div>
+                <p className="mt-1 font-sans text-sm leading-relaxed text-ink">
+                  {result.spark}
+                </p>
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    variant="primary"
+                    onClick={() => void lockIn(result.spark)}
+                    disabled={handoffBusy}
+                  >
+                    {handoffBusy
+                      ? "Locking in…"
+                      : "That's my key concept — lock it in →"}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+                Or sharpen further
+              </div>
               <div className="space-y-2">
                 {result.cards.map((card, i) => (
                   <button
@@ -726,14 +789,14 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                         <p className="mt-1.5 font-sans text-sm leading-relaxed text-ink">
                           {card.restatement}
                         </p>
-                        {card.marketRead && (
-                          <div className="mt-2 flex items-center gap-2">
+                        <div className="mt-2 flex items-center gap-2">
+                          {card.marketRead && (
                             <VerdictChip verdict={card.marketRead.verdict} />
-                            <span className="font-mono text-[10px] text-accent">
-                              {selected ? "Showing detail →" : "See detail →"}
-                            </span>
-                          </div>
-                        )}
+                          )}
+                          <span className="font-mono text-[10px] text-accent">
+                            {selected ? "Showing detail →" : "See detail →"}
+                          </span>
+                        </div>
                       </button>
                     );
                   })}
@@ -849,8 +912,8 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                     />
                   ) : (
                     <div className="rounded-md border border-dashed border-border bg-bg/30 p-4 font-mono text-xs leading-relaxed text-ink-muted">
-                      Click a direction to see its market read and the real claim to
-                      aim at.
+                      Click a direction to see its market read and the specific opening
+                      to aim at.
                     </div>
                   )}
                 </div>
@@ -1069,15 +1132,14 @@ function CardDetail({
 }) {
   return (
     <div className="rounded-md border border-accent/40 bg-panel p-4">
+      {/* The detail panel shows only what the slim card does NOT — the mechanism + market
+          read. It never repeats the card's restatement (that's already on the left). */}
       <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-action">
         {card.label}
       </div>
-      <p className="mt-1.5 font-sans text-sm leading-relaxed text-ink">
-        {card.restatement}
-      </p>
       {card.mechanism && (
-        <p className="mt-2 font-mono text-[11px] leading-relaxed text-ink-muted">
-          <span className="text-ink-muted/80">The mechanism — </span>
+        <p className="mt-1.5 font-sans text-sm leading-relaxed text-ink">
+          <span className="text-ink-muted">The mechanism — </span>
           {card.mechanism}
         </p>
       )}
@@ -1096,18 +1158,24 @@ function CardDetail({
               {card.marketRead.incumbents.map((c) => c.name).join(", ")}.
             </p>
           )}
-          {card.marketRead.whitespace && (
-            <p className="mt-1 font-mono text-[11px] leading-relaxed text-ink-muted">
-              {card.marketRead.whitespace}
-            </p>
-          )}
+          {/* The meter + the incumbent names already say "crowded" — don't restate it.
+              Spend the words on the one thing the UI can't show: WHY this opening matters.
+              UPL: never say "claim" / "patent" / "patentable" — this is market framing, not
+              legal advice. */}
           {card.marketRead.steer && (
             <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-accent">
-              <span className="text-ink-muted/80">The real claim — </span>
+              <span className="text-ink-muted/80">The opening — </span>
               {card.marketRead.steer}
             </p>
           )}
         </div>
+      )}
+      {/* No fabricated fallback: when live search didn't return real competitors, we show
+          this — never a market read guessed from the model's memory dressed as a finding. */}
+      {!card.marketRead && (
+        <p className="mt-3 border-t border-border/60 pt-3 font-mono text-[11px] italic leading-relaxed text-ink-muted">
+          Market not checked live for this direction — no verified competitors to show.
+        </p>
       )}
       <div className="mt-3 flex justify-end">
         {/* The only move: narrow further — three sharper directions of this pick. */}

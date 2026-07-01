@@ -38,7 +38,7 @@ export async function buildNotebook(projectId: string): Promise<{
   lines.push(`## ${title}`);
   lines.push("");
   lines.push(
-    "This notebook is a complete, ordered record of the inventor's own inputs and the verified provisional patent draft synthesized exclusively from them. No technical substance herein was introduced by the system."
+    "This notebook is a complete, ordered record of the inventor's own inputs and the verified Invention Concept Blueprint synthesized exclusively from them. No technical substance herein was introduced by the system."
   );
   lines.push("");
   lines.push("---");
@@ -51,7 +51,7 @@ export async function buildNotebook(projectId: string): Promise<{
   }
   lines.push("");
   lines.push("---");
-  lines.push("## Verified Provisional Patent Draft");
+  lines.push("## Verified Invention Concept Blueprint");
   for (const n of ordered) {
     lines.push(`\n### ${NODE_GRAPH[n.nodeKey]?.label ?? n.nodeKey}`);
     lines.push(n.draftOutput ?? "");

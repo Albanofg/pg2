@@ -54,7 +54,7 @@ function LoginForm() {
           Log in
         </h1>
         <p className="mt-2 font-mono text-sm text-ink-muted">
-          Your patents, sealed to your account.
+          Your inventions, sealed to your account.
         </p>
 
         <form onSubmit={submit} className="mt-8 space-y-3">

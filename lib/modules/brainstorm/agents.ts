@@ -500,6 +500,10 @@ export const InputClassifierOutput = z.object({
 });
 
 export const DeepenerOutput = z.object({
+  // The direction just narrowed is already a specific, buildable key concept — narrowing
+  // further would only add implementation detail. Drives the UI to offer the "lock it in"
+  // landing so the inventor converges in a few steps instead of drilling forever.
+  specific_enough: z.boolean().default(false),
   cards: z
     .array(
       z.object({
@@ -529,7 +533,10 @@ export async function runDeepener(
      */
     steer?: string;
   },
-): Promise<{ cards: { label: string; restatement: string }[] }> {
+): Promise<{
+  cards: { label: string; restatement: string }[];
+  specificEnough: boolean;
+}> {
   const system = await loadPrompt("deepener");
   const prompt = [
     `ORIGINAL PROBLEM (context): ${input.problem}`,
@@ -564,7 +571,7 @@ YOUR PREVIOUS REPLY DID NOT GIVE THREE USABLE OPTIONS. Output EXACTLY THREE dist
     const retry = out.cards.filter((c) => c.restatement.trim());
     if (retry.length > cards.length) cards = retry;
   }
-  return { cards: cards.slice(0, 3) };
+  return { cards: cards.slice(0, 3), specificEnough: out.specific_enough };
 }
 
 /**
