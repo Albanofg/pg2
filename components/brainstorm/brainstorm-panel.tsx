@@ -99,6 +99,9 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
   const [drillStack, setDrillStack] = useState<ExcavationFrontier[]>([]);
   // Deeper-level free text: combine the options, or steer the next narrowing in your words.
   const [steerInput, setSteerInput] = useState("");
+  // The market read of the top-level direction the inventor chose to drill into — carried
+  // to Conception as CONTEXT (the journey), so it's not lost on hand-off.
+  const [journeyMarket, setJourneyMarket] = useState<string | null>(null);
 
   // Load the saved guide (used for the walk's analogies). It no longer drives the
   // phase — routing is handled by the mount effect below, which never shows a text box.
@@ -397,10 +400,23 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
     if (!seed || !projectId) return;
     setHandoffBusy(true);
     try {
+      // The narrowing journey (each level's concept) + the chosen direction's market read =
+      // CONTEXT carried to Conception, so the record shows the path, not just the final line.
+      const path = [...drillStack.map((f) => f.spark), seed].filter(
+        (s, i, a) => !!s && s !== a[i - 1],
+      );
       await fetch("/api/conception", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ op: "ingest", raw: seed, projectId }),
+        body: JSON.stringify({
+          op: "ingest",
+          raw: seed,
+          projectId,
+          brainstormContext: {
+            ...(path.length ? { path } : {}),
+            ...(journeyMarket ? { marketRead: journeyMarket } : {}),
+          },
+        }),
       });
       clearSession();
       setStage("conception");
@@ -635,7 +651,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="font-sans text-sm font-semibold text-ink">
-                  {result.converged || drillStack.length >= 4
+                  {drillStack.length >= 3 && (result.converged || drillStack.length >= 6)
                     ? "You've got a well-defined concept."
                     : "Narrowing in — pick one, add a twist, or lock it in."}
                 </p>
@@ -650,7 +666,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
               <div
                 className={cn(
                   "rounded-md border p-3",
-                  result.converged || drillStack.length >= 4
+                  drillStack.length >= 3 && (result.converged || drillStack.length >= 6)
                     ? "border-accent/60 bg-accent/10"
                     : "border-accent/30 bg-accent/5",
                 )}
@@ -661,14 +677,14 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                 <p className="mt-1 font-sans text-sm leading-relaxed text-ink">
                   {result.spark}
                 </p>
-                {(result.converged || drillStack.length >= 4) && (
+                {(drillStack.length >= 3 && (result.converged || drillStack.length >= 6)) && (
                   <p className="mt-2 font-mono text-[11px] leading-relaxed text-ink-muted">
                     This concept is now well defined — most further refinements become
                     implementation details.
                   </p>
                 )}
                 <div className="mt-3 flex items-center justify-end gap-2">
-                  {(result.converged || drillStack.length >= 4) && (
+                  {(drillStack.length >= 3 && (result.converged || drillStack.length >= 6)) && (
                     <span className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-accent">
                       Recommended
                     </span>
@@ -680,7 +696,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                   >
                     {handoffBusy
                       ? "Continuing…"
-                      : result.converged || drillStack.length >= 4
+                      : drillStack.length >= 3 && (result.converged || drillStack.length >= 6)
                         ? "Continue to Development →"
                         : "That's my key concept — lock it in →"}
                   </Button>
@@ -688,7 +704,7 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
               </div>
 
               <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
-                {result.converged || drillStack.length >= 4
+                {drillStack.length >= 3 && (result.converged || drillStack.length >= 6)
                   ? "Keep refining"
                   : "Or sharpen further"}
               </div>
@@ -925,13 +941,18 @@ export default function BrainstormPanel({ maxW = "max-w-2xl" }: { maxW?: string 
                     <CardDetail
                       card={result.cards[selectedIdx]}
                       busy={busy}
-                      onDeeper={() =>
+                      onDeeper={() => {
                         // First drill: this card BECOMES the starting key concept (no prior
-                        // to fold into), so it's the direction, not an addition.
-                        void goDeeper({
-                          direction: result.cards[selectedIdx]!.restatement,
-                        })
-                      }
+                        // to fold into), so it's the direction, not an addition. Remember its
+                        // market read as the journey's context for the Conception hand-off.
+                        const c = result.cards[selectedIdx]!;
+                        setJourneyMarket(
+                          c.marketRead?.whyItMatters ??
+                            c.marketRead?.steer ??
+                            null,
+                        );
+                        void goDeeper({ direction: c.restatement });
+                      }}
                     />
                   ) : (
                     <div className="rounded-md border border-dashed border-border bg-bg/30 p-4 font-mono text-xs leading-relaxed text-ink-muted">

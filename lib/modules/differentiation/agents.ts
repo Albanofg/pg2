@@ -21,6 +21,7 @@ const PROMPT_FILES: Record<AgentName, string> = {
   helper: `${MODULE_4_DIR}/00-helper.md`,
   "key-concept-decomposer": `${MODULE_4_DIR}/06-key-concept-decomposer.md`,
   whitespace: `${MODULE_4_DIR}/01-whitespace.md`,
+  "differentiation-teacher": `${MODULE_4_DIR}/07-teacher.md`,
   "gap-framer": `${MODULE_4_DIR}/01-gap-framer.md`,
   "differentiation-formalizer": `${MODULE_4_DIR}/02-differentiation-formalizer.md`,
   verifier: `${MODULE_4_DIR}/03-verifier.md`,
@@ -42,6 +43,7 @@ const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
   helper: ["helper_doctrine"],
   "key-concept-decomposer": [],
   whitespace: ["examiner_grounds"],
+  "differentiation-teacher": [],
   "gap-framer": ["examiner_grounds"],
   "differentiation-formalizer": [],
   verifier: [],
@@ -171,6 +173,74 @@ export async function runWhitespace(
       : "(no prior art found — return totalPatentsAnalyzed 0, a Green Match, an empty patentAnalyses list, and an open-landscape paragraph noting the area appears open)",
   ].join("\n");
   return runAgent({ agent: "whitespace", system, prompt, schema: WhitespaceOutput, temperature: 0.2 });
+}
+
+/**
+ * The Differentiation Teacher — turns the raw whitespace analysis into a TIGHT,
+ * scannable plain-English lesson (~20 seconds to read) that leads the inventor to
+ * their own distinction. It never writes the inventor's differentiation; the
+ * scaffold has blanks the inventor fills.
+ */
+export const DiffTeachOutput = z.object({
+  intro: z.string().default(""),
+  buckets: z
+    .array(
+      z.object({
+        label: z.string().default(""),
+        plain: z.string().default(""),
+        not_you: z.string().default(""),
+      }),
+    )
+    .default([]),
+  distinction: z.string().default(""),
+  key_terms: z
+    .array(z.object({ term: z.string().default(""), meaning: z.string().default("") }))
+    .default([]),
+  analogy: z.string().default(""),
+  scaffold: z.string().default(""),
+  prompt: z.string().default(""),
+});
+export type DiffTeachResult = z.infer<typeof DiffTeachOutput>;
+
+export async function runDifferentiationTeacher(
+  runAgent: AgentRunner,
+  input: { title: string; statement: string; analysis: WhitespaceResult },
+): Promise<DiffTeachResult> {
+  const system = await loadAgentPrompt("differentiation-teacher");
+  const a = input.analysis;
+  const prompt = [
+    "THE KEY CONCEPT:",
+    `${input.title}: ${input.statement}`,
+    "",
+    `THE ANALYSIS — ${a.totalPatentsAnalyzed} existing-art reference(s), Match Level: ${a.overallMatchLevel.level}.`,
+    "",
+    "REFERENCES AND THE MECHANISMS THEY DESCRIBE (group these into 2–4 plain-English buckets — never one bucket per reference):",
+    a.patentAnalyses.length
+      ? a.patentAnalyses
+          .map(
+            (p, i) =>
+              `[${i + 1}] ${p.patentTitle || p.patentNumber || "(untitled)"}: ${
+                p.extractedMechanisms.length ? p.extractedMechanisms.join("; ") : "(no specific mechanism extracted)"
+              }`,
+          )
+          .join("\n")
+      : "(no close existing art — the area appears open)",
+    "",
+    "THE DISTINGUISHING FEATURES ALREADY SURFACED (draw the distinction and key terms from these — invent nothing):",
+    a.primaryDistinguishingFeatures.length
+      ? a.primaryDistinguishingFeatures.map((f) => `• ${f}`).join("\n")
+      : "(none surfaced)",
+    "",
+    "THE OPEN-LANDSCAPE SYNTHESIS (context):",
+    a.consolidatedOpenLandscapeAnalysis || "(none)",
+  ].join("\n");
+  return runAgent({
+    agent: "differentiation-teacher",
+    system,
+    prompt,
+    schema: DiffTeachOutput,
+    temperature: 0.3,
+  });
 }
 
 export const GapFramerOutput = z.object({
@@ -380,12 +450,15 @@ export async function runHelper(
     inventorMaterial: string;
     conversation: { role: string; text: string }[];
     consciousness?: string;
+    /** Phase-aware "where you are" line; falls back to the capture-phase framing. */
+    where?: string;
   },
 ): Promise<HelperResult> {
   const system = await loadAgentPrompt("helper");
   const prompt = buildHelperPrompt({
     message: input.message,
     where:
+      input.where ??
       "Module 4 (Differentiation) — the heavy moment: per concept, framing the prior-art gap and capturing, in the inventor's own words, what is genuinely new",
     context: input.context,
     inventorMaterial: input.inventorMaterial,

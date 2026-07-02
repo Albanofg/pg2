@@ -149,6 +149,8 @@ export type Module5View = {
   phase: Module5Phase;
   cards: Module5Card[];
   keyConcepts: ShowcaseKeyConcept[];
+  /** The compiled Invention Concept Blueprint draft — the editable, tabbed sections. */
+  disclosure: DisclosureSection[];
   genus?: Genus;
   species: Species[];
   /** True once broadening has been applied (or deliberately skipped). */

@@ -95,6 +95,21 @@ export type WhitespaceAnalysis = {
   keyConceptDevelopmentGuidance: string;
 };
 
+/**
+ * The Differentiation Teacher's TIGHT plain-English lesson — the primary view of
+ * the whitespace analysis. Trims the raw analysis down to the few lines that
+ * actually help the inventor articulate their difference (never a wall of text).
+ */
+export type WhitespaceTeaching = {
+  intro: string;
+  buckets: { label: string; plain: string; not_you: string }[];
+  distinction: string;
+  key_terms: { term: string; meaning: string }[];
+  analogy: string;
+  scaffold: string;
+  prompt: string;
+};
+
 /* ------------------------------------------------------------------ *
  * Module-4 ledger vocabulary
  * ------------------------------------------------------------------ */
@@ -217,6 +232,8 @@ export type WhitespaceCard = {
   conceptId: string;
   title: string;
   analysis: WhitespaceAnalysis;
+  /** The concise plain-English lesson (primary view); raw analysis is secondary. */
+  teaching?: WhitespaceTeaching;
 };
 
 export type Module4Card =
@@ -345,6 +362,7 @@ export type AgentName =
   | "helper" // the user-facing Helper: answers, teaches, brainstorms (every module has one)
   | "key-concept-decomposer" // splits a carried Concept into its distinct novel elements (N Key Concepts)
   | "whitespace" // V1's prior-art mechanism surfacer + strategic synthesis per Key Concept
+  | "differentiation-teacher" // turns the raw whitespace analysis into a short, plain-English lesson
   | "gap-framer" // frames what the art covers + the open points (factual, no novelty)
   | "differentiation-formalizer" // cleans the inventor's novelty into differentiation text
   | "pohc-scorer" // scores the three Proof-of-Human-Conception factors per Key Concept

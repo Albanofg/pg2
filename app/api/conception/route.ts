@@ -10,7 +10,13 @@ export const runtime = "nodejs";
 
 type Body =
   | { op: "view"; projectId: string }
-  | { op: "ingest"; projectId: string; raw: string }
+  | {
+      op: "ingest";
+      projectId: string;
+      raw: string;
+      /** The brainstorm journey (context, not conception) that produced the key concept. */
+      brainstormContext?: { path?: string[]; marketRead?: string };
+    }
   | { op: "act"; projectId: string; cardId: string; input: CardActionInput }
   | { op: "message"; projectId: string; text: string }
   | { op: "reset"; projectId: string };
@@ -48,7 +54,8 @@ export async function POST(req: Request) {
 
     const engine = await loadConception(body.projectId);
     let view;
-    if (body.op === "ingest") view = await engine.ingest(body.raw ?? "");
+    if (body.op === "ingest")
+      view = await engine.ingest(body.raw ?? "", body.brainstormContext);
     else if (body.op === "act") view = await engine.act(body.cardId, body.input);
     else if (body.op === "message") view = await engine.tell(body.text ?? "");
     else return NextResponse.json({ error: "unknown_op" }, { status: 400 });

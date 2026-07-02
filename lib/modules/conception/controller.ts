@@ -163,16 +163,33 @@ export class ConceptionModule {
    * verbatim, then formalized and handed back as a single Review card. No
    * questions, no decomposition yet — acknowledgment first.
    */
-  async ingest(rawInput: string): Promise<Module1View> {
+  async ingest(
+    rawInput: string,
+    brainstormContext?: { path?: string[]; marketRead?: string },
+  ): Promise<Module1View> {
     const text = rawInput.trim();
     if (!text) return this.view();
 
-    // VERBATIM FIRST — before any AI step.
+    // VERBATIM FIRST — the inventor's own key concept, before any AI step. This is the
+    // conception; it gets sealed as inventor_input.
     this.ledger.recordInventorSource("inventor_input", text, [
       "module1",
       "conception",
     ]);
     this.material.push(text);
+
+    // The BRAINSTORM JOURNEY that produced this key concept = CONTEXT, never conception. The
+    // AI generated the directions + market read; the human chose and narrowed. Recorded as a
+    // machine event so the notebook shows the path they took, WITHOUT treating any of it as
+    // human-conceived substance (the boundary that keeps the proof clean).
+    if (brainstormContext?.path?.length || brainstormContext?.marketRead) {
+      this.ledger.recordMachineEvent("agent_distilled", ["brainstorm-context"], {
+        ...(brainstormContext.path?.length ? { path: brainstormContext.path } : {}),
+        ...(brainstormContext.marketRead
+          ? { marketRead: brainstormContext.marketRead }
+          : {}),
+      });
+    }
 
     await this.buildStatement();
     return this.view();
@@ -206,7 +223,7 @@ export class ConceptionModule {
         await this.handleLeap(cardId, intent, input as LeapInput);
         break;
       case "candidate_concept":
-        this.handleCandidate(cardId, intent, input as CandidateActionInput);
+        await this.handleCandidate(cardId, intent, input as CandidateActionInput);
         break;
       case "brainstorm":
         await this.handleBrainstorm(cardId, input as BrainstormInput);
@@ -895,11 +912,11 @@ export class ConceptionModule {
     if (this.phase === "reviewing_statement") await this.buildStatement();
   }
 
-  private handleCandidate(
+  private async handleCandidate(
     cardId: string,
     intent: Intent,
     input: CandidateActionInput,
-  ): void {
+  ): Promise<void> {
     if (intent.kind !== "candidate") return;
     const concept = this.concepts.get(intent.conceptId);
     if (!concept) return;
@@ -916,7 +933,31 @@ export class ConceptionModule {
       this.confirmed.delete(concept.id);
     } else {
       const target = this.concepts.get(input.into);
-      if (target) target.conception_trail.push(...concept.conception_trail);
+      if (target) {
+        target.conception_trail.push(...concept.conception_trail);
+        // REGENERATE the combined idea: fold both concepts into one coherent statement
+        // (both are the inventor's own — this is a faithful synthesis, NOT new substance).
+        try {
+          const revised = await runReviser(this.runAgent, {
+            current: target.formalized_statement,
+            instruction: `Merge in this second concept the inventor also owns, keeping BOTH ideas together as ONE coherent concept. Combine them faithfully — add NO new inventive substance, invent nothing. The concept to fold in: "${concept.formalized_statement}"`,
+            consciousness: this.consciousness.renderForAgent({ part: CORE_PART }),
+          });
+          if (revised.core_statement?.trim()) {
+            target.formalized_statement = revised.core_statement.trim();
+            // If the target is still an open candidate card, refresh it so the card shows
+            // the newly combined idea, not the pre-merge statement.
+            for (const c of this.openCards.values()) {
+              if (c.type === "candidate_concept" && c.conceptId === target.id) {
+                c.statement = target.formalized_statement;
+              }
+            }
+          }
+          this.ledger.recordMachineEvent("agent_distilled", ["merge"]);
+        } catch (err) {
+          console.error("[conception] merge synthesis failed", err);
+        }
+      }
       concept.status = { state: "merged_into", into: input.into };
       this.confirmed.delete(concept.id);
     }
@@ -947,6 +988,15 @@ export class ConceptionModule {
     ]);
     this.pushTurn({ role: "inventor", text });
     this.material.push(text);
+    // The tutor conversation that led here = CONTEXT (the AI taught, the human conceived).
+    // Recorded as a machine event so the journey is in the notebook, never as conception.
+    if (input.tutorTranscript?.length) {
+      this.ledger.recordMachineEvent(
+        "agent_distilled",
+        ["tutor-context", `direction:${input.direction}`],
+        { transcript: input.tutorTranscript },
+      );
+    }
     await this.materializeLeapConcept(text, entry.id, input.direction);
     // Mark this direction as developed so the card shows it done (and doesn't
     // re-offer it). The card stays open for the OTHER directions. Persists in the

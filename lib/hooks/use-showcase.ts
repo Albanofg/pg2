@@ -8,6 +8,7 @@ const EMPTY: Module5View = {
   phase: "choosing",
   cards: [],
   keyConcepts: [],
+  disclosure: [],
   species: [],
   broadened: false,
   conversation: [],
@@ -76,6 +77,11 @@ export function useShowcase(projectId: string | null) {
     [post],
   );
   const tell = useCallback((text: string) => post({ op: "message", text }), [post]);
+  const editSection = useCallback(
+    (key: string, body: string) => post({ op: "edit_section", key, body }),
+    [post],
+  );
+  const expand = useCallback(() => post({ op: "expand" }), [post]);
 
   /** Export the finished disclosure + RFC-3161-sealed proof package. */
   const exportDisclosure = useCallback(async (): Promise<{
@@ -109,5 +115,5 @@ export function useShowcase(projectId: string | null) {
     return post({ op: "start" });
   }, [post]);
 
-  return { view, busy, error, ready, act, tell, restart, exportDisclosure };
+  return { view, busy, error, ready, act, tell, editSection, expand, restart, exportDisclosure };
 }

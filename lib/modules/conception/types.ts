@@ -281,7 +281,13 @@ export type CandidateActionInput =
  * dismiss the brainstorm to move on.
  */
 export type BrainstormInput =
-  | { action: "develop"; direction: string; text: string }
+  | {
+      action: "develop";
+      direction: string;
+      text: string;
+      /** The "Tell me more" tutor conversation that led here — recorded as CONTEXT. */
+      tutorTranscript?: { role: "user" | "assistant"; content: string }[];
+    }
   | { action: "dismiss" };
 
 export type CardActionInput =

@@ -19,6 +19,7 @@ const EMPTY_VIEW: Module5View = {
   phase: "choosing",
   cards: [],
   keyConcepts: [],
+  disclosure: [],
   species: [],
   broadened: false,
   conversation: [],
@@ -31,6 +32,8 @@ type Body =
   | { op: "start"; projectId: string }
   | { op: "act"; projectId: string; cardId: string; input: CardActionInput }
   | { op: "message"; projectId: string; text: string }
+  | { op: "edit_section"; projectId: string; key: string; body: string }
+  | { op: "expand"; projectId: string }
   | { op: "reset"; projectId: string };
 
 /**
@@ -104,6 +107,20 @@ export async function POST(req: Request) {
         const engine = await loadShowcase(body.projectId);
         if (!engine) return NextResponse.json(EMPTY_VIEW);
         const view = await engine.tell(body.text ?? "");
+        await saveShowcase(body.projectId, engine);
+        return NextResponse.json(view);
+      }
+      case "edit_section": {
+        const engine = await loadShowcase(body.projectId);
+        if (!engine) return NextResponse.json(EMPTY_VIEW);
+        const view = engine.editSection(body.key, body.body ?? "");
+        await saveShowcase(body.projectId, engine);
+        return NextResponse.json(view);
+      }
+      case "expand": {
+        const engine = await loadShowcase(body.projectId);
+        if (!engine) return NextResponse.json(EMPTY_VIEW);
+        const view = await engine.expand();
         await saveShowcase(body.projectId, engine);
         return NextResponse.json(view);
       }

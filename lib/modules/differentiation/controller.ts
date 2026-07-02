@@ -4,6 +4,7 @@ import { hasCheckpoint, sealCheckpoint } from "@/lib/modules/shared/checkpoint";
 import type { ConceptObject, HelperTurn } from "@/lib/modules/shared";
 import {
   runDifferentiationFormalizer,
+  runDifferentiationTeacher,
   runGapFramer,
   runHelper,
   runKeyConceptDecomposer,
@@ -28,6 +29,7 @@ import type {
   NoveltyInput,
   ReviewActionInput,
   SectionAgent,
+  WhitespaceTeaching,
 } from "./types";
 
 type PohcFactor = "conception" | "quality" | "known_concepts";
@@ -121,7 +123,9 @@ export class DifferentiationModule {
     this.ledger.recordMachineEvent("differentiation_started", ["module4"], {
       conceptCount: this.concepts.size,
     });
-    await this.decomposeConcepts();
+    // ONE DIFFERENTIATION PER CONCEPT. Each concept carried in from Landscape is
+    // differentiated as-is — we do NOT split it into multiple Key Concepts, so the
+    // inventor answers exactly as many differentiations as the concepts they have.
     await this.frameNext();
     return this.view();
   }
@@ -221,6 +225,10 @@ export class DifferentiationModule {
         inventorMaterial: this.inventorMaterial(),
         conversation: this.conversation.slice(-6).map((tn) => ({ role: tn.role, text: tn.text })),
         consciousness: this.consciousness.renderForAgent(),
+        where:
+          this.phase === "anchoring"
+            ? "Module 4 (Differentiation), the ANCHORING step: the inventor is choosing which Key Concepts to keep (anchor) vs drop. Help them decide which are worth keeping and which overlap."
+            : undefined,
       });
       this.pushTurn({
         role: "helper",
@@ -242,6 +250,25 @@ export class DifferentiationModule {
   /** A compact description of the live Differentiation state for the Helper. */
   private helperContext(): string {
     const active = [...this.concepts.values()].filter((c) => c.status.state === "active");
+
+    // At anchoring the inventor is deciding which Key Concepts to KEEP (anchor) vs
+    // DROP. Give the Helper the full slate + an explicit brief so, when asked
+    // "which should I keep?", it can recommend the genuinely distinct ones and call
+    // out near-duplicates (keep the sharpest, drop/merge the restatements).
+    if (this.phase === "anchoring") {
+      const slate = active
+        .filter((c) => c.differentiation_statement)
+        .map((c, i) => `[${i + 1}] ${c.title}\n    what's new: ${c.differentiation_statement}`)
+        .join("\n");
+      return [
+        "Phase: anchoring — the inventor is choosing which of these Key Concepts to ANCHOR (keep as a protected Key Concept) vs DROP.",
+        "If they ask which to keep/anchor: recommend anchoring the ones that are genuinely distinct against the prior art, and dropping or merging any that merely restate another concept on the slate. Name specific concepts by their title, say which to keep and which look like duplicates of each other, and give a one-line reason each. Never invent a new mechanism — judge only what's written.",
+        slate ? `The Key Concepts up for anchoring:\n${slate}` : "No differentiated concepts on the slate yet.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
     return [
       `Phase: ${this.phase}.`,
       active.length
@@ -304,6 +331,9 @@ export class DifferentiationModule {
 
   /** Frame the next Concept that still needs the inventor's novelty call. */
   private async frameNext(): Promise<void> {
+    // One concept at a time — clear any prior concept's lesson/scaffold/ask so the
+    // screen never stacks up. Only the concept we're about to frame will be shown.
+    this.clearFramingCards();
     const next = [...this.concepts.values()].find(
       (c) => c.status.state === "active" && !c.novelty && !c.differentiation_statement,
     );
@@ -339,14 +369,28 @@ export class DifferentiationModule {
         mechanism: next.formalized_statement,
         openPoints: questions.length
           ? questions
-          : ["What does your concept do that the closest prior art does not?"],
+          : ["What does your concept do that the closest existing art does not?"],
       };
       this.ledger.recordMachineEvent("agent_whitespace", ["differentiation"], {
         conceptId: next.id,
         matchLevel: ws.overallMatchLevel.level,
         references: ws.totalPatentsAnalyzed,
       });
-      this.emitWhitespace(next);
+
+      // Teach it: trim the raw analysis into a short, scannable plain-English
+      // lesson (the primary view). Optional — if it fails, the raw analysis shows.
+      let teaching: WhitespaceTeaching | undefined;
+      try {
+        teaching = await runDifferentiationTeacher(this.runAgent, {
+          title: next.title,
+          statement: next.formalized_statement,
+          analysis: ws,
+        });
+      } catch (err) {
+        console.error("[differentiation] teacher failed for", next.id, err);
+      }
+
+      this.emitWhitespace(next, teaching);
       whitespaced = true;
     } catch (err) {
       console.error("[differentiation] whitespace failed for", next.id, err);
@@ -372,9 +416,9 @@ export class DifferentiationModule {
       } catch (err) {
         console.error("[differentiation] gap-framer failed for", next.id, err);
         next.gap = {
-          artSummary: "(couldn't summarize the prior art — proceed from your own view)",
+          artSummary: "(couldn't summarize the existing art — proceed from your own view)",
           mechanism: next.formalized_statement,
-          openPoints: ["What does your concept do that the closest prior art does not?"],
+          openPoints: ["What does your concept do that the closest existing art does not?"],
         };
       }
       this.emitGap(next);
@@ -383,7 +427,7 @@ export class DifferentiationModule {
     this.emitNoveltyCapture(next);
   }
 
-  private emitWhitespace(concept: DifferentiatedConcept): void {
+  private emitWhitespace(concept: DifferentiatedConcept, teaching?: WhitespaceTeaching): void {
     if (!concept.whitespace) return;
     const id = this.genId();
     this.openCards.set(id, {
@@ -392,6 +436,7 @@ export class DifferentiationModule {
       conceptId: concept.id,
       title: concept.title,
       analysis: concept.whitespace,
+      ...(teaching ? { teaching } : {}),
     });
   }
 
@@ -399,6 +444,8 @@ export class DifferentiationModule {
     if (intent.kind !== "novelty") return;
     const concept = this.concepts.get(intent.conceptId);
     this.resolveCard(cardId);
+    // The inventor has answered — clear this concept's lesson (one thing at a time).
+    if (concept) this.clearFramingCards(concept.id);
     const statement = input.statement.trim();
     if (!concept || !statement) return;
 
@@ -413,7 +460,18 @@ export class DifferentiationModule {
       verbatim_text: statement,
       timestamp: e.timestamp,
     });
-    await this.formalizeDifferentiation(concept, statement);
+
+    // NO APPROVE STEP. What the inventor typed IS the differentiation, in their own
+    // words — we do not rephrase it and we do not make them approve a rewrite of
+    // what they just wrote. Record it as-is and move straight to the next concept.
+    concept.differentiation_statement = statement;
+    concept.provenance.push({
+      excerpt: statement,
+      provenance: "inventor_conceived",
+      derivedFrom: [e.id],
+    });
+    await this.recordDifferentiationToConsciousness(concept);
+    await this.frameNext();
   }
 
   /** Run the formalizer on the inventor's novelty, then a Differentiation-review card. */
@@ -567,7 +625,7 @@ export class DifferentiationModule {
           ...base,
           ...(priorSections ? { priorSections } : {}),
         });
-        return r.body?.trim() ?? "";
+        return unwrapBody(r.body?.trim() ?? "");
       } catch (err) {
         console.error(`[differentiation] section ${agent} failed`, err);
         return "";
@@ -788,7 +846,7 @@ export class DifferentiationModule {
     const entry = this.consciousness.record({
       part: `differentiation:${concept.id}`,
       content: concept.differentiation_statement,
-      why: `what concept "${concept.title}" does that the prior art does not`,
+      why: `what concept "${concept.title}" does that the existing art does not`,
       agent: "differentiation-formalizer",
       derivedFrom: conceptEntry ? [conceptEntry.id] : [],
       tracesTo: [concept.novelty?.ledgerId].filter(Boolean) as string[],
@@ -849,15 +907,16 @@ export class DifferentiationModule {
 
   private emitNoveltyCapture(concept: DifferentiatedConcept): void {
     const id = this.genId();
-    const points = concept.gap?.openPoints ?? [];
+    // The lesson above already did the teaching. The capture card is just the one
+    // clean ask — NOT the wall of per-reference clarification questions. Those
+    // questions still live in concept.gap.openPoints, where the Helper draws on
+    // them if the inventor asks it to talk an angle through.
     this.openCards.set(id, {
       id,
       type: "novelty_capture",
       conceptId: concept.id,
       title: concept.title,
-      context: points.length
-        ? `Against the closest art, only you can say what's genuinely new here:\n- ${points.join("\n- ")}`
-        : "In your own words, what does this concept do that the closest prior art does not?",
+      context: "In your own words, what does this concept do that the closest existing art does not?",
     });
     this.intents.set(id, { kind: "novelty", conceptId: concept.id });
   }
@@ -865,6 +924,45 @@ export class DifferentiationModule {
   private resolveCard(cardId: string): void {
     this.openCards.delete(cardId);
     this.intents.delete(cardId);
+  }
+
+  /**
+   * ONE CONCEPT AT A TIME. Clear the per-concept framing cards (the whitespace
+   * lesson, the fallback gap, and the novelty-capture ask) so only the concept
+   * currently being differentiated is ever on screen — never a stack of lessons
+   * and scaffolds. Pass a conceptId to clear just that concept's cards; omit it to
+   * clear every concept's framing cards before the next one is emitted.
+   */
+  private clearFramingCards(conceptId?: string): void {
+    for (const [cid, c] of [...this.openCards]) {
+      if (
+        (c.type === "whitespace" || c.type === "gap" || c.type === "novelty_capture") &&
+        (conceptId === undefined || c.conceptId === conceptId)
+      ) {
+        this.resolveCard(cid);
+      }
+    }
+  }
+
+  /**
+   * Heal older saved state on load: keep the framing cards (lesson / gap / ask)
+   * only for the concept currently being differentiated, dropping any left over
+   * from concepts already handled. Lets a plain page reload clean up a session
+   * that stacked multiple lessons before the one-at-a-time rule existed — no need
+   * to redo the flow.
+   */
+  private normalizeFramingCards(): void {
+    const current = [...this.concepts.values()].find(
+      (c) => c.status.state === "active" && !c.novelty && !c.differentiation_statement,
+    );
+    for (const [cid, c] of [...this.openCards]) {
+      if (
+        (c.type === "whitespace" || c.type === "gap" || c.type === "novelty_capture") &&
+        c.conceptId !== current?.id
+      ) {
+        this.resolveCard(cid);
+      }
+    }
   }
 
   /* ------------------------------------------------------------------ *
@@ -903,12 +1001,35 @@ export class DifferentiationModule {
     m.openCards = new Map(snap.openCards.map((c) => [c.id, c]));
     m.intents = new Map(snap.intents);
     m.conversation = (snap.conversation ?? []).map((t) => ({ ...t }));
+    // Heal pre-one-at-a-time sessions: keep only the current concept's framing.
+    m.normalizeFramingCards();
     return m;
   }
 }
 
+/**
+ * Guard against a section drafter double-wrapping its output. `generateObject`
+ * already enforces the `{ body: string }` shape, but a model sometimes ALSO emits
+ * the literal JSON envelope as the body value — so `body` comes back as the string
+ * `{"body":"…the prose…"}`. Unwrap it so the disclosure shows prose, not JSON.
+ */
+function unwrapBody(raw: string): string {
+  const t = raw.trim();
+  if (t.startsWith("{") && t.includes('"body"')) {
+    try {
+      const o = JSON.parse(t);
+      if (o && typeof o.body === "string") return o.body.trim();
+    } catch {
+      // not valid JSON — fall through and return the raw text as-is
+    }
+  }
+  return raw;
+}
+
 function cloneDisclosure(d: InventionDisclosure): InventionDisclosure {
-  return { sections: d.sections.map((s) => ({ ...s })) };
+  // Unwrap at READ time too, so a draft compiled + saved before the compile-time
+  // guard existed still displays clean prose instead of a leaked {"body":"…"} blob.
+  return { sections: d.sections.map((s) => ({ ...s, body: unwrapBody(s.body) })) };
 }
 
 /* ------------------------------------------------------------------ */

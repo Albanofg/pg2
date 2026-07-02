@@ -198,6 +198,7 @@ export class ShowcaseModule {
       phase: this.phase,
       cards: [...this.openCards.values()],
       keyConcepts: [...this.keyConcepts.values()].map(cloneKC),
+      disclosure: this.disclosure ? this.disclosure.map((s) => ({ ...s, body: unwrapBody(s.body) })) : [],
       ...(this.genus ? { genus: { ...this.genus } } : {}),
       species: this.species.map((s) => ({ ...s, key_components: [...s.key_components], technical_improvements: [...s.technical_improvements] })),
       broadened: this.broadened,
@@ -207,6 +208,37 @@ export class ShowcaseModule {
     };
   }
 
+  /**
+   * Edit one section of the ICB draft in place — the inventor's own final polish.
+   * Recorded verbatim as an inventor edit (their words are the record), persisted
+   * so it survives reload and flows into the export.
+   */
+  editSection(key: string, body: string): Module5View {
+    const section = this.disclosure?.find((s) => s.key === key);
+    const next = body.trim();
+    if (section && next && next !== section.body) {
+      section.body = next;
+      this.ledger.recordInventorSource("inventor_edit", next, ["showcase", "section-edit", key]);
+    }
+    return this.view();
+  }
+
+  /**
+   * Start (or re-run) Genus & Species Expansion on demand — the top-bar action.
+   * Clears any open broadening cards and regenerates the paradigm-neutral genus +
+   * alternative species so the inventor can broaden even after reaching the draft.
+   */
+  async expand(): Promise<Module5View> {
+    for (const [id, c] of [...this.openCards]) {
+      if (c.type === "choice" || c.type === "variation" || c.type === "widened_review") {
+        this.resolveCard(id);
+      }
+    }
+    this.species = [];
+    await this.generateVariations();
+    return this.view();
+  }
+
   /** The finished Key Concepts (broadened where the inventor accepted it). */
   finish(): ShowcaseKeyConcept[] {
     return [...this.keyConcepts.values()].map(cloneKC);
@@ -214,7 +246,7 @@ export class ShowcaseModule {
 
   /** The Invention Disclosure carried from Module 4 (for export). */
   getDisclosure(): DisclosureSection[] | null {
-    return this.disclosure ? this.disclosure.map((s) => ({ ...s })) : null;
+    return this.disclosure ? this.disclosure.map((s) => ({ ...s, body: unwrapBody(s.body) })) : null;
   }
 
   ledgerEntries() {
@@ -616,6 +648,23 @@ export class ShowcaseModule {
 
 function cloneKC(k: ShowcaseKeyConcept): ShowcaseKeyConcept {
   return { ...k, verbatim: [...k.verbatim] };
+}
+
+/**
+ * Heal a section body that was compiled + saved as a leaked `{"body":"…"}` JSON
+ * envelope (from before the disclosure guard existed), so the draft shows prose.
+ */
+function unwrapBody(raw: string): string {
+  const t = (raw ?? "").trim();
+  if (t.startsWith("{") && t.includes('"body"')) {
+    try {
+      const o = JSON.parse(t);
+      if (o && typeof o.body === "string") return o.body.trim();
+    } catch {
+      // not valid JSON — leave as-is
+    }
+  }
+  return raw;
 }
 
 function defaultGenId(): string {

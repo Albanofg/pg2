@@ -43,9 +43,12 @@ RULES:
 - UPL (hard): no output field may contain the words "claim", "patent", "patentable", "prior
   art", "novelty", or "examiner", or any statement about whether something can be patented.
   Describe the idea in plain product/technical language only — never legal advice.
-- CONVERGE FAST — a few questions, not thirty. Set `specific_enough: true` as soon as the
-  UPDATED key concept is a specific, buildable idea — i.e. narrowing further would only add
-  implementation detail, not a sharper IDEA. Usually within TWO or THREE narrowings. Do NOT
+- CONVERGE FAST, BUT NOT INSTANTLY — a few questions, not one, and not thirty. Set
+  `specific_enough: true` once the UPDATED key concept is a specific, buildable idea — i.e.
+  narrowing further would only add implementation detail, not a sharper IDEA. But NEVER on the
+  first or second narrowing: the concept has barely moved, so keep `specific_enough: false`
+  through at least the first two or three narrowings, then converge. The inventor should
+  answer a few real questions before it says "well defined". Do NOT
   drill into fine detail (which branch, which threshold, which edge case) — that traps the
   inventor. When in doubt after a couple of levels, converge. (Still output three cards as
   optional "sharpen even more" choices; the true signal is `specific_enough`.)

@@ -13,6 +13,7 @@ import type {
   Module4Card,
   NoveltyCaptureCard,
   WhitespaceCard,
+  WhitespaceTeaching,
 } from "@/lib/modules/differentiation/types";
 
 /**
@@ -221,12 +222,13 @@ function WhitespaceView({ card }: { card: WhitespaceCard }) {
       : level === "Yellow Match"
         ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
         : "border-red-500/40 bg-red-500/10 text-red-400";
+  const t = card.teaching;
   return (
     <div className="rounded-md border border-border bg-panel p-4">
       <div className="flex items-center justify-between gap-2">
         <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
-          Open landscape · {a.totalPatentsAnalyzed} reference
-          {a.totalPatentsAnalyzed === 1 ? "" : "s"} analyzed
+          {t ? "Let's find your difference" : "Open landscape"} · {a.totalPatentsAnalyzed} reference
+          {a.totalPatentsAnalyzed === 1 ? "" : "s"} checked
         </div>
         <span
           className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] ${badge}`}
@@ -235,7 +237,122 @@ function WhitespaceView({ card }: { card: WhitespaceCard }) {
         </span>
       </div>
       <div className="mt-1 font-sans text-sm font-semibold text-ink">{card.title}</div>
-      <p className="mt-1 font-mono text-[10px] text-ink-muted">
+
+      {/* PRIMARY VIEW: the short lesson (or a concise summary if the lesson is absent). */}
+      {t ? <TeachingLesson t={t} /> : <WhitespaceFallback a={a} />}
+
+      {/* SECONDARY: the full raw analysis, always tucked behind a disclosure. */}
+      <details className="group mt-4">
+        <summary className="cursor-pointer list-none font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted hover:text-ink">
+          <span className="group-open:hidden">▸ View the full landscape analysis</span>
+          <span className="hidden group-open:inline">▾ Hide the full landscape analysis</span>
+        </summary>
+        <div className="mt-3 border-t border-border pt-3">
+          <WhitespaceRawAnalysis a={a} />
+        </div>
+      </details>
+    </div>
+  );
+}
+
+/** Concise primary view when the teacher didn't produce a lesson — never a wall. */
+function WhitespaceFallback({ a }: { a: WhitespaceCard["analysis"] }) {
+  return (
+    <div className="mt-3 space-y-3 font-sans text-[13px] leading-relaxed text-ink">
+      {a.primaryDistinguishingFeatures.length > 0 ? (
+        <div className="rounded border border-emerald-500/30 bg-emerald-500/[0.06] p-2.5">
+          <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-emerald-400/90">
+            What looks distinct here
+          </p>
+          <ul className="mt-1 list-disc pl-4 text-ink">
+            {a.primaryDistinguishingFeatures.slice(0, 4).map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="text-ink-muted">
+          We checked {a.totalPatentsAnalyzed} nearby reference
+          {a.totalPatentsAnalyzed === 1 ? "" : "s"}. The full breakdown is below — but the one
+          sentence that matters is yours to write.
+        </p>
+      )}
+      <p className="text-ink-muted">Full landscape breakdown is tucked below if you want it.</p>
+    </div>
+  );
+}
+
+/** The concise, scannable plain-English lesson — the primary whitespace view. */
+function TeachingLesson({ t }: { t: WhitespaceTeaching }) {
+  return (
+    <div className="mt-3 space-y-3 font-sans text-[13px] leading-relaxed text-ink">
+      {t.intro && <p>{t.intro}</p>}
+
+      {t.buckets.length > 0 && (
+        <div className="space-y-2">
+          <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            What&apos;s already out there
+          </p>
+          {t.buckets.map((b, i) => (
+            <div key={i} className="rounded border border-border bg-bg p-2.5">
+              {b.label && <div className="font-semibold text-ink">{b.label}</div>}
+              {b.plain && <p className="mt-0.5 text-ink-muted">{b.plain}</p>}
+              {b.not_you && <p className="mt-1 text-[12px] italic text-amber-400/90">{b.not_you}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {t.distinction && (
+        <div className="rounded border border-emerald-500/30 bg-emerald-500/[0.06] p-2.5">
+          <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-emerald-400/90">
+            The opening
+          </p>
+          <p className="mt-1 text-ink">{t.distinction}</p>
+        </div>
+      )}
+
+      {t.key_terms.length > 0 && (
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            Words to reuse
+          </p>
+          <dl className="mt-1 space-y-1">
+            {t.key_terms.map((k, i) => (
+              <div key={i} className="text-[12px]">
+                <dt className="inline font-semibold text-ink">{k.term}</dt>
+                <dd className="inline text-ink-muted"> — {k.meaning}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+
+      {t.analogy && (
+        <p className="border-l-2 border-border pl-3 text-[12px] italic text-ink-muted">
+          {t.analogy}
+        </p>
+      )}
+
+      {t.scaffold && (
+        <div className="rounded border border-dashed border-border bg-bg p-2.5">
+          <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            A way to say it (fill in the blanks)
+          </p>
+          <p className="mt-1 whitespace-pre-wrap text-[12px] text-ink">{t.scaffold}</p>
+        </div>
+      )}
+
+      {t.prompt && <p className="font-semibold text-ink">{t.prompt}</p>}
+    </div>
+  );
+}
+
+/** The full V1 landscape dump — now secondary, behind a disclosure. */
+function WhitespaceRawAnalysis({ a }: { a: WhitespaceCard["analysis"] }) {
+  return (
+    <div>
+      <p className="font-mono text-[10px] text-ink-muted">
         {a.overallMatchLevel.directMatches} direct · {a.overallMatchLevel.adjacentMatches} adjacent ·{" "}
         {a.overallMatchLevel.unrelatedReferences} unrelated
       </p>

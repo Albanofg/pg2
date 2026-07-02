@@ -10,7 +10,9 @@ import HelperComposer from "@/components/workspace/helper-composer";
 import HelperThread from "@/components/workspace/helper-thread";
 import type {
   BrainstormCard,
+  BrainstormDirection,
   CandidateConceptCard,
+  ConceptObject,
   ClarityCard,
   CodeReviewCard,
   LeapCard,
@@ -247,6 +249,7 @@ export default function ConceptionPanel({
             card={card}
             busy={busy}
             candidates={candidateCards}
+            keptConcepts={keptConcepts}
             onAct={act}
           />
         ))}
@@ -375,11 +378,13 @@ function CardView({
   card,
   busy,
   candidates,
+  keptConcepts,
   onAct,
 }: {
   card: Module1Card;
   busy: boolean;
   candidates: CandidateConceptCard[];
+  keptConcepts: ConceptObject[];
   onAct: (cardId: string, input: never) => void;
 }) {
   switch (card.type) {
@@ -397,6 +402,7 @@ function CardView({
           card={card}
           busy={busy}
           candidates={candidates}
+          keptConcepts={keptConcepts}
           onAct={onAct}
         />
       );
@@ -418,6 +424,13 @@ function BrainstormCardView({
 }) {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
   const [text, setText] = useState("");
+  // The "Tell me more" teaching-chat modal, scoped to one direction (null = closed).
+  const [teachDir, setTeachDir] = useState<BrainstormDirection | null>(null);
+  // The tutor transcript carried over when the inventor uses their answer — sent with the
+  // develop action as CONTEXT (the journey), then cleared.
+  const [tutorTranscript, setTutorTranscript] = useState<
+    { role: "user" | "assistant"; content: string }[] | null
+  >(null);
   // Optimistic "Captured" marks: flip the instant the inventor clicks, instead of
   // waiting several seconds for the server to build the concept and return the
   // `developed` flag. The server's flag reconciles (and persists) when it arrives.
@@ -466,19 +479,27 @@ function BrainstormCardView({
                     placeholder="Develop this in your own words — how it actually works…"
                     className="mt-2 w-full resize-y rounded-md border border-border bg-panel p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
                   />
-                  <div className="mt-2 flex justify-end gap-2">
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setOpenIdx(null);
-                        setText("");
-                      }}
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTeachDir(d)}
+                      className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
                     >
-                      Cancel
-                    </Button>
-                    <Button
-                      variant="primary"
-                      onClick={() => {
+                      ? Tell me more about this
+                    </button>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        onClick={() => {
+                          setOpenIdx(null);
+                          setText("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="primary"
+                        onClick={() => {
                         // Mark done immediately (optimistic) — don't wait for the
                         // concept to build server-side.
                         setTaken((prev) => new Set(prev).add(d.direction));
@@ -486,9 +507,11 @@ function BrainstormCardView({
                           action: "develop",
                           direction: d.direction,
                           text: text.trim(),
+                          ...(tutorTranscript ? { tutorTranscript } : {}),
                         } as never);
                         setOpenIdx(null);
                         setText("");
+                        setTutorTranscript(null);
                       }}
                       // Not gated on `busy`: submitting queues the request (it runs
                       // in order in the background) so you can develop the next
@@ -498,10 +521,18 @@ function BrainstormCardView({
                     >
                       This is mine →
                     </Button>
+                    </div>
                   </div>
                 </>
               ) : (
-                <div className="mt-2 flex justify-end">
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTeachDir(d)}
+                    className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+                  >
+                    ? Tell me more about this
+                  </button>
                   <Button
                     variant="ghost"
                     onClick={() => {
@@ -525,6 +556,240 @@ function BrainstormCardView({
         >
           {allDone ? "All captured — move on →" : "Done — move on"}
         </Button>
+      </div>
+      {teachDir && (
+        <TellMeMoreModal
+          direction={teachDir}
+          onClose={() => setTeachDir(null)}
+          onUseAnswer={(answer, transcript) => {
+            // Bridge teaching → capturing: drop the inventor's OWN words into the
+            // develop box and open it, so the modal never dead-ends. Keep the transcript
+            // so it rides along as context when they capture the answer.
+            const idx = card.directions.findIndex(
+              (x) => x.direction === teachDir.direction,
+            );
+            if (idx >= 0) {
+              setOpenIdx(idx);
+              setText(answer);
+              setTutorTranscript(transcript);
+            }
+            setTeachDir(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Render the tutor's lightweight markdown so raw asterisks never show through: **bold**
+ *  (which may contain *italic*), and *italic*. Non-greedy and within a line, so unbalanced
+ *  markers don't swallow across paragraphs. Newlines handled by whitespace-pre-wrap. */
+function renderRich(text: string) {
+  const nodes = [];
+  const regex = /\*\*(.+?)\*\*|\*(.+?)\*/g;
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(text)) !== null) {
+    if (m.index > last) {
+      nodes.push(<span key={key++}>{text.slice(last, m.index)}</span>);
+    }
+    if (m[1] !== undefined) {
+      nodes.push(
+        <strong key={key++} className="font-semibold text-ink">
+          {renderRich(m[1])}
+        </strong>,
+      );
+    } else {
+      nodes.push(<em key={key++}>{m[2]}</em>);
+    }
+    last = regex.lastIndex;
+  }
+  if (last < text.length) {
+    nodes.push(<span key={key++}>{text.slice(last)}</span>);
+  }
+  return nodes;
+}
+
+/**
+ * "Tell me more about this" — a scoped teaching chat for ONE direction. The AI coaches the
+ * inventor toward a STRONGER answer they can develop in their own words; it never authors the
+ * inventive mechanism (that stays human). Opens over /api/conception/teach.
+ */
+function TellMeMoreModal({
+  direction,
+  onClose,
+  onUseAnswer,
+}: {
+  direction: BrainstormDirection;
+  onClose: () => void;
+  onUseAnswer: (
+    answer: string,
+    transcript: { role: "user" | "assistant"; content: string }[],
+  ) => void;
+}) {
+  const [messages, setMessages] = useState<
+    { role: "user" | "assistant"; content: string }[]
+  >([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const startedRef = useRef(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const projectId = useWorkspace((s) => s.projectId);
+  // Persist this teaching chat per project + direction, so a reload continues it.
+  const storageKey = `geyser_tutor_${projectId ?? "none"}::${direction.direction}`;
+
+  const send = async (userText: string) => {
+    const t = userText.trim();
+    const outgoing = t
+      ? [...messages, { role: "user" as const, content: t }]
+      : messages;
+    if (t) {
+      setMessages(outgoing);
+      setInput("");
+    }
+    setBusy(true);
+    try {
+      const res = await fetch("/api/conception/teach", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          direction: {
+            direction: direction.direction,
+            why: direction.why_it_might_be_patentable,
+            invite: direction.invite_to_develop,
+          },
+          messages: outgoing,
+        }),
+      });
+      const data = (await res.json()) as { reply?: string };
+      if (data.reply) {
+        setMessages([...outgoing, { role: "assistant", content: data.reply }]);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Open the conversation: CONTINUE a stored one if it exists (a reload picks up where you
+  // left off), otherwise start with an initial teaching turn.
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    let stored: { role: "user" | "assistant"; content: string }[] | null = null;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) stored = JSON.parse(raw);
+    } catch {
+      /* corrupt / unavailable — start fresh */
+    }
+    if (stored && stored.length) setMessages(stored);
+    else void send("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist the conversation so a reload can continue it.
+  useEffect(() => {
+    if (!messages.length) return;
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(messages));
+    } catch {
+      /* quota / unavailable — best effort */
+    }
+  }, [messages, storageKey]);
+
+  // Keep the newest message in view.
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [messages, busy]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-border bg-panel shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
+              Tell me more
+            </div>
+            <div className="mt-0.5 font-sans text-sm font-semibold text-ink">
+              {direction.direction}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 rounded-md px-2 py-1 font-mono text-xs text-ink-muted transition-colors hover:text-ink"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-5">
+          {messages.map((m, i) => (
+            <div
+              key={i}
+              className={cn(
+                "flex",
+                m.role === "user" ? "justify-end" : "justify-start",
+              )}
+            >
+              <div
+                className={cn(
+                  "max-w-[88%] whitespace-pre-wrap rounded-md px-4 py-3 font-sans text-[15px] leading-7",
+                  m.role === "user"
+                    ? "bg-accent/15 text-ink"
+                    : "border border-border bg-bg text-ink",
+                )}
+              >
+                {renderRich(m.content)}
+              </div>
+            </div>
+          ))}
+          {busy && (
+            <div className="font-mono text-xs text-ink-muted">Thinking…</div>
+          )}
+        </div>
+
+        <div className="border-t border-border p-3">
+          <div className="flex items-center gap-2">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && input.trim() && !busy) void send(input);
+              }}
+              placeholder="Ask a question — or write your answer here…"
+              className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2.5 font-sans text-[15px] text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+            />
+            <Button
+              variant="primary"
+              onClick={() => void send(input)}
+              disabled={busy || !input.trim()}
+            >
+              {busy ? "…" : "Ask"}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => onUseAnswer(input.trim(), messages)}
+              disabled={!input.trim()}
+            >
+              Use as my answer →
+            </Button>
+          </div>
+          <p className="mt-2 font-mono text-[10px] italic leading-relaxed text-ink-muted">
+            The tutor leads you to the answer, then hands it back — the idea stays yours to
+            write. When you&apos;ve got it, &ldquo;Use as my answer&rdquo; drops it into your
+            own-words box.
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -763,15 +1028,28 @@ function CandidateCardView({
   card,
   busy,
   candidates,
+  keptConcepts,
   onAct,
 }: {
   card: CandidateConceptCard;
   busy: boolean;
   candidates: CandidateConceptCard[];
+  keptConcepts: ConceptObject[];
   onAct: (cardId: string, input: never) => void;
 }) {
   const [merging, setMerging] = useState(false);
+  // Merge targets: the OTHER undecided concepts + the ones you've already kept (kept
+  // concepts lose their card, so without this you couldn't merge into them). Merging
+  // regenerates the target concept to fold both ideas together (server-side).
   const others = candidates.filter((c) => c.conceptId !== card.conceptId);
+  const targets: { id: string; title: string; kept: boolean }[] = [
+    ...others.map((c) => ({ id: c.conceptId, title: c.title, kept: false })),
+    ...keptConcepts
+      .filter(
+        (c) => c.id !== card.conceptId && !others.some((o) => o.conceptId === c.id),
+      )
+      .map((c) => ({ id: c.id, title: c.title, kept: true })),
+  ];
   return (
     <CardShell badge="Concept · keep, drop, or merge" title={card.title}>
       <p className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink">
@@ -783,25 +1061,26 @@ function CandidateCardView({
             Merge into:
           </div>
           <div className="flex flex-wrap gap-2">
-            {others.length === 0 && (
+            {targets.length === 0 && (
               <span className="font-mono text-[11px] text-ink-muted">
                 No other concepts to merge into.
               </span>
             )}
-            {others.map((o) => (
+            {targets.map((t) => (
               <Button
-                key={o.conceptId}
+                key={t.id}
                 variant="secondary"
                 size="sm"
                 onClick={() =>
                   onAct(card.id, {
                     action: "merge",
-                    into: o.conceptId,
+                    into: t.id,
                   } as never)
                 }
                 disabled={busy}
               >
-                {o.title}
+                {t.title}
+                {t.kept ? " ✓ kept" : ""}
               </Button>
             ))}
             <Button variant="ghost" size="sm" onClick={() => setMerging(false)}>
