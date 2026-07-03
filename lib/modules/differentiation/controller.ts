@@ -379,6 +379,9 @@ export class DifferentiationModule {
     // One concept at a time — clear any prior concept's lesson/scaffold/ask so the
     // screen never stacks up. Only the concept we're about to frame will be shown.
     this.clearFramingCards();
+    // Fresh concept, fresh Helper thread — the previous concept's chat on screen
+    // is confusing. The inventor's notes stay in the Ledger verbatim regardless.
+    this.conversation = [];
     const next = [...this.concepts.values()].find(
       (c) => c.status.state === "active" && !c.novelty && !c.differentiation_statement,
     );

@@ -175,9 +175,13 @@ export default function ShowcasePanel({
               <span className="font-mono text-xs text-ink-muted">
                 {sections.length === 0
                   ? "Loading your draft…"
-                  : view.phase === "selecting_variations" || view.phase === "approving_widened"
-                    ? "Working through the expansion…"
-                    : "Working — extracting the underlying mechanism and drafting alternative implementations… this takes a minute or two."}
+                  : view.phase === "reviewing_species"
+                    ? "Drafting the full expansion for your review — broadened concepts, new concepts, and section extensions… this takes a few minutes."
+                    : view.phase === "reviewing_artifacts"
+                      ? "Working…"
+                      : view.phase === "selecting_variations" || view.phase === "approving_widened"
+                        ? "Working through the expansion…"
+                        : "Working — extracting the underlying mechanism and drafting the alternative implementations… this takes a minute or two."}
               </span>
             </div>
           )}

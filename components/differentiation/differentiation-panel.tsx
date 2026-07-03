@@ -160,11 +160,37 @@ export default function DifferentiationPanel({
             </div>
           )}
 
-          {/* Where you are: differentiations are one-at-a-time, so show N of M. */}
+          {/* Where you are: differentiations are one-at-a-time. Big and explicit —
+              the user must SEE that the previous concept landed and a new one is up. */}
           {view.phase === "capturing" && activeConcepts.length > 0 && view.cards.length > 0 && (
-            <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
-              Needs your input · concept {Math.min(differentiated.length + 1, activeConcepts.length)} of{" "}
-              {activeConcepts.length}
+            <div className="rounded-md border border-accent/40 bg-accent/10 px-4 py-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <div className="font-sans text-lg font-bold text-ink">
+                  Concept {Math.min(differentiated.length + 1, activeConcepts.length)}{" "}
+                  <span className="font-medium text-ink-muted">of {activeConcepts.length}</span>
+                </div>
+                <div className="h-1.5 w-32 shrink-0 overflow-hidden rounded-full bg-border">
+                  <div
+                    className="h-full rounded-full bg-accent transition-all"
+                    style={{
+                      width: `${Math.round((differentiated.length / activeConcepts.length) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+              <p className="mt-0.5 font-sans text-sm text-ink-muted">
+                {differentiated.length > 0 ? (
+                  <>
+                    <span className="font-medium text-emerald-400">
+                      ✓ Concept {differentiated.length} is set
+                    </span>{" "}
+                    — let&apos;s tackle concept{" "}
+                    {Math.min(differentiated.length + 1, activeConcepts.length)}.
+                  </>
+                ) : (
+                  "One at a time — read the lesson, then say what makes this one yours."
+                )}
+              </p>
             </div>
           )}
 
