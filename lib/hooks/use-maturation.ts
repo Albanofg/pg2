@@ -99,10 +99,14 @@ export function useMaturation(projectId: string | null) {
     [post]
   );
   const tell = useCallback((text: string) => post({ op: "message", text }), [post]);
+  const setCarry = useCallback(
+    (conceptId: string, carry: boolean) => post({ op: "set_carry", conceptId, carry }),
+    [post]
+  );
   const restart = useCallback(async () => {
     await post({ op: "reset" });
     return post({ op: "start" });
   }, [post]);
 
-  return { view, busy, error, ready, act, tell, restart };
+  return { view, busy, error, ready, act, tell, setCarry, restart };
 }

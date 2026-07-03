@@ -5,6 +5,7 @@ import { useMaturation } from "@/lib/hooks/use-maturation";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
 import HelperThread from "@/components/workspace/helper-thread";
+import RestartPart from "@/components/workspace/restart-part";
 import { VoiceTextarea } from "@/components/ui/voice-textarea";
 import type {
   DeepenReviewCard,
@@ -25,7 +26,7 @@ export default function MaturationPanel({
   projectId: string | null;
   maxW?: string;
 }) {
-  const { view, busy, error, ready, act, tell, restart } = useMaturation(projectId);
+  const { view, busy, error, ready, act, tell, setCarry, restart } = useMaturation(projectId);
   const setStage = useWorkspace((s) => s.setStage);
   const working = busy || !ready;
   const carried = view.concepts.filter((c) => c.decision === "carry_forward");
@@ -45,12 +46,15 @@ export default function MaturationPanel({
                 Maturing your concepts
               </h2>
             </div>
-            <button
-              onClick={() => setStage("conception")}
-              className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
-            >
-              ← Conception
-            </button>
+            <div className="flex items-center gap-3">
+              <RestartPart stage="maturation" onRestartThis={restart} />
+              <button
+                onClick={() => setStage("conception")}
+                className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+              >
+                ← Conception
+              </button>
+            </div>
           </header>
 
           {error && (
@@ -104,7 +108,8 @@ export default function MaturationPanel({
             ))}
           </div>
 
-          {carried.length > 0 && (
+          {/* Running tally while still maturing (the picker replaces it once done). */}
+          {!view.complete && carried.length > 0 && (
             <div>
               <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
                 Carrying forward ({carried.length})
@@ -122,19 +127,63 @@ export default function MaturationPanel({
             </div>
           )}
 
+          {/* Presentation step = the picker: choose which concepts get prior-art
+              searched. All on by default; unchecking leaves one behind (set aside). */}
           {view.complete && (
-            <div className="rounded-md border border-accent/40 bg-accent/10 p-4 text-center">
-              <p className="font-sans text-sm font-medium text-ink">
-                Expansion complete — {carried.length} concept
-                {carried.length === 1 ? "" : "s"} carried forward, ready for
-                Landscape.
+            <div className="rounded-md border border-accent/40 bg-accent/10 p-4">
+              <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
+                Ready for Landscape · pick what to search
+              </div>
+              <p className="font-sans text-sm text-ink">
+                These carry forward to the prior-art search. Leave one behind if you don&apos;t
+                want it searched — that sets it aside for good.
               </p>
-              <button
-                onClick={() => setStage("landscape")}
-                className="mt-3 rounded-md bg-accent px-5 py-2.5 font-sans text-sm font-medium text-brand transition-colors hover:bg-accent/90"
-              >
-                Continue to Landscape →
-              </button>
+              <ul className="mt-3 space-y-2">
+                {view.concepts.map((c) => {
+                  const on = c.decision === "carry_forward";
+                  return (
+                    <li key={c.id}>
+                      <label
+                        className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
+                          on ? "border-accent/30 bg-accent/5" : "border-border bg-bg/40 opacity-60"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          disabled={busy}
+                          onChange={() => void setCarry(c.id, !on)}
+                          className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+                        />
+                        <div className="min-w-0">
+                          <div
+                            className={`font-sans text-sm font-semibold ${
+                              on ? "text-ink" : "text-ink-muted line-through"
+                            }`}
+                          >
+                            {c.title}
+                          </div>
+                          <p className="mt-0.5 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-muted">
+                            {c.deepened_statement || c.formalized_statement}
+                          </p>
+                        </div>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <span className="font-mono text-[10px] text-ink-muted">
+                  {carried.length} of {view.concepts.length} will be searched
+                </span>
+                <button
+                  onClick={() => setStage("landscape")}
+                  disabled={busy || carried.length === 0}
+                  className="rounded-md bg-accent px-5 py-2.5 font-sans text-sm font-medium text-brand transition-colors hover:bg-accent/90 disabled:opacity-50"
+                >
+                  Search prior art →
+                </button>
+              </div>
             </div>
           )}
 
@@ -312,13 +361,23 @@ function SparkView({
             >
               This is mine
             </button>
-            <button
-              onClick={() => onAct(card.id, { action: "skip" } as never)}
-              disabled={busy}
-              className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
-            >
-              Skip
-            </button>
+            {editing ? (
+              <button
+                onClick={() => setEditing(false)}
+                disabled={busy}
+                className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            ) : (
+              <button
+                onClick={() => onAct(card.id, { action: "set_aside" } as never)}
+                disabled={busy}
+                className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-red-300 hover:border-red-500/40 hover:bg-red-500/10 disabled:opacity-50"
+              >
+                Delete
+              </button>
+            )}
           </div>
         </>
       ) : (
@@ -328,28 +387,36 @@ function SparkView({
             disabled={busy}
             className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
           >
-            Use this
+            Approve
           </button>
           <button
             onClick={() => setEditing(true)}
             disabled={busy}
-            className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 font-sans text-xs font-medium text-ink transition-colors hover:border-accent hover:bg-accent/10 hover:text-accent disabled:opacity-50"
           >
-            Tweak / write my own
-          </button>
-          <button
-            onClick={() => onAct(card.id, { action: "skip" } as never)}
-            disabled={busy}
-            className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
-          >
-            Skip
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+              className="shrink-0"
+            >
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+            </svg>
+            Tweak
           </button>
           <button
             onClick={() => onAct(card.id, { action: "set_aside" } as never)}
             disabled={busy}
             className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-red-300 hover:border-red-500/40 hover:bg-red-500/10 disabled:opacity-50"
           >
-            Set aside
+            Delete
           </button>
         </div>
       )}

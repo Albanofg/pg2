@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { VoiceTextarea } from "@/components/ui/voice-textarea";
 import HelperComposer from "@/components/workspace/helper-composer";
 import HelperThread from "@/components/workspace/helper-thread";
+import RestartPart from "@/components/workspace/restart-part";
 import type {
   BrainstormCard,
   BrainstormDirection,
@@ -54,7 +55,6 @@ export default function ConceptionPanel({
     setStage("brainstorm");
   };
   // Inline (non-blocking) confirm for "Start over" — no window.confirm.
-  const [confirmReset, setConfirmReset] = useState(false);
 
   const hasStatement = !!view.statement;
   const candidateCards = view.cards.filter(
@@ -99,38 +99,7 @@ export default function ConceptionPanel({
             Turn your idea into concepts you own
           </h2>
         </div>
-        {hasStatement &&
-          (confirmReset ? (
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
-                Clear and start over?
-              </span>
-              <button
-                onClick={() => {
-                  setConfirmReset(false);
-                  void reset();
-                }}
-                disabled={busy}
-                className="font-mono text-[10px] uppercase tracking-[0.1em] text-red-300 transition-colors hover:text-red-200 disabled:opacity-50"
-              >
-                Confirm
-              </button>
-              <button
-                onClick={() => setConfirmReset(false)}
-                className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-ink"
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setConfirmReset(true)}
-              disabled={busy}
-              className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
-            >
-              Start over
-            </button>
-          ))}
+        {hasStatement && <RestartPart stage="conception" onRestartThis={reset} />}
       </header>
 
       {hasStatement && <StrengthMeter pct={strength.pct} label={strength.label} />}
@@ -480,13 +449,10 @@ function BrainstormCardView({
                     className="mt-2 w-full resize-y rounded-md border border-border bg-panel p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
                   />
                   <div className="mt-2 flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setTeachDir(d)}
-                      className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
-                    >
-                      ? Tell me more about this
-                    </button>
+                    <Button variant="secondary" onClick={() => setTeachDir(d)}>
+                      <HelpIcon />
+                      Tell me more about this
+                    </Button>
                     <div className="flex justify-end gap-2">
                       <Button
                         variant="ghost"
@@ -526,21 +492,18 @@ function BrainstormCardView({
                 </>
               ) : (
                 <div className="mt-2 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTeachDir(d)}
-                    className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
-                  >
-                    ? Tell me more about this
-                  </button>
+                  <Button variant="secondary" onClick={() => setTeachDir(d)}>
+                    <HelpIcon />
+                    Tell me more about this
+                  </Button>
                   <Button
-                    variant="ghost"
+                    variant="secondary"
                     onClick={() => {
                       setOpenIdx(i);
                       setText("");
                     }}
                   >
-                    In your own words
+                    In your own words →
                   </Button>
                 </div>
               )}
@@ -578,6 +541,28 @@ function BrainstormCardView({
         />
       )}
     </div>
+  );
+}
+
+/** Circled question-mark icon for the "Tell me more" tutor buttons. */
+function HelpIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className="shrink-0"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
   );
 }
 
@@ -633,6 +618,7 @@ function TellMeMoreModal({
   >([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [scaffold, setScaffold] = useState<{ intro: string; template: string } | null>(null);
   const startedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const projectId = useWorkspace((s) => s.projectId);
@@ -647,6 +633,9 @@ function TellMeMoreModal({
     if (t) {
       setMessages(outgoing);
       setInput("");
+      // Answering (via the mad lib or the ask bar) retires the current step's
+      // question — the next reply brings the next step's mad lib.
+      setScaffold(null);
     }
     setBusy(true);
     try {
@@ -654,6 +643,7 @@ function TellMeMoreModal({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          projectId,
           direction: {
             direction: direction.direction,
             why: direction.why_it_might_be_patentable,
@@ -662,10 +652,16 @@ function TellMeMoreModal({
           messages: outgoing,
         }),
       });
-      const data = (await res.json()) as { reply?: string };
+      const data = (await res.json()) as {
+        reply?: string;
+        scaffold?: { intro: string; template: string } | null;
+      };
       if (data.reply) {
         setMessages([...outgoing, { role: "assistant", content: data.reply }]);
       }
+      // This step's mad-lib question (or null once they've reached the answer and
+      // the teacher is affirming).
+      setScaffold(data.scaffold && data.scaffold.template?.trim() ? data.scaffold : null);
     } catch (e) {
       console.error(e);
     } finally {
@@ -678,27 +674,42 @@ function TellMeMoreModal({
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    let stored: { role: "user" | "assistant"; content: string }[] | null = null;
     try {
       const raw = window.localStorage.getItem(storageKey);
-      if (raw) stored = JSON.parse(raw);
+      if (raw) {
+        const stored = JSON.parse(raw) as
+          | { role: "user" | "assistant"; content: string }[] // legacy shape
+          | {
+              messages: { role: "user" | "assistant"; content: string }[];
+              scaffold: { intro: string; template: string } | null;
+            };
+        if (Array.isArray(stored)) {
+          if (stored.length) {
+            setMessages(stored);
+            return;
+          }
+        } else if (stored?.messages?.length) {
+          setMessages(stored.messages);
+          if (stored.scaffold?.template) setScaffold(stored.scaffold);
+          return;
+        }
+      }
     } catch {
       /* corrupt / unavailable — start fresh */
     }
-    if (stored && stored.length) setMessages(stored);
-    else void send("");
+    void send("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist the conversation so a reload can continue it.
+  // Persist the conversation + the live scaffold so a reload can continue both.
   useEffect(() => {
     if (!messages.length) return;
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(messages));
+      window.localStorage.setItem(storageKey, JSON.stringify({ messages, scaffold }));
     } catch {
       /* quota / unavailable — best effort */
     }
-  }, [messages, storageKey]);
+  }, [messages, scaffold, storageKey]);
 
   // Keep the newest message in view.
   useEffect(() => {
@@ -758,6 +769,16 @@ function TellMeMoreModal({
           )}
         </div>
 
+        {scaffold && (
+          <ScaffoldFill
+            key={scaffold.template}
+            scaffold={scaffold}
+            busy={busy}
+            onAnswer={(assembled) => void send(assembled)}
+            onFinalize={(assembled) => onUseAnswer(assembled, messages)}
+          />
+        )}
+
         <div className="border-t border-border p-3">
           <div className="flex items-center gap-2">
             <input
@@ -766,7 +787,7 @@ function TellMeMoreModal({
               onKeyDown={(e) => {
                 if (e.key === "Enter" && input.trim() && !busy) void send(input);
               }}
-              placeholder="Ask a question — or write your answer here…"
+              placeholder="Ask the teacher anything — or tell it what you're thinking…"
               className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2.5 font-sans text-[15px] text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
             />
             <Button
@@ -776,20 +797,114 @@ function TellMeMoreModal({
             >
               {busy ? "…" : "Ask"}
             </Button>
-            <Button
-              variant="secondary"
-              onClick={() => onUseAnswer(input.trim(), messages)}
-              disabled={!input.trim()}
-            >
-              Use as my answer →
-            </Button>
           </div>
-          <p className="mt-2 font-mono text-[10px] italic leading-relaxed text-ink-muted">
-            The tutor leads you to the answer, then hands it back — the idea stays yours to
-            write. When you&apos;ve got it, &ldquo;Use as my answer&rdquo; drops it into your
-            own-words box.
-          </p>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <p className="font-mono text-[10px] italic leading-relaxed text-ink-muted">
+              {scaffold
+                ? "Fill this step's blanks in your own words, then Answer — the teacher takes it from there."
+                : "The teacher walks you through it a step at a time; you answer each step by filling its blanks."}
+            </p>
+            <button
+              type="button"
+              onClick={() => onUseAnswer("", messages)}
+              className="shrink-0 whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+            >
+              I&apos;ve got it — write my answer →
+            </button>
+          </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+type ScaffoldPart =
+  | { text: string; blank?: false }
+  | { blank: true; label: string; index: number };
+
+/** Split "Unlike tools that [what they do], this works by [your move]." into fixed
+ *  text and the [bracketed] blanks the inventor fills. */
+function splitTemplate(template: string): ScaffoldPart[] {
+  const parts: ScaffoldPart[] = [];
+  const re = /\[([^\]]+)\]/g;
+  let last = 0;
+  let idx = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(template)) !== null) {
+    if (m.index > last) parts.push({ text: template.slice(last, m.index) });
+    parts.push({ blank: true, label: m[1].trim(), index: idx++ });
+    last = re.lastIndex;
+  }
+  if (last < template.length) parts.push({ text: template.slice(last) });
+  return parts;
+}
+
+/**
+ * The Mad-Libs scaffold — THIS teaching step's question, shaped as a sentence with
+ * fill-in blanks the inventor completes. The fixed words are the tutor's setup; the
+ * blanks are the inventor's to fill. "Answer →" sends the filled sentence back so
+ * the teacher gives the next step; "Use as my answer" finalizes it into the develop
+ * box (for when they've reached the answer).
+ */
+function ScaffoldFill({
+  scaffold,
+  busy,
+  onAnswer,
+  onFinalize,
+}: {
+  scaffold: { intro: string; template: string };
+  busy: boolean;
+  onAnswer: (assembled: string) => void;
+  onFinalize: (assembled: string) => void;
+}) {
+  const parts = splitTemplate(scaffold.template);
+  const blankCount = parts.filter((p) => p.blank).length;
+  const [values, setValues] = useState<string[]>(() => Array(blankCount).fill(""));
+  const assembled = parts
+    .map((p) => (p.blank ? (values[p.index] ?? "").trim() : p.text))
+    .join("");
+  const allFilled = blankCount > 0 && values.slice(0, blankCount).every((v) => v.trim());
+
+  return (
+    <div className="border-t border-border bg-accent/5 p-3">
+      <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
+        Answer this step — fill in the blanks
+      </div>
+      {scaffold.intro && (
+        <p className="mb-2 font-sans text-[13px] text-ink-muted">{scaffold.intro}</p>
+      )}
+      <p className="font-sans text-[15px] leading-10 text-ink">
+        {parts.map((p, i) =>
+          p.blank ? (
+            <input
+              key={i}
+              value={values[p.index] ?? ""}
+              onChange={(e) => {
+                const next = [...values];
+                next[p.index] = e.target.value;
+                setValues(next);
+              }}
+              placeholder={p.label}
+              size={Math.max(p.label.length, (values[p.index] ?? "").length || 6)}
+              className="mx-1 inline-block min-w-[6rem] rounded border-b-2 border-accent/50 bg-accent/10 px-2 py-0.5 font-sans text-[15px] text-ink placeholder:text-ink-muted/70 focus:border-accent focus:outline-none"
+            />
+          ) : (
+            <span key={i}>{p.text}</span>
+          ),
+        )}
+      </p>
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <Button
+          variant="secondary"
+          onClick={() => onFinalize(assembled)}
+          disabled={!allFilled}
+          title="This already says it — use it as my final answer"
+        >
+          Use as my answer →
+        </Button>
+        <Button variant="primary" onClick={() => onAnswer(assembled)} disabled={!allFilled || busy}>
+          {busy ? "…" : "Answer →"}
+        </Button>
       </div>
     </div>
   );

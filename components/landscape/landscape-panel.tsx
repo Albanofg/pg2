@@ -4,6 +4,7 @@ import { useLandscape } from "@/lib/hooks/use-landscape";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
 import HelperThread from "@/components/workspace/helper-thread";
+import RestartPart from "@/components/workspace/restart-part";
 import type {
   LandscapeIdea,
   LandscapeSource,
@@ -43,12 +44,15 @@ export default function LandscapePanel({
                 What already exists, idea by idea
               </h2>
             </div>
-            <button
-              onClick={() => setStage("maturation")}
-              className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
-            >
-              ← Expansion
-            </button>
+            <div className="flex items-center gap-3">
+              <RestartPart stage="landscape" onRestartThis={restart} />
+              <button
+                onClick={() => setStage("maturation")}
+                className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+              >
+                ← Expansion
+              </button>
+            </div>
           </header>
 
           {error && (

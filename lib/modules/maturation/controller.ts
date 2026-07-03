@@ -133,6 +133,26 @@ export class MaturationModule {
     return this.view();
   }
 
+  /**
+   * The presentation step's picker: choose which matured concepts go on to the
+   * prior-art search. All carry forward by default; leaving one behind is the same
+   * as setting it aside — dropped from the rest of the process. Toggleable (the
+   * inventor can re-include it) right up until they move on to Landscape.
+   */
+  setCarry(conceptId: string, carry: boolean): Module2View {
+    const concept = this.concepts.get(conceptId);
+    if (concept) {
+      concept.decision = carry ? "carry_forward" : "set_aside";
+      concept.status = { state: carry ? "active" : "dropped" };
+      this.ledger.recordDecision(
+        "concept_decision",
+        ["selection", carry ? "carry_forward" : "set_aside"],
+        { conceptId },
+      );
+    }
+    return this.view();
+  }
+
   /** Seal a Checkpoint to the Ledger the moment Maturation is finalized. */
   private maybeCheckpoint(): void {
     if (this.isComplete() && !hasCheckpoint(this.ledger, "module2")) {

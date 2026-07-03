@@ -5,6 +5,7 @@ import { useDifferentiation } from "@/lib/hooks/use-differentiation";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
 import HelperThread from "@/components/workspace/helper-thread";
+import RestartPart from "@/components/workspace/restart-part";
 import type {
   CertificationCard,
   DifferentiationReviewCard,
@@ -53,12 +54,15 @@ export default function DifferentiationPanel({
                     : "Say what's genuinely new — against what already exists"}
               </h2>
             </div>
-            <button
-              onClick={() => setStage("landscape")}
-              className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
-            >
-              ← Landscape
-            </button>
+            <div className="flex items-center gap-3">
+              <RestartPart stage="differentiation" onRestartThis={restart} />
+              <button
+                onClick={() => setStage("landscape")}
+                className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+              >
+                ← Landscape
+              </button>
+            </div>
           </header>
 
           {error && (
@@ -131,25 +135,9 @@ export default function DifferentiationPanel({
             </div>
           )}
 
-          {view.disclosure && view.disclosure.sections.length > 0 && (
-            <div>
-              <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-action">
-                Invention Disclosure · draft
-              </div>
-              <div className="space-y-3 rounded-md border border-border bg-panel p-4">
-                {view.disclosure.sections.map((s) => (
-                  <div key={s.key}>
-                    <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
-                      {s.label}
-                    </div>
-                    <p className="mt-1 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink">
-                      {s.body}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* The ICB draft is NOT shown here — it lives in Showcase (the final step),
+              where it's tabbed, editable, and polishable. Differentiation only
+              compiles it in the background and carries it forward. */}
 
           {view.complete && (
             <div className="rounded-md border border-accent/40 bg-accent/10 p-4 text-center">

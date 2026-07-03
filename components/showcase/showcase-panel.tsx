@@ -5,6 +5,7 @@ import { useShowcase } from "@/lib/hooks/use-showcase";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
 import HelperThread from "@/components/workspace/helper-thread";
+import RestartPart from "@/components/workspace/restart-part";
 import type {
   ChoiceCard,
   Module5Card,
@@ -118,12 +119,15 @@ export default function ShowcasePanel({
             <p className="mt-1 font-sans text-sm text-ink-muted">
               Complete the last part of the process and download your Invention Concept Blueprint.
             </p>
-            <button
-              onClick={() => setStage("differentiation")}
-              className="mt-2 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
-            >
-              ← Differentiation
-            </button>
+            <div className="mt-2 flex items-center gap-3">
+              <button
+                onClick={() => setStage("differentiation")}
+                className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
+              >
+                ← Differentiation
+              </button>
+              <RestartPart stage="showcase" onRestartThis={restart} />
+            </div>
           </header>
 
           {/* Four top actions */}
