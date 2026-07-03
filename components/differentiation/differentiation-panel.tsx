@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDifferentiation } from "@/lib/hooks/use-differentiation";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
@@ -34,6 +34,9 @@ export default function DifferentiationPanel({
   const setStage = useWorkspace((s) => s.setStage);
   const working = busy || !ready;
   const keyConcepts = view.concepts.filter((c) => c.isKeyConcept);
+  // The lesson's fill-in-the-blanks answer — assembled in the whitespace teaching,
+  // dropped into the novelty box below (still editable; "This is mine" submits it).
+  const [scaffoldAnswer, setScaffoldAnswer] = useState<string | null>(null);
 
   return (
     <div className="flex h-full flex-col">
@@ -106,7 +109,14 @@ export default function DifferentiationPanel({
 
           <div className="flex flex-col gap-4">
             {view.cards.map((card) => (
-              <CardView key={card.id} card={card} busy={busy} onAct={act} />
+              <CardView
+                key={card.id}
+                card={card}
+                busy={busy}
+                onAct={act}
+                scaffoldAnswer={scaffoldAnswer}
+                onUseScaffold={setScaffoldAnswer}
+              />
             ))}
           </div>
 
@@ -178,18 +188,24 @@ function CardView({
   card,
   busy,
   onAct,
+  scaffoldAnswer,
+  onUseScaffold,
 }: {
   card: Module4Card;
   busy: boolean;
   onAct: (cardId: string, input: never) => void;
+  scaffoldAnswer: string | null;
+  onUseScaffold: (assembled: string) => void;
 }) {
   switch (card.type) {
     case "whitespace":
-      return <WhitespaceView card={card} />;
+      return <WhitespaceView card={card} onUseScaffold={onUseScaffold} />;
     case "gap":
       return <GapView card={card} />;
     case "novelty_capture":
-      return <NoveltyCaptureView card={card} busy={busy} onAct={onAct} />;
+      return (
+        <NoveltyCaptureView card={card} busy={busy} onAct={onAct} prefill={scaffoldAnswer} />
+      );
     case "differentiation_review":
       return <DifferentiationReviewView card={card} busy={busy} onAct={onAct} />;
     case "key_concept":
@@ -201,7 +217,13 @@ function CardView({
   }
 }
 
-function WhitespaceView({ card }: { card: WhitespaceCard }) {
+function WhitespaceView({
+  card,
+  onUseScaffold,
+}: {
+  card: WhitespaceCard;
+  onUseScaffold: (assembled: string) => void;
+}) {
   const a = card.analysis;
   const level = a.overallMatchLevel.level;
   const badge =
@@ -227,7 +249,7 @@ function WhitespaceView({ card }: { card: WhitespaceCard }) {
       <div className="mt-1 font-sans text-sm font-semibold text-ink">{card.title}</div>
 
       {/* PRIMARY VIEW: the short lesson (or a concise summary if the lesson is absent). */}
-      {t ? <TeachingLesson t={t} /> : <WhitespaceFallback a={a} />}
+      {t ? <TeachingLesson t={t} onUseScaffold={onUseScaffold} /> : <WhitespaceFallback a={a} />}
 
       {/* SECONDARY: the full raw analysis, always tucked behind a disclosure. */}
       <details className="group mt-4">
@@ -271,7 +293,13 @@ function WhitespaceFallback({ a }: { a: WhitespaceCard["analysis"] }) {
 }
 
 /** The concise, scannable plain-English lesson — the primary whitespace view. */
-function TeachingLesson({ t }: { t: WhitespaceTeaching }) {
+function TeachingLesson({
+  t,
+  onUseScaffold,
+}: {
+  t: WhitespaceTeaching;
+  onUseScaffold: (assembled: string) => void;
+}) {
   return (
     <div className="mt-3 space-y-3 font-sans text-[13px] leading-relaxed text-ink">
       {t.intro && <p>{t.intro}</p>}
@@ -322,16 +350,92 @@ function TeachingLesson({ t }: { t: WhitespaceTeaching }) {
         </p>
       )}
 
-      {t.scaffold && (
-        <div className="rounded border border-dashed border-border bg-bg p-2.5">
-          <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
-            A way to say it (fill in the blanks)
-          </p>
-          <p className="mt-1 whitespace-pre-wrap text-[12px] text-ink">{t.scaffold}</p>
-        </div>
-      )}
+      {t.scaffold && <DiffScaffoldFill template={t.scaffold} onUse={onUseScaffold} />}
 
       {t.prompt && <p className="font-semibold text-ink">{t.prompt}</p>}
+    </div>
+  );
+}
+
+type DiffScaffoldPart =
+  | { text: string; blank?: false }
+  | { blank: true; label: string; index: number };
+
+/** Split the lesson's scaffold into fixed text and its [bracketed] blanks. */
+function splitDiffTemplate(template: string): DiffScaffoldPart[] {
+  const parts: DiffScaffoldPart[] = [];
+  const re = /\[([^\]]*)\]/g;
+  let last = 0;
+  let idx = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(template)) !== null) {
+    if (m.index > last) parts.push({ text: template.slice(last, m.index) });
+    parts.push({ blank: true, label: m[1].trim(), index: idx++ });
+    last = re.lastIndex;
+  }
+  if (last < template.length) parts.push({ text: template.slice(last) });
+  return parts;
+}
+
+/**
+ * The lesson's Mad Lib — the "way to say it" as inline fill-in slots instead of
+ * dead text, so the inventor doesn't retype the whole differentiation. The fixed
+ * words are the teacher's setup; the slots are the inventor's. "Use as my answer"
+ * drops the assembled sentence into the novelty box below (still editable there).
+ */
+function DiffScaffoldFill({
+  template,
+  onUse,
+}: {
+  template: string;
+  onUse: (assembled: string) => void;
+}) {
+  const parts = splitDiffTemplate(template);
+  const blankCount = parts.filter((p) => p.blank).length;
+  const [values, setValues] = useState<string[]>(() => Array(blankCount).fill(""));
+  const assembled = parts
+    .map((p) => (p.blank ? (values[p.index] ?? "").trim() : p.text))
+    .join("");
+  const allFilled = blankCount > 0 && values.slice(0, blankCount).every((v) => v.trim());
+
+  return (
+    <div className="rounded border border-dashed border-accent/40 bg-accent/[0.04] p-2.5">
+      <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-accent">
+        A way to say it — fill in the blanks
+      </p>
+      <p className="mt-1 text-[13px] leading-9 text-ink">
+        {parts.map((p, i) =>
+          p.blank ? (
+            <input
+              key={i}
+              value={values[p.index] ?? ""}
+              onChange={(e) => {
+                const next = [...values];
+                next[p.index] = e.target.value;
+                setValues(next);
+              }}
+              placeholder={p.label || "your words"}
+              size={Math.max((p.label || "your words").length, (values[p.index] ?? "").length || 6)}
+              className="mx-1 inline-block min-w-[6rem] rounded border-b-2 border-accent/50 bg-accent/10 px-2 py-0.5 font-sans text-[13px] text-ink placeholder:text-ink-muted/70 focus:border-accent focus:outline-none"
+            />
+          ) : (
+            <span key={i}>{p.text}</span>
+          ),
+        )}
+      </p>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] italic text-ink-muted">
+          The answer is in the lesson above — read it, then say it in your own words.
+        </span>
+        <button
+          type="button"
+          onClick={() => onUse(assembled)}
+          disabled={!allFilled}
+          className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+        >
+          Use as my answer ↓
+        </button>
+      </div>
     </div>
   );
 }
@@ -444,12 +548,19 @@ function NoveltyCaptureView({
   card,
   busy,
   onAct,
+  prefill,
 }: {
   card: NoveltyCaptureCard;
   busy: boolean;
   onAct: (cardId: string, input: never) => void;
+  prefill: string | null;
 }) {
   const [text, setText] = useState("");
+  // The lesson's filled-in scaffold lands here — still the inventor's words
+  // (they filled the slots), still editable before "This is mine".
+  useEffect(() => {
+    if (prefill?.trim()) setText(prefill);
+  }, [prefill]);
   return (
     <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4">
       <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-amber-400">

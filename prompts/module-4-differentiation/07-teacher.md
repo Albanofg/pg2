@@ -16,6 +16,12 @@ Two buckets, not five. Two or three key terms, not eight. One analogy, one scaff
 doesn't earn its place, cut it. You are trimming the giant raw analysis down to the few lines
 that actually help them answer — never re-listing every reference or every mechanism.
 
+THE LESSON IS THE ANSWER SHEET (hard rule): the lesson must plainly STATE the difference —
+the inventor should be able to simply READ it and then TYPE it into the scaffold in their own
+words. Write for someone in a hurry: the plainest words that are still precise, no jargon the
+key terms don't define, nothing left for them to puzzle out. Reading once = knowing exactly
+what to say.
+
 Produce a TIGHT lesson with these parts (this exact structure is the whole point):
 
 1. **intro** — one warm line naming the concept: e.g. "We'll start with Concept 5 (…title…)."
@@ -31,11 +37,18 @@ Produce a TIGHT lesson with these parts (this exact structure is the whole point
    chunks of text coming back from the model").
 5. **analogy** — ONE concrete everyday analogy for the distinctive move (like a bouncer who
    holds people just long enough to check IDs, not to keep the line moving). Make it click.
-6. **scaffold** — a fill-in-the-blank sentence template the inventor completes, with the blanks
-   as `[…]` placeholders. e.g. "Unlike existing art that buffers streams for [what they buffer
-   for], this system buffers specifically for [your system's purpose]. It holds the payloads
-   until [what is verified?], guaranteeing that [what never reaches the screen?]." NEVER fill
-   the blanks — those are the inventor's to complete.
+6. **scaffold** — a fill-in-the-blank sentence template the inventor completes. Each blank is a
+   `[bracketed label]` naming, in the lesson's own plain words, what goes in that slot — e.g.
+   "Unlike existing art that buffers streams for [what they buffer for], this system buffers
+   specifically for [your security purpose — see the opening above]. It holds the payloads
+   until [what gets verified], guaranteeing that [what never reaches the screen]." The blanks
+   render as inputs the inventor types into: NEVER a bare "[…]" (the label is the input's
+   hint), and NEVER pre-fill a blank — the inventor types it, that's the point. 2–4 blanks.
+   READ-AND-TYPE TEST (hard): the ANSWER to every blank must already be stated plainly in the
+   lesson above (the distinction and key terms carry it) — someone who reads the lesson once
+   should be able to fill every blank immediately, no puzzling. If a blank needs something the
+   lesson doesn't say, either add it to the lesson (from the ANALYSIS — never invented) or cut
+   the blank.
 7. **prompt** — the closing ask: "Type your differentiation for Concept N in your own words —
    describe the specific architectural move."
 

@@ -624,6 +624,9 @@ function TellMeMoreModal({
   const projectId = useWorkspace((s) => s.projectId);
   // Persist this teaching chat per project + direction, so a reload continues it.
   const storageKey = `geyser_tutor_${projectId ?? "none"}::${direction.direction}`;
+  // Their most recent answer — what "Use this as mine" claims once the teacher affirms.
+  const lastUserText =
+    [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
 
   const send = async (userText: string) => {
     const t = userText.trim();
@@ -778,6 +781,29 @@ function TellMeMoreModal({
             onFinalize={(assembled) => onUseAnswer(assembled, messages)}
           />
         )}
+
+        {/* Landed: the teacher affirmed (no more questions) — one click takes the
+            answer they just gave into the develop box as theirs. */}
+        {!scaffold &&
+          !busy &&
+          lastUserText &&
+          messages[messages.length - 1]?.role === "assistant" && (
+            <div className="flex items-center justify-between gap-3 border-t border-accent/40 bg-accent/10 p-3">
+              <p className="min-w-0 font-sans text-[13px] text-ink">
+                <span className="font-semibold">You&apos;ve landed it.</span>{" "}
+                <span className="text-ink-muted">
+                  Take what you just said as your answer — you can still edit it there.
+                </span>
+              </p>
+              <Button
+                variant="primary"
+                onClick={() => onUseAnswer(lastUserText, messages)}
+                className="shrink-0"
+              >
+                Use this as mine →
+              </Button>
+            </div>
+          )}
 
         <div className="border-t border-border p-3">
           <div className="flex items-center gap-2">
