@@ -204,6 +204,15 @@ export const DiffTeachOutput = z.object({
 });
 export type DiffTeachResult = z.infer<typeof DiffTeachOutput>;
 
+/** The scaffold's blank labels MUST be questions — a noun-phrase label is the
+ *  answer wearing brackets (the inventor could copy it into the slot). */
+const BLANK_LABEL_RE = /\[([^\]]+)\]/g;
+function answerLikeLabels(scaffold: string): string[] {
+  return [...scaffold.matchAll(BLANK_LABEL_RE)]
+    .map((m) => m[1].trim())
+    .filter((l) => !l.includes("?"));
+}
+
 export async function runDifferentiationTeacher(
   runAgent: AgentRunner,
   input: { title: string; statement: string; analysis: WhitespaceResult },
@@ -236,13 +245,48 @@ export async function runDifferentiationTeacher(
     "THE OPEN-LANDSCAPE SYNTHESIS (context):",
     a.consolidatedOpenLandscapeAnalysis || "(none)",
   ].join("\n");
-  return runAgent({
+  const first = await runAgent({
     agent: "differentiation-teacher",
     system,
     prompt,
     schema: DiffTeachOutput,
     temperature: 0.3,
   });
+
+  // MECHANICAL COPY-TEST GUARD: every blank label must be a question. The model
+  // has repeatedly put the answer in the label ("[the Socratic teaching path]") —
+  // retry once naming the offenders, then sanitize whatever still fails.
+  let out = first;
+  const bad = out.scaffold ? answerLikeLabels(out.scaffold) : [];
+  if (bad.length) {
+    try {
+      out = await runAgent({
+        agent: "differentiation-teacher",
+        system,
+        prompt: [
+          prompt,
+          "",
+          "YOUR PREVIOUS SCAFFOLD FAILED THE COPY TEST — these blank labels are ANSWERS, not questions:",
+          ...bad.map((l) => `- [${l}]`),
+          "Re-emit the SAME lesson, but rewrite the scaffold so every [label] is a short question ending with '?' that does NOT contain the answer's words. The answers stay in the lesson text, never in the labels.",
+        ].join("\n"),
+        schema: DiffTeachOutput,
+        temperature: 0.2,
+      });
+    } catch {
+      out = first;
+    }
+  }
+  // Last resort: neutralize any label that still reads as an answer.
+  if (out.scaffold && answerLikeLabels(out.scaffold).length) {
+    out = {
+      ...out,
+      scaffold: out.scaffold.replace(BLANK_LABEL_RE, (m, l: string) =>
+        l.trim().includes("?") ? m : "[say it in your words — the lesson above states it]",
+      ),
+    };
+  }
+  return out;
 }
 
 /**

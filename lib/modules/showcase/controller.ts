@@ -309,31 +309,28 @@ export class ShowcaseModule {
       return;
     }
 
-    const inventorMaterial = kcs.flatMap((k) => k.verbatim).join("\n");
-    // Synthesize one species per type; the verifier (Boundary) gates each.
+    // Synthesize one species per type. NO verifier gate here: a species is BY
+    // DESIGN an alternative implementation naming components the inventor never
+    // stated (that is its whole purpose), so checking it against the inventor's
+    // verbatim rejects every good species — which blanked the screen. V1's gate
+    // is the HUMAN one: Gate 1 approve/edit/reject, right below. The synthesis
+    // prompt itself enforces no-capability-invention against the genus.
     for (const t of SPECIES_TYPES) {
       try {
         const sp = await runSpeciesSynthesizer(this.runAgent, { genus: this.genus, speciesType: t });
-        const verdict = await runVerifier(this.runAgent, {
-          piece: `${sp.species_name}: ${sp.architectural_description}\n${sp.data_flow}`,
-          inventorMaterial,
-          consciousness: this.consciousness.renderForAgent(),
-        });
         this.ledger.recordMachineEvent("agent_species", ["showcase", t], {});
-        if (verdict.verdict === "pass") {
-          this.species.push(sp);
-        } else {
-          this.ledger.recordMachineEvent("broadening_withheld", ["showcase", "species", t], {
-            reason: verdict.note,
-          });
-        }
+        this.species.push(sp);
       } catch (err) {
         console.error("[showcase] species synthesis failed for", t, err);
       }
     }
 
     if (!this.species.length) {
-      // Nothing survived the Boundary — finish without broadening.
+      // Synthesis itself failed — say so instead of finishing silently.
+      this.pushTurn({
+        role: "helper",
+        text: "The expansion couldn't draft the alternative implementations this time — hit Genus & Species Expansion to try again.",
+      });
       this.broadened = false;
       this.complete();
       return;
