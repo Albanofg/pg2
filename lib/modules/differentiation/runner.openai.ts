@@ -13,6 +13,7 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   "key-concept-decomposer": MODELS.drafter,
   whitespace: MODELS.drafter,
   "differentiation-teacher": MODELS.drafter,
+  "novelty-checker": MODELS.drafter,
   "gap-framer": MODELS.drafter,
   "differentiation-formalizer": MODELS.drafter,
   "pohc-scorer": MODELS.drafter,

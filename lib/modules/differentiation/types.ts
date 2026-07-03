@@ -181,6 +181,12 @@ export type NoveltyCaptureCard = {
   title: string;
   /** The framed gap, restated as the thing only they can answer. No proposed answer. */
   context: string;
+  /**
+   * The checker's correction when the last submission failed — the card stays,
+   * the note says what's wrong, and wrongBlanks marks the specific slot(s) so the
+   * inventor fixes just those and resubmits. Cleared on the next submission.
+   */
+  feedback?: { note: string; wrongBlanks: { label: string; why: string }[] };
 };
 
 /**
@@ -248,8 +254,13 @@ export type Module4Card =
  * Inventor action inputs
  * ------------------------------------------------------------------ */
 
-/** The inventor's verbatim statement of what is new against the art. */
-export type NoveltyInput = { statement: string };
+/** The inventor's verbatim statement of what is new against the art. When it was
+ *  assembled from the lesson's fill-in slots, `blanks` carries each labeled slot
+ *  and what the inventor put there — so the checker can mark the wrong one. */
+export type NoveltyInput = {
+  statement: string;
+  blanks?: { label: string; value: string }[];
+};
 
 export type ReviewActionInput =
   | { action: "approve" }
@@ -276,6 +287,12 @@ export type DifferentiatedConcept = ConceptObject & {
   landscape: ConceptLandscape;
   /** The full V1 whitespace analysis for this concept, once generated. */
   whitespace?: WhitespaceAnalysis;
+  /**
+   * Background-prepared analysis + lesson for THIS concept, generated one-at-a-
+   * time while the inventor answers the previous concept — so advancing is
+   * instant. Consumed (and cleared) by frameNext when this concept comes up.
+   */
+  prepared?: { analysis: WhitespaceAnalysis; teaching?: WhitespaceTeaching };
   /** The factual gap frame, once generated (derived from the whitespace). */
   gap?: { artSummary: string; mechanism: string; openPoints: string[] };
   /** The inventor's verbatim novelty statement + its Ledger id. inventor_conceived. */
@@ -363,6 +380,7 @@ export type AgentName =
   | "key-concept-decomposer" // splits a carried Concept into its distinct novel elements (N Key Concepts)
   | "whitespace" // V1's prior-art mechanism surfacer + strategic synthesis per Key Concept
   | "differentiation-teacher" // turns the raw whitespace analysis into a short, plain-English lesson
+  | "novelty-checker" // gates the inventor's differentiation: pass, or say exactly what's wrong where
   | "gap-framer" // frames what the art covers + the open points (factual, no novelty)
   | "differentiation-formalizer" // cleans the inventor's novelty into differentiation text
   | "pohc-scorer" // scores the three Proof-of-Human-Conception factors per Key Concept

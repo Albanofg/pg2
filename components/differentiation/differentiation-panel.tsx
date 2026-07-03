@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDifferentiation } from "@/lib/hooks/use-differentiation";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
@@ -30,17 +30,62 @@ export default function DifferentiationPanel({
   projectId: string | null;
   maxW?: string;
 }) {
-  const { view, busy, error, ready, act, tell, restart } = useDifferentiation(projectId);
+  const { view, busy, error, ready, act, tell, prepareNext, compile, restart } =
+    useDifferentiation(projectId);
   const setStage = useWorkspace((s) => s.setStage);
   const working = busy || !ready;
   const keyConcepts = view.concepts.filter((c) => c.isKeyConcept);
+  const activeConcepts = view.concepts.filter((c) => c.status.state === "active");
+  const differentiated = activeConcepts.filter((c) => c.differentiation_statement);
+
+  // Pipeline, one at a time: while the inventor answers THIS concept, quietly
+  // prepare the NEXT one's analysis + lesson in the background — so "This is
+  // mine" advances instantly. Fires once per on-screen concept.
+  const currentConceptId =
+    view.cards.find((c) => c.type === "novelty_capture")?.conceptId ?? null;
+  const preparedForRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!currentConceptId || preparedForRef.current.has(currentConceptId)) return;
+    preparedForRef.current.add(currentConceptId);
+    prepareNext();
+  }, [currentConceptId, prepareNext]);
+
+  // A new concept just loaded (or the phase moved on) — start the reader at the
+  // top of its lesson, not wherever the previous concept left the scroll.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [currentConceptId, view.phase]);
+
+  // The last anchor flips the phase to "compiling" and returns instantly; the
+  // heavy step (nine sections + certification) runs as its own request, with an
+  // honest progress message below. Fire once.
+  const compileFiredRef = useRef(false);
+  useEffect(() => {
+    if (view.phase === "compiling" && !busy && !compileFiredRef.current) {
+      compileFiredRef.current = true;
+      void compile();
+    }
+  }, [view.phase, busy, compile]);
   // The lesson's fill-in-the-blanks answer — assembled in the whitespace teaching,
   // dropped into the novelty box below (still editable; "This is mine" submits it).
-  const [scaffoldAnswer, setScaffoldAnswer] = useState<string | null>(null);
+  // Keyed by concept so one concept's answer NEVER leaks into the next one's box.
+  // `blanks` rides along so the checker can mark the specific wrong slot on a fail.
+  const [scaffoldAnswer, setScaffoldAnswer] = useState<{
+    conceptId: string;
+    text: string;
+    blanks: { label: string; value: string }[];
+  } | null>(null);
+
+  // The checker's wrong-slot labels for the on-screen concept (marks the mad lib).
+  const noveltyFeedback = view.cards.find(
+    (c) => c.type === "novelty_capture" && c.feedback,
+  ) as Extract<Module4Card, { type: "novelty_capture" }> | undefined;
+  const wrongLabels = noveltyFeedback?.feedback?.wrongBlanks.map((b) => b.label) ?? [];
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div
           className={`mx-auto flex w-full flex-col gap-5 p-6 ${maxW}`}
         >
@@ -52,9 +97,13 @@ export default function DifferentiationPanel({
               <h2 className="mt-1 font-sans text-lg font-semibold text-ink">
                 {view.phase === "anchoring"
                   ? "Choose which become your Key Concepts"
-                  : view.phase === "complete"
-                    ? "Your Key Concepts are set"
-                    : "Say what's genuinely new — against what already exists"}
+                  : view.phase === "compiling"
+                    ? "Compiling your Invention Concept Blueprint"
+                    : view.phase === "certifying"
+                      ? "Certifying inventorship"
+                      : view.phase === "complete"
+                        ? "Your Key Concepts are set"
+                        : "Say what's genuinely new — against what already exists"}
               </h2>
             </div>
             <div className="flex items-center gap-3">
@@ -78,9 +127,13 @@ export default function DifferentiationPanel({
             <div className="flex items-center gap-3 rounded-md border border-accent/30 bg-accent/5 p-4">
               <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" />
               <span className="font-mono text-xs text-ink-muted">
-                {view.cards.length === 0 && !view.disclosure
-                  ? "The Helper is laying out the prior-art gap… this can take a moment."
-                  : "Working…"}
+                {view.phase === "compiling"
+                  ? "Compiling your Invention Concept Blueprint — nine sections drafted one by one, then inventorship certified. This takes a few minutes; it's working, not stuck."
+                  : view.phase === "certifying"
+                    ? "Certifying inventorship for each Key Concept…"
+                    : view.cards.length === 0 && !view.disclosure
+                      ? "The Helper is mapping what already exists… this can take a moment."
+                      : "Working…"}
               </span>
             </div>
           )}
@@ -107,6 +160,14 @@ export default function DifferentiationPanel({
             </div>
           )}
 
+          {/* Where you are: differentiations are one-at-a-time, so show N of M. */}
+          {view.phase === "capturing" && activeConcepts.length > 0 && view.cards.length > 0 && (
+            <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+              Needs your input · concept {Math.min(differentiated.length + 1, activeConcepts.length)} of{" "}
+              {activeConcepts.length}
+            </div>
+          )}
+
           <div className="flex flex-col gap-4">
             {view.cards.map((card) => (
               <CardView
@@ -115,7 +176,17 @@ export default function DifferentiationPanel({
                 busy={busy}
                 onAct={act}
                 scaffoldAnswer={scaffoldAnswer}
-                onUseScaffold={setScaffoldAnswer}
+                wrongLabels={wrongLabels}
+                onUseScaffold={(answer) => {
+                  setScaffoldAnswer(answer);
+                  // Land the user on their prefilled answer — the novelty card
+                  // sits below the lesson, out of view on long lessons.
+                  requestAnimationFrame(() => {
+                    document
+                      .getElementById(`novelty-${answer.conceptId}`)
+                      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  });
+                }}
               />
             ))}
           </div>
@@ -189,23 +260,49 @@ function CardView({
   busy,
   onAct,
   scaffoldAnswer,
+  wrongLabels,
   onUseScaffold,
 }: {
   card: Module4Card;
   busy: boolean;
   onAct: (cardId: string, input: never) => void;
-  scaffoldAnswer: string | null;
-  onUseScaffold: (assembled: string) => void;
+  scaffoldAnswer: {
+    conceptId: string;
+    text: string;
+    blanks: { label: string; value: string }[];
+  } | null;
+  wrongLabels: string[];
+  onUseScaffold: (answer: {
+    conceptId: string;
+    text: string;
+    blanks: { label: string; value: string }[];
+  }) => void;
 }) {
   switch (card.type) {
     case "whitespace":
-      return <WhitespaceView card={card} onUseScaffold={onUseScaffold} />;
+      return (
+        <WhitespaceView
+          card={card}
+          wrongLabels={wrongLabels}
+          onUseScaffold={(text, blanks) =>
+            onUseScaffold({ conceptId: card.conceptId, text, blanks })
+          }
+        />
+      );
     case "gap":
       return <GapView card={card} />;
-    case "novelty_capture":
+    case "novelty_capture": {
+      const mine = scaffoldAnswer?.conceptId === card.conceptId ? scaffoldAnswer : null;
       return (
-        <NoveltyCaptureView card={card} busy={busy} onAct={onAct} prefill={scaffoldAnswer} />
+        <NoveltyCaptureView
+          card={card}
+          busy={busy}
+          onAct={onAct}
+          prefill={mine?.text ?? null}
+          prefillBlanks={mine?.blanks ?? null}
+        />
       );
+    }
     case "differentiation_review":
       return <DifferentiationReviewView card={card} busy={busy} onAct={onAct} />;
     case "key_concept":
@@ -219,10 +316,12 @@ function CardView({
 
 function WhitespaceView({
   card,
+  wrongLabels,
   onUseScaffold,
 }: {
   card: WhitespaceCard;
-  onUseScaffold: (assembled: string) => void;
+  wrongLabels: string[];
+  onUseScaffold: (assembled: string, blanks: { label: string; value: string }[]) => void;
 }) {
   const a = card.analysis;
   const level = a.overallMatchLevel.level;
@@ -249,7 +348,11 @@ function WhitespaceView({
       <div className="mt-1 font-sans text-sm font-semibold text-ink">{card.title}</div>
 
       {/* PRIMARY VIEW: the short lesson (or a concise summary if the lesson is absent). */}
-      {t ? <TeachingLesson t={t} onUseScaffold={onUseScaffold} /> : <WhitespaceFallback a={a} />}
+      {t ? (
+        <TeachingLesson t={t} wrongLabels={wrongLabels} onUseScaffold={onUseScaffold} />
+      ) : (
+        <WhitespaceFallback a={a} />
+      )}
 
       {/* SECONDARY: the full raw analysis, always tucked behind a disclosure. */}
       <details className="group mt-4">
@@ -295,10 +398,12 @@ function WhitespaceFallback({ a }: { a: WhitespaceCard["analysis"] }) {
 /** The concise, scannable plain-English lesson — the primary whitespace view. */
 function TeachingLesson({
   t,
+  wrongLabels,
   onUseScaffold,
 }: {
   t: WhitespaceTeaching;
-  onUseScaffold: (assembled: string) => void;
+  wrongLabels: string[];
+  onUseScaffold: (assembled: string, blanks: { label: string; value: string }[]) => void;
 }) {
   return (
     <div className="mt-3 space-y-3 font-sans text-[13px] leading-relaxed text-ink">
@@ -350,7 +455,9 @@ function TeachingLesson({
         </p>
       )}
 
-      {t.scaffold && <DiffScaffoldFill template={t.scaffold} onUse={onUseScaffold} />}
+      {t.scaffold && (
+        <DiffScaffoldFill template={t.scaffold} wrongLabels={wrongLabels} onUse={onUseScaffold} />
+      )}
 
       {t.prompt && <p className="font-semibold text-ink">{t.prompt}</p>}
     </div>
@@ -385,18 +492,25 @@ function splitDiffTemplate(template: string): DiffScaffoldPart[] {
  */
 function DiffScaffoldFill({
   template,
+  wrongLabels,
   onUse,
 }: {
   template: string;
-  onUse: (assembled: string) => void;
+  wrongLabels: string[];
+  onUse: (assembled: string, blanks: { label: string; value: string }[]) => void;
 }) {
   const parts = splitDiffTemplate(template);
-  const blankCount = parts.filter((p) => p.blank).length;
+  const blanks = parts.filter((p): p is Extract<DiffScaffoldPart, { blank: true }> => !!p.blank);
+  const blankCount = blanks.length;
   const [values, setValues] = useState<string[]>(() => Array(blankCount).fill(""));
+  // Flips to a "✓ done" state once sent to the answer box; editing a blank re-arms it.
+  const [used, setUsed] = useState(false);
   const assembled = parts
     .map((p) => (p.blank ? (values[p.index] ?? "").trim() : p.text))
     .join("");
   const allFilled = blankCount > 0 && values.slice(0, blankCount).every((v) => v.trim());
+  const filledBlanks = () =>
+    blanks.map((b) => ({ label: b.label, value: (values[b.index] ?? "").trim() }));
 
   return (
     <div className="rounded border border-dashed border-accent/40 bg-accent/[0.04] p-2.5">
@@ -406,17 +520,35 @@ function DiffScaffoldFill({
       <p className="mt-1 text-[13px] leading-9 text-ink">
         {parts.map((p, i) =>
           p.blank ? (
-            <input
+            // A one-line TEXTAREA, not an input: Chromium's ID-card/address/payment
+            // autofill only targets <input>, so this kills the "Save ID card?" popup.
+            // A slot the checker flagged as wrong turns red until it's edited.
+            <textarea
               key={i}
+              rows={1}
               value={values[p.index] ?? ""}
               onChange={(e) => {
                 const next = [...values];
-                next[p.index] = e.target.value;
+                next[p.index] = e.target.value.replace(/\n/g, " ");
                 setValues(next);
+                setUsed(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.preventDefault();
               }}
               placeholder={p.label || "your words"}
-              size={Math.max((p.label || "your words").length, (values[p.index] ?? "").length || 6)}
-              className="mx-1 inline-block min-w-[6rem] rounded border-b-2 border-accent/50 bg-accent/10 px-2 py-0.5 font-sans text-[13px] text-ink placeholder:text-ink-muted/70 focus:border-accent focus:outline-none"
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-form-type="other"
+              style={{
+                width: `${Math.max((p.label || "your words").length, (values[p.index] ?? "").length || 6) + 2}ch`,
+              }}
+              className={`mx-1 inline-block min-w-[6rem] max-w-full resize-none overflow-hidden whitespace-nowrap rounded border-b-2 px-2 py-0.5 align-middle font-sans text-[13px] leading-normal text-ink placeholder:text-ink-muted/70 focus:outline-none ${
+                wrongLabels.includes(p.label)
+                  ? "border-red-500/80 bg-red-500/10 focus:border-red-400"
+                  : "border-accent/50 bg-accent/10 focus:border-accent"
+              }`}
             />
           ) : (
             <span key={i}>{p.text}</span>
@@ -425,15 +557,24 @@ function DiffScaffoldFill({
       </p>
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="font-mono text-[10px] italic text-ink-muted">
-          The answer is in the lesson above — read it, then say it in your own words.
+          {used
+            ? "It's in your answer box below — finish it there with “This is mine”."
+            : "The answer is in the lesson above — read it, then say it in your own words."}
         </span>
         <button
           type="button"
-          onClick={() => onUse(assembled)}
-          disabled={!allFilled}
-          className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+          onClick={() => {
+            onUse(assembled, filledBlanks());
+            setUsed(true);
+          }}
+          disabled={!allFilled || used}
+          className={
+            used
+              ? "rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 font-sans text-xs font-medium text-emerald-400"
+              : "rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+          }
         >
-          Use as my answer ↓
+          {used ? "✓ In your answer box" : "Use as my answer ↓"}
         </button>
       </div>
     </div>
@@ -549,20 +690,32 @@ function NoveltyCaptureView({
   busy,
   onAct,
   prefill,
+  prefillBlanks,
 }: {
   card: NoveltyCaptureCard;
   busy: boolean;
   onAct: (cardId: string, input: never) => void;
   prefill: string | null;
+  prefillBlanks: { label: string; value: string }[] | null;
 }) {
   const [text, setText] = useState("");
+  // Submitted: show a thinking state right here until the next concept arrives
+  // (this card unmounts when the view updates). If the request finished and this
+  // card is STILL mounted, the submit failed — re-arm so the inventor can retry.
+  const [submitted, setSubmitted] = useState(false);
+  useEffect(() => {
+    if (submitted && !busy) setSubmitted(false);
+  }, [submitted, busy]);
   // The lesson's filled-in scaffold lands here — still the inventor's words
   // (they filled the slots), still editable before "This is mine".
   useEffect(() => {
     if (prefill?.trim()) setText(prefill);
   }, [prefill]);
   return (
-    <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4">
+    <div
+      id={`novelty-${card.conceptId}`}
+      className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4"
+    >
       <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-amber-400">
         Your call on novelty
       </div>
@@ -575,21 +728,67 @@ function NoveltyCaptureView({
         tends to make something registrable. The one sentence that has to be yours, in your own
         words, is this one: what your concept does that the art does not.
       </p>
+
+      {/* The checker's correction — what was wrong, and which slot(s) carry it. */}
+      {card.feedback && !submitted && (
+        <div className="mt-2 rounded-md border border-red-500/40 bg-red-500/10 p-3">
+          <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-red-300">
+            Not quite — fix and resubmit
+          </div>
+          <p className="mt-1 font-sans text-[13px] leading-relaxed text-ink">
+            {card.feedback.note}
+          </p>
+          {card.feedback.wrongBlanks.length > 0 && (
+            <ul className="mt-1 space-y-0.5">
+              {card.feedback.wrongBlanks.map((b, i) => (
+                <li key={i} className="font-sans text-[12px] text-red-200/90">
+                  <span className="font-semibold">[{b.label}]</span> — {b.why}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-1 font-mono text-[10px] italic text-ink-muted">
+            The marked slot(s) in the lesson above turned red — edit them, use the sentence
+            again, and resubmit.
+          </p>
+        </div>
+      )}
+
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={4}
+        disabled={submitted}
         placeholder="What does this concept do that the existing art does not?"
-        className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+        className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none disabled:opacity-60"
       />
       <div className="mt-2 flex justify-end">
-        <button
-          onClick={() => onAct(card.id, { statement: text.trim() } as never)}
-          disabled={busy || !text.trim()}
-          className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
-        >
-          This is mine
-        </button>
+        {submitted ? (
+          <div className="flex items-center gap-2 px-3 py-1.5">
+            <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+            <span className="font-mono text-xs text-ink-muted">Checking your call…</span>
+          </div>
+        ) : (
+          <button
+            onClick={() => {
+              setSubmitted(true);
+              // Send the filled slots along only when the text is still the
+              // assembled sentence — edited free text has no slot mapping.
+              const blanks =
+                prefill && text.trim() === prefill.trim() && prefillBlanks?.length
+                  ? prefillBlanks
+                  : undefined;
+              onAct(card.id, {
+                statement: text.trim(),
+                ...(blanks ? { blanks } : {}),
+              } as never);
+            }}
+            disabled={busy || !text.trim()}
+            className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+          >
+            This is mine
+          </button>
+        )}
       </div>
     </div>
   );

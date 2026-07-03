@@ -8,7 +8,9 @@ import HelperThread from "@/components/workspace/helper-thread";
 import RestartPart from "@/components/workspace/restart-part";
 import type {
   ChoiceCard,
+  ExpansionReviewCard,
   Module5Card,
+  SpeciesReviewCard,
   VariationCard,
   WidenedReviewCard,
 } from "@/lib/modules/showcase/types";
@@ -167,10 +169,16 @@ export default function ShowcasePanel({
             </div>
           )}
 
-          {working && sections.length === 0 && (
+          {working && (
             <div className="flex items-center gap-3 rounded-md border border-accent/30 bg-accent/5 p-4">
               <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-              <span className="font-mono text-xs text-ink-muted">Loading your draft…</span>
+              <span className="font-mono text-xs text-ink-muted">
+                {sections.length === 0
+                  ? "Loading your draft…"
+                  : view.phase === "selecting_variations" || view.phase === "approving_widened"
+                    ? "Working through the expansion…"
+                    : "Working — extracting the underlying mechanism and drafting alternative implementations… this takes a minute or two."}
+              </span>
             </div>
           )}
 
@@ -402,9 +410,303 @@ function CardView({
       return <VariationView card={card} busy={busy} onAct={onAct} />;
     case "widened_review":
       return <WidenedReviewView card={card} busy={busy} onAct={onAct} />;
+    case "species_review":
+      return <SpeciesReviewView card={card} busy={busy} onAct={onAct} />;
+    case "expansion_review":
+      return <ExpansionReviewView card={card} busy={busy} onAct={onAct} />;
     default:
       return null;
   }
+}
+
+/** GATE 1 (V1): all species on one screen — Approve / Edit / Reject each, then
+ *  Confirm & Continue. Only approved implementations continue. */
+function SpeciesReviewView({
+  card,
+  busy,
+  onAct,
+}: {
+  card: SpeciesReviewCard;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const allDecided = card.items.every((i) => i.status !== "pending");
+  return (
+    <div className="rounded-md border border-border bg-panel p-4">
+      <div className="font-sans text-base font-semibold text-ink">Review AI implementations</div>
+      <p className="mt-0.5 font-sans text-xs text-ink-muted">
+        Approve, edit, or reject each — only approved ones get woven into your draft.
+      </p>
+      <div className="mt-3 space-y-3">
+        {card.items.map((it) => (
+          <div
+            key={it.speciesType}
+            className={`rounded-md border p-3 ${
+              it.status === "approved"
+                ? "border-emerald-500/40 bg-emerald-500/[0.05]"
+                : it.status === "rejected"
+                  ? "border-border bg-bg/40 opacity-60"
+                  : "border-border bg-bg"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-sans text-sm font-semibold text-ink">
+                {it.label}
+                {it.status !== "pending" && (
+                  <span
+                    className={`ml-2 font-mono text-[9px] uppercase tracking-[0.1em] ${
+                      it.status === "approved" ? "text-emerald-400" : "text-red-300"
+                    }`}
+                  >
+                    {it.status}
+                  </span>
+                )}
+              </div>
+              <div className="flex shrink-0 gap-1.5">
+                <button
+                  onClick={() => onAct(card.id, { action: "approve", speciesType: it.speciesType } as never)}
+                  disabled={busy}
+                  className={`rounded-md px-2.5 py-1 font-sans text-xs font-medium disabled:opacity-50 ${
+                    it.status === "approved"
+                      ? "bg-accent text-brand"
+                      : "border border-border text-ink-muted hover:text-ink"
+                  }`}
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => {
+                    setEditing(it.speciesType);
+                    setText(it.description);
+                  }}
+                  disabled={busy}
+                  className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => onAct(card.id, { action: "reject", speciesType: it.speciesType } as never)}
+                  disabled={busy}
+                  className={`rounded-md px-2.5 py-1 font-sans text-xs disabled:opacity-50 ${
+                    it.status === "rejected"
+                      ? "border border-red-500/60 bg-red-500/15 text-red-300"
+                      : "border border-border text-ink-muted hover:border-red-500/40 hover:text-red-300"
+                  }`}
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+            {editing === it.speciesType ? (
+              <>
+                <textarea
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  rows={6}
+                  className="mt-2 w-full resize-y rounded-md border border-border bg-panel p-2 font-sans text-xs leading-relaxed text-ink focus:border-accent focus:outline-none"
+                />
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => {
+                      onAct(card.id, {
+                        action: "edit",
+                        speciesType: it.speciesType,
+                        text: text.trim(),
+                      } as never);
+                      setEditing(null);
+                    }}
+                    disabled={busy || !text.trim()}
+                    className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setEditing(null)}
+                    className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="mt-2 whitespace-pre-wrap font-sans text-xs leading-relaxed text-ink-muted">
+                {it.description}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] text-ink-muted">
+          {allDecided
+            ? "All decided — continuing drafts the full expansion for your review (a few minutes)."
+            : "Decide every implementation to continue."}
+        </span>
+        <button
+          onClick={() => onAct(card.id, { action: "confirm" } as never)}
+          disabled={busy || !allDecided}
+          className="rounded-md bg-accent px-4 py-2 font-sans text-sm font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+        >
+          Confirm &amp; Continue
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** GATE 2 (V1): every expansion artifact individually reviewable — Regenerate /
+ *  Keep / Edit / Remove — then Finalize Expansion weaves the kept ones in. */
+function ExpansionReviewView({
+  card,
+  busy,
+  onAct,
+}: {
+  card: ExpansionReviewCard;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const keptCount = card.artifacts.filter((a) => a.kept).length;
+  return (
+    <div className="rounded-md border border-border bg-panel p-4">
+      <div className="font-sans text-base font-semibold text-ink">Review expanded content</div>
+      <p className="mt-0.5 font-sans text-xs text-ink-muted">
+        Approve, edit, or reject each artifact. Only approved content enters your draft.
+      </p>
+      <div className="mt-3 space-y-3">
+        {card.artifacts.map((a) => {
+          const isOpen = expanded.has(a.id);
+          return (
+            <div
+              key={a.id}
+              className={`rounded-md border p-3 ${
+                a.kept ? "border-border bg-bg" : "border-border bg-bg/40 opacity-60"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+                    {a.label}
+                  </div>
+                  {a.original && (
+                    <p className="mt-0.5 truncate font-sans text-[11px] italic text-ink-muted/80">
+                      {a.original}
+                    </p>
+                  )}
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  <button
+                    onClick={() => onAct(card.id, { action: "regenerate", artifactId: a.id } as never)}
+                    disabled={busy}
+                    className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
+                  >
+                    Regenerate
+                  </button>
+                  <button
+                    onClick={() => onAct(card.id, { action: "keep", artifactId: a.id } as never)}
+                    disabled={busy}
+                    className={`rounded-md px-2.5 py-1 font-sans text-xs font-medium disabled:opacity-50 ${
+                      a.kept ? "bg-accent text-brand" : "border border-border text-ink-muted hover:text-ink"
+                    }`}
+                  >
+                    Keep
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditingId(a.id);
+                      setText(a.text);
+                    }}
+                    disabled={busy}
+                    className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => onAct(card.id, { action: "remove", artifactId: a.id } as never)}
+                    disabled={busy}
+                    className={`rounded-md px-2.5 py-1 font-sans text-xs disabled:opacity-50 ${
+                      !a.kept
+                        ? "border border-red-500/60 bg-red-500/15 text-red-300"
+                        : "border border-border text-ink-muted hover:border-red-500/40 hover:text-red-300"
+                    }`}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+              {editingId === a.id ? (
+                <>
+                  <textarea
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    rows={8}
+                    className="mt-2 w-full resize-y rounded-md border border-border bg-panel p-2 font-sans text-xs leading-relaxed text-ink focus:border-accent focus:outline-none"
+                  />
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      onClick={() => {
+                        onAct(card.id, { action: "edit", artifactId: a.id, text: text.trim() } as never);
+                        setEditingId(null);
+                      }}
+                      disabled={busy || !text.trim()}
+                      className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setEditingId(null)}
+                      className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p
+                    className={`mt-2 whitespace-pre-wrap font-sans text-xs leading-relaxed text-ink ${
+                      isOpen ? "" : "line-clamp-4"
+                    }`}
+                  >
+                    {a.text}
+                  </p>
+                  <button
+                    onClick={() =>
+                      setExpanded((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(a.id)) next.delete(a.id);
+                        else next.add(a.id);
+                        return next;
+                      })
+                    }
+                    className="mt-1 font-sans text-[11px] text-accent underline-offset-2 hover:underline"
+                  >
+                    {isOpen ? "Collapse" : "Read full text"}
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-4 flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] text-ink-muted">
+          {keptCount} of {card.artifacts.length} will be woven into your draft.
+        </span>
+        <button
+          onClick={() => onAct(card.id, { action: "finalize" } as never)}
+          disabled={busy}
+          className="rounded-md bg-accent px-4 py-2 font-sans text-sm font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+        >
+          Finalize Expansion
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function ChoiceView({

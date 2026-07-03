@@ -10,10 +10,16 @@ import {
   saveDifferentiation,
   seedDifferentiation,
 } from "@/lib/modules/differentiation/registry";
+import {
+  runDifferentiationTeacher,
+  runWhitespace,
+} from "@/lib/modules/differentiation/agents";
+import { openaiAgentRunner } from "@/lib/modules/differentiation/runner.openai";
 import type {
   CardActionInput,
   ConceptLandscape,
   Module4View,
+  WhitespaceTeaching,
 } from "@/lib/modules/differentiation/types";
 
 export const runtime = "nodejs";
@@ -32,6 +38,8 @@ type Body =
   | { op: "start"; projectId: string }
   | { op: "act"; projectId: string; cardId: string; input: CardActionInput }
   | { op: "message"; projectId: string; text: string }
+  | { op: "prepare_next"; projectId: string }
+  | { op: "compile"; projectId: string }
   | { op: "reset"; projectId: string };
 
 /**
@@ -128,6 +136,47 @@ export async function POST(req: Request) {
         const engine = await loadDifferentiation(body.projectId);
         if (!engine) return NextResponse.json(EMPTY_VIEW);
         const view = await engine.tell(body.text ?? "");
+        await saveDifferentiation(body.projectId, engine);
+        return NextResponse.json(view);
+      }
+      case "prepare_next": {
+        // Background pipeline — ONE concept at a time: while the inventor answers
+        // the current concept, prepare only the NEXT one's analysis + lesson.
+        // The slow compute runs OUTSIDE the engine; then we re-load fresh and
+        // graft in a tiny write, so a concurrent "This is mine" can't be clobbered.
+        const probe = await loadDifferentiation(body.projectId);
+        const target = probe?.peekPrepareTarget();
+        if (!target) return NextResponse.json({ prepared: false });
+
+        const analysis = await runWhitespace(openaiAgentRunner, {
+          title: target.title,
+          statement: target.statement,
+          references: target.references,
+        });
+        let teaching: WhitespaceTeaching | undefined;
+        try {
+          teaching = await runDifferentiationTeacher(openaiAgentRunner, {
+            title: target.title,
+            statement: target.statement,
+            analysis,
+          });
+        } catch (err) {
+          console.error("[differentiation] prepare: teacher failed", err);
+        }
+
+        const engine = await loadDifferentiation(body.projectId);
+        if (!engine) return NextResponse.json({ prepared: false });
+        engine.attachPrepared(target.conceptId, analysis, teaching);
+        await saveDifferentiation(body.projectId, engine);
+        return NextResponse.json({ prepared: true });
+      }
+      case "compile": {
+        // The heavy step (nine disclosure sections + certify every Key Concept),
+        // run as its own request so the anchor click stays instant. Idempotent —
+        // the engine only compiles from the "compiling" phase.
+        const engine = await loadDifferentiation(body.projectId);
+        if (!engine) return NextResponse.json(EMPTY_VIEW);
+        const view = await engine.compile();
         await saveDifferentiation(body.projectId, engine);
         return NextResponse.json(view);
       }

@@ -902,17 +902,29 @@ function ScaffoldFill({
       <p className="font-sans text-[15px] leading-10 text-ink">
         {parts.map((p, i) =>
           p.blank ? (
-            <input
+            // A one-line TEXTAREA, not an input: Chromium's ID-card/address/payment
+            // autofill only targets <input>, so this kills the "Save ID card?" popup.
+            <textarea
               key={i}
+              rows={1}
               value={values[p.index] ?? ""}
               onChange={(e) => {
                 const next = [...values];
-                next[p.index] = e.target.value;
+                next[p.index] = e.target.value.replace(/\n/g, " ");
                 setValues(next);
               }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.preventDefault();
+              }}
               placeholder={p.label}
-              size={Math.max(p.label.length, (values[p.index] ?? "").length || 6)}
-              className="mx-1 inline-block min-w-[6rem] rounded border-b-2 border-accent/50 bg-accent/10 px-2 py-0.5 font-sans text-[15px] text-ink placeholder:text-ink-muted/70 focus:border-accent focus:outline-none"
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-form-type="other"
+              style={{
+                width: `${Math.max(p.label.length, (values[p.index] ?? "").length || 6) + 2}ch`,
+              }}
+              className="mx-1 inline-block min-w-[6rem] max-w-full resize-none overflow-hidden whitespace-nowrap rounded border-b-2 border-accent/50 bg-accent/10 px-2 py-0.5 align-middle font-sans text-[15px] leading-normal text-ink placeholder:text-ink-muted/70 focus:border-accent focus:outline-none"
             />
           ) : (
             <span key={i}>{p.text}</span>

@@ -66,7 +66,7 @@ export default function LandscapePanel({
               <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" />
               <span className="font-mono text-xs text-ink-muted">
                 {!anyIdeas
-                  ? "Searching patents and publications for each idea… this can take a moment."
+                  ? "Searching existing filings and publications for each idea… this can take a moment."
                   : "Working…"}
               </span>
             </div>
@@ -184,7 +184,7 @@ function IdeaLandscape({
 
       {idea.status === "done" && idea.sources.length === 0 && (
         <p className="mt-3 rounded-md border border-accent/30 bg-accent/5 p-2 font-mono text-[11px] text-ink-muted">
-          No close prior art found — this looks like open space.
+          No close existing art found — this looks like open space.
         </p>
       )}
 
@@ -248,7 +248,7 @@ function TerritoryBadge({ territory }: { territory: Territory }) {
     territory === "crowded"
       ? "Crowded"
       : territory === "moderate"
-      ? "Some prior art"
+      ? "Some existing art"
       : "Open space";
   const tone =
     territory === "crowded"

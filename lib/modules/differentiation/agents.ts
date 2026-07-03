@@ -22,6 +22,7 @@ const PROMPT_FILES: Record<AgentName, string> = {
   "key-concept-decomposer": `${MODULE_4_DIR}/06-key-concept-decomposer.md`,
   whitespace: `${MODULE_4_DIR}/01-whitespace.md`,
   "differentiation-teacher": `${MODULE_4_DIR}/07-teacher.md`,
+  "novelty-checker": `${MODULE_4_DIR}/08-checker.md`,
   "gap-framer": `${MODULE_4_DIR}/01-gap-framer.md`,
   "differentiation-formalizer": `${MODULE_4_DIR}/02-differentiation-formalizer.md`,
   verifier: `${MODULE_4_DIR}/03-verifier.md`,
@@ -44,6 +45,7 @@ const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
   "key-concept-decomposer": [],
   whitespace: ["examiner_grounds"],
   "differentiation-teacher": [],
+  "novelty-checker": [],
   "gap-framer": ["examiner_grounds"],
   "differentiation-formalizer": [],
   verifier: [],
@@ -240,6 +242,73 @@ export async function runDifferentiationTeacher(
     prompt,
     schema: DiffTeachOutput,
     temperature: 0.3,
+  });
+}
+
+/**
+ * The novelty checker — a safety net on the inventor's differentiation. Passes by
+ * default; fails only on a real defect (restates a reference, contradicts the
+ * analysis, or says nothing specific), naming the wrong slot(s) so the inventor
+ * fixes exactly those.
+ */
+export const NoveltyCheckOutput = z.object({
+  verdict: z.enum(["pass", "fail"]).default("pass"),
+  note: z.string().default(""),
+  wrong_blanks: z
+    .array(z.object({ label: z.string().default(""), why: z.string().default("") }))
+    .default([]),
+});
+export type NoveltyCheckResult = z.infer<typeof NoveltyCheckOutput>;
+
+export async function runNoveltyChecker(
+  runAgent: AgentRunner,
+  input: {
+    title: string;
+    statement: string;
+    analysis: WhitespaceResult;
+    answer: string;
+    blanks?: { label: string; value: string }[];
+  },
+): Promise<NoveltyCheckResult> {
+  const system = await loadAgentPrompt("novelty-checker");
+  const a = input.analysis;
+  const prompt = [
+    "THE KEY CONCEPT:",
+    `${input.title}: ${input.statement}`,
+    "",
+    "THE ANALYSIS — what the references already describe (anything here is NOT a difference):",
+    a.patentAnalyses.length
+      ? a.patentAnalyses
+          .map(
+            (p, i) =>
+              `[${i + 1}] ${p.patentTitle || p.patentNumber || "(untitled)"}: ${
+                p.extractedMechanisms.join("; ") || "(no specific mechanism extracted)"
+              }`,
+          )
+          .join("\n")
+      : "(no close existing art)",
+    "",
+    "THE DISTINGUISHING FEATURES the analysis surfaced (a genuine difference lives here):",
+    a.primaryDistinguishingFeatures.length
+      ? a.primaryDistinguishingFeatures.map((f) => `• ${f}`).join("\n")
+      : "(none surfaced)",
+    "",
+    "THE INVENTOR'S DIFFERENTIATION STATEMENT (check this):",
+    input.answer,
+    ...(input.blanks?.length
+      ? [
+          "",
+          "THE FILL-IN SLOTS the statement was assembled from (mark the wrong one(s) by label):",
+          ...input.blanks.map((b) => `- [${b.label}] → "${b.value}"`),
+        ]
+      : []),
+  ].join("\n");
+  return runAgent({
+    agent: "novelty-checker",
+    system,
+    prompt,
+    schema: NoveltyCheckOutput,
+    temperature: 0,
   });
 }
 

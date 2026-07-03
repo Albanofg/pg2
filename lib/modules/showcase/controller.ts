@@ -18,6 +18,8 @@ import { SHOWCASE_HUMAN_SOURCE_TYPES } from "./types";
 import type {
   ChoiceInput,
   DisclosureSection,
+  ExpansionArtifact,
+  ExpansionReviewInput,
   Genus,
   HelperTurn,
   Module5Card,
@@ -26,6 +28,7 @@ import type {
   ShowcaseDeps,
   ShowcaseKeyConcept,
   Species,
+  SpeciesReviewInput,
   SpeciesType,
   VariationInput,
   WidenedActionInput,
@@ -46,7 +49,9 @@ const SPECIES_TYPES: SpeciesType[] = ["ai_assisted", "ai_native", "agentic"];
 type Intent =
   | { kind: "choice" }
   | { kind: "variation"; speciesType: SpeciesType }
-  | { kind: "widened"; conceptId: string };
+  | { kind: "widened"; conceptId: string }
+  | { kind: "species_review" }
+  | { kind: "expansion_review" };
 
 export type ShowcaseSnapshot = {
   phase: Module5Phase;
@@ -119,7 +124,12 @@ export class ShowcaseModule {
 
   async act(
     cardId: string,
-    input: ChoiceInput | VariationInput | WidenedActionInput,
+    input:
+      | ChoiceInput
+      | VariationInput
+      | WidenedActionInput
+      | SpeciesReviewInput
+      | ExpansionReviewInput,
   ): Promise<Module5View> {
     const card = this.openCards.get(cardId);
     const intent = this.intents.get(cardId);
@@ -134,6 +144,12 @@ export class ShowcaseModule {
         break;
       case "widened_review":
         await this.handleWidened(cardId, intent, input as WidenedActionInput);
+        break;
+      case "species_review":
+        await this.handleSpeciesReview(cardId, input as SpeciesReviewInput);
+        break;
+      case "expansion_review":
+        await this.handleExpansionReview(cardId, input as ExpansionReviewInput);
         break;
     }
     this.maybeCheckpoint();
@@ -230,7 +246,13 @@ export class ShowcaseModule {
    */
   async expand(): Promise<Module5View> {
     for (const [id, c] of [...this.openCards]) {
-      if (c.type === "choice" || c.type === "variation" || c.type === "widened_review") {
+      if (
+        c.type === "choice" ||
+        c.type === "variation" ||
+        c.type === "widened_review" ||
+        c.type === "species_review" ||
+        c.type === "expansion_review"
+      ) {
         this.resolveCard(id);
       }
     }
@@ -300,7 +322,6 @@ export class ShowcaseModule {
         this.ledger.recordMachineEvent("agent_species", ["showcase", t], {});
         if (verdict.verdict === "pass") {
           this.species.push(sp);
-          this.emitVariation(sp);
         } else {
           this.ledger.recordMachineEvent("broadening_withheld", ["showcase", "species", t], {
             reason: verdict.note,
@@ -311,13 +332,416 @@ export class ShowcaseModule {
       }
     }
 
-    if (![...this.openCards.values()].some((c) => c.type === "variation")) {
+    if (!this.species.length) {
       // Nothing survived the Boundary — finish without broadening.
       this.broadened = false;
       this.complete();
       return;
     }
-    this.phase = "selecting_variations";
+    // GATE 1 (V1): all species on ONE review screen — approve/edit/reject each,
+    // then Confirm & Continue. Nothing is applied yet.
+    this.emitSpeciesReview();
+    this.phase = "reviewing_species";
+  }
+
+  /* ------------------------------------------------------------------ *
+   * The V1 two-gate expansion review
+   * ------------------------------------------------------------------ */
+
+  private speciesLabel(t: SpeciesType): string {
+    return t === "ai_assisted" ? "AI-Assisted" : t === "ai_native" ? "AI-Native" : "Agentic";
+  }
+
+  private emitSpeciesReview(): void {
+    const id = this.genId();
+    this.openCards.set(id, {
+      id,
+      type: "species_review",
+      items: this.species.map((sp) => ({
+        speciesType: sp.species_type,
+        label: this.speciesLabel(sp.species_type),
+        description: sp.architectural_description,
+        status: "pending" as const,
+      })),
+    });
+    this.intents.set(id, { kind: "species_review" });
+  }
+
+  /** GATE 1 actions: decide each species; Confirm generates the artifacts. */
+  private async handleSpeciesReview(cardId: string, input: SpeciesReviewInput): Promise<void> {
+    const card = this.openCards.get(cardId);
+    if (!card || card.type !== "species_review") return;
+
+    if (input.action === "approve" || input.action === "reject") {
+      const item = card.items.find((i) => i.speciesType === input.speciesType);
+      if (item) item.status = input.action === "approve" ? "approved" : "rejected";
+      this.ledger.recordDecision("variation_action", ["showcase", input.action], {
+        speciesType: input.speciesType,
+      });
+      return;
+    }
+    if (input.action === "edit") {
+      const item = card.items.find((i) => i.speciesType === input.speciesType);
+      const sp = this.species.find((s) => s.species_type === input.speciesType);
+      const text = input.text.trim();
+      if (item && sp && text) {
+        item.description = text;
+        sp.architectural_description = text;
+        this.ledger.recordInventorSource("inventor_edit", text, ["showcase", "species-edit"]);
+      }
+      return;
+    }
+    // confirm — every species must be decided; only approved ones continue.
+    if (card.items.some((i) => i.status === "pending")) return;
+    for (const sp of this.species) {
+      const item = card.items.find((i) => i.speciesType === sp.species_type);
+      sp.kept = item?.status === "approved";
+    }
+    this.resolveCard(cardId);
+    const kept = this.species.filter((s) => s.kept);
+    if (!kept.length || !this.genus) {
+      this.broadened = false;
+      this.complete();
+      return;
+    }
+    await this.generateArtifacts(kept);
+  }
+
+  /**
+   * Generate EVERY expansion artifact (nothing applied yet): a broadened rewrite
+   * per Key Concept, the three new Key Concepts, the Background + Summary
+   * extensions, the "Across Implementations" body, and the Abstract rewrite —
+   * all surfaced on ONE Gate-2 review screen with Regenerate/Keep/Edit/Remove.
+   */
+  private async generateArtifacts(kept: Species[]): Promise<void> {
+    const genus = this.genus;
+    if (!genus) return;
+    const artifacts: ExpansionArtifact[] = [];
+    const sections = this.disclosure;
+    const find = (key: string) => sections?.find((s) => s.key === key);
+
+    // Broadened rewrite per Key Concept (verifier-gated).
+    const kcs = [...this.keyConcepts.values()];
+    for (let i = 0; i < kcs.length; i++) {
+      const kc = kcs[i];
+      try {
+        const b = await runKeyConceptBroadener(this.runAgent, {
+          original: kc.statement,
+          genus,
+          approvedSpecies: kept,
+          consciousness: this.consciousness.renderForAgent({ part: `differentiation:${kc.id}` }),
+        });
+        const verdict = await runVerifier(this.runAgent, {
+          piece: b.broadened_concept_text,
+          inventorMaterial: kc.verbatim.join("\n"),
+          consciousness: this.consciousness.renderForAgent({ part: `differentiation:${kc.id}` }),
+        });
+        this.ledger.recordMachineEvent("agent_broadened", ["showcase"], { conceptId: kc.id });
+        if (verdict.verdict === "pass" && b.broadened_concept_text.trim()) {
+          artifacts.push({
+            id: this.genId(),
+            kind: "broadened_kc",
+            label: `Broadened Key Concept ${i + 1}`,
+            original: kc.statement,
+            text: b.broadened_concept_text.trim(),
+            kept: true,
+            meta: { conceptId: kc.id },
+          });
+        } else {
+          this.ledger.recordMachineEvent("broadening_withheld", ["showcase", "concept"], {
+            conceptId: kc.id,
+            reason: verdict.note,
+          });
+        }
+      } catch (err) {
+        console.error("[showcase] broadening failed for", kc.id, err);
+      }
+    }
+
+    // The three new Key Concepts (genus / species-spectrum / hardware).
+    const aspectLabels: Record<ConceptAspect, string> = {
+      genus_mechanism: "New Key Concept — Core Mechanism",
+      species_spectrum: "New Key Concept — Architectural Spectrum",
+      hardware_optimization: "New Key Concept — Hardware Optimization",
+    };
+    for (const aspect of Object.keys(aspectLabels) as ConceptAspect[]) {
+      try {
+        const existing = kcs.map((k) => ({ title: k.title, statement: k.statement }));
+        const r = await runKeyConceptAppender(this.runAgent, { genus, species: kept, existing, aspect });
+        if (r.key_concept_text.trim()) {
+          artifacts.push({
+            id: this.genId(),
+            kind: "new_kc",
+            label: aspectLabels[aspect],
+            text: r.key_concept_text.trim(),
+            kept: true,
+            meta: { aspect, title: r.title.trim() || aspect.replace(/_/g, " ") },
+          });
+          this.ledger.recordMachineEvent("agent_appended_concept", ["showcase", aspect], {});
+        }
+      } catch (err) {
+        console.error("[showcase] key-concept-appender failed for", aspect, err);
+      }
+    }
+
+    // Background + Summary extensions.
+    const bg = find("background");
+    if (bg) {
+      try {
+        const r = await runBackgroundExtender(this.runAgent, { genus, species: kept, existing: bg.body });
+        if (r.additional.trim()) {
+          artifacts.push({
+            id: this.genId(),
+            kind: "background_ext",
+            label: "Background Extension",
+            text: r.additional.trim(),
+            kept: true,
+          });
+        }
+      } catch (err) {
+        console.error("[showcase] background-extender failed", err);
+      }
+    }
+    const sum = find("summary");
+    if (sum) {
+      try {
+        const r = await runSummaryExtender(this.runAgent, { genus, species: kept, existing: sum.body });
+        if (r.additional.trim()) {
+          artifacts.push({
+            id: this.genId(),
+            kind: "summary_ext",
+            label: "Summary Extension",
+            text: r.additional.trim(),
+            kept: true,
+          });
+        }
+      } catch (err) {
+        console.error("[showcase] summary-extender failed", err);
+      }
+    }
+
+    // The "Across Implementations" detailed body.
+    try {
+      const existingDetail = ["architecture", "data_structures", "operations"]
+        .map((k) => find(k)?.body ?? "")
+        .filter(Boolean)
+        .join("\n\n");
+      const dd = await runDetailDescriptionExtender(this.runAgent, {
+        genus,
+        species: kept,
+        existing: existingDetail,
+      });
+      const body = dd.subsections
+        .filter((s) => s.subsection_content.trim())
+        .map((s) =>
+          s.subsection_title.trim()
+            ? `${s.subsection_title.trim()}\n\n${s.subsection_content.trim()}`
+            : s.subsection_content.trim(),
+        )
+        .join("\n\n");
+      if (body.trim()) {
+        artifacts.push({
+          id: this.genId(),
+          kind: "detail_ext",
+          label: "Detailed Description Extension",
+          text: body.trim(),
+          kept: true,
+        });
+      }
+    } catch (err) {
+      console.error("[showcase] detail-description-extender failed", err);
+    }
+
+    // The Abstract rewrite (word-counted).
+    const abs = find("abstract");
+    if (abs) {
+      try {
+        const r = await runAbstractRewriter(this.runAgent, { genus, species: kept, existing: abs.body });
+        if (r.abstract.trim()) {
+          const words = r.word_count || r.abstract.trim().split(/\s+/).length;
+          artifacts.push({
+            id: this.genId(),
+            kind: "abstract_rewrite",
+            label: `Abstract Rewrite (${words} words)`,
+            text: r.abstract.trim(),
+            kept: true,
+            meta: { wordCount: words },
+          });
+        }
+      } catch (err) {
+        console.error("[showcase] abstract-rewriter failed", err);
+      }
+    }
+
+    if (!artifacts.length) {
+      this.broadened = false;
+      this.complete();
+      return;
+    }
+    const id = this.genId();
+    this.openCards.set(id, { id, type: "expansion_review", artifacts });
+    this.intents.set(id, { kind: "expansion_review" });
+    this.phase = "reviewing_artifacts";
+  }
+
+  /** GATE 2 actions: per-artifact review; Finalize applies the kept ones. */
+  private async handleExpansionReview(cardId: string, input: ExpansionReviewInput): Promise<void> {
+    const card = this.openCards.get(cardId);
+    if (!card || card.type !== "expansion_review") return;
+
+    if (input.action === "keep" || input.action === "remove") {
+      const a = card.artifacts.find((x) => x.id === input.artifactId);
+      if (a) a.kept = input.action === "keep";
+      return;
+    }
+    if (input.action === "edit") {
+      const a = card.artifacts.find((x) => x.id === input.artifactId);
+      const text = input.text.trim();
+      if (a && text) {
+        a.text = text;
+        a.kept = true;
+        this.ledger.recordInventorSource("inventor_edit", text, ["showcase", "artifact-edit", a.kind]);
+      }
+      return;
+    }
+    if (input.action === "regenerate") {
+      const a = card.artifacts.find((x) => x.id === input.artifactId);
+      if (a) await this.regenerateArtifact(a);
+      return;
+    }
+    // finalize — weave every kept artifact into the Key Concepts + the draft.
+    await this.finalizeExpansion(card.artifacts.filter((a) => a.kept));
+    this.resolveCard(cardId);
+    this.complete();
+  }
+
+  /** Re-run the one generator behind an artifact; keep the old text on failure. */
+  private async regenerateArtifact(a: ExpansionArtifact): Promise<void> {
+    const genus = this.genus;
+    const kept = this.species.filter((s) => s.kept);
+    if (!genus || !kept.length) return;
+    const sections = this.disclosure;
+    const find = (key: string) => sections?.find((s) => s.key === key);
+    try {
+      if (a.kind === "broadened_kc" && a.meta?.conceptId) {
+        const kc = this.keyConcepts.get(a.meta.conceptId);
+        if (!kc) return;
+        const b = await runKeyConceptBroadener(this.runAgent, {
+          original: kc.statement,
+          genus,
+          approvedSpecies: kept,
+          consciousness: this.consciousness.renderForAgent({ part: `differentiation:${kc.id}` }),
+        });
+        if (b.broadened_concept_text.trim()) a.text = b.broadened_concept_text.trim();
+      } else if (a.kind === "new_kc" && a.meta?.aspect) {
+        const existing = [...this.keyConcepts.values()].map((k) => ({
+          title: k.title,
+          statement: k.statement,
+        }));
+        const r = await runKeyConceptAppender(this.runAgent, {
+          genus,
+          species: kept,
+          existing,
+          aspect: a.meta.aspect as ConceptAspect,
+        });
+        if (r.key_concept_text.trim()) {
+          a.text = r.key_concept_text.trim();
+          a.meta = { ...a.meta, title: r.title.trim() || a.meta.title };
+        }
+      } else if (a.kind === "background_ext") {
+        const bg = find("background");
+        if (!bg) return;
+        const r = await runBackgroundExtender(this.runAgent, { genus, species: kept, existing: bg.body });
+        if (r.additional.trim()) a.text = r.additional.trim();
+      } else if (a.kind === "summary_ext") {
+        const sum = find("summary");
+        if (!sum) return;
+        const r = await runSummaryExtender(this.runAgent, { genus, species: kept, existing: sum.body });
+        if (r.additional.trim()) a.text = r.additional.trim();
+      } else if (a.kind === "detail_ext") {
+        const existingDetail = ["architecture", "data_structures", "operations"]
+          .map((k) => find(k)?.body ?? "")
+          .filter(Boolean)
+          .join("\n\n");
+        const dd = await runDetailDescriptionExtender(this.runAgent, {
+          genus,
+          species: kept,
+          existing: existingDetail,
+        });
+        const body = dd.subsections
+          .filter((s) => s.subsection_content.trim())
+          .map((s) =>
+            s.subsection_title.trim()
+              ? `${s.subsection_title.trim()}\n\n${s.subsection_content.trim()}`
+              : s.subsection_content.trim(),
+          )
+          .join("\n\n");
+        if (body.trim()) a.text = body.trim();
+      } else if (a.kind === "abstract_rewrite") {
+        const abs = find("abstract");
+        if (!abs) return;
+        const r = await runAbstractRewriter(this.runAgent, { genus, species: kept, existing: abs.body });
+        if (r.abstract.trim()) {
+          const words = r.word_count || r.abstract.trim().split(/\s+/).length;
+          a.text = r.abstract.trim();
+          a.label = `Abstract Rewrite (${words} words)`;
+          a.meta = { ...a.meta, wordCount: words };
+        }
+      }
+      a.kept = true;
+    } catch (err) {
+      console.error("[showcase] regenerate failed for", a.kind, err);
+    }
+  }
+
+  /** Apply the kept artifacts: broadened + new Key Concepts, section weaves. */
+  private async finalizeExpansion(kept: ExpansionArtifact[]): Promise<void> {
+    const sections = this.disclosure;
+    const find = (key: string) => sections?.find((s) => s.key === key);
+
+    for (const a of kept) {
+      if (a.kind === "broadened_kc" && a.meta?.conceptId) {
+        const kc = this.keyConcepts.get(a.meta.conceptId);
+        if (kc) {
+          kc.broadened = a.text;
+          await this.recordBroadenedToConsciousness(kc, a.text);
+        }
+      } else if (a.kind === "new_kc" && a.meta?.aspect) {
+        const id = `appended:${a.meta.aspect}`;
+        this.keyConcepts.set(id, {
+          id,
+          title: a.meta.title || a.label,
+          statement: a.text,
+          verbatim: [],
+        });
+      } else if (a.kind === "background_ext") {
+        const bg = find("background");
+        if (bg) bg.body = `${bg.body}\n\n${a.text}`;
+      } else if (a.kind === "summary_ext") {
+        const sum = find("summary");
+        if (sum) sum.body = `${sum.body}\n\n${a.text}`;
+      } else if (a.kind === "detail_ext" && sections) {
+        const prior = sections.findIndex((s) => s.key === "detail_across");
+        if (prior >= 0) sections.splice(prior, 1);
+        const sec: DisclosureSection = {
+          key: "detail_across",
+          label: "Detailed Description — Across Implementations",
+          body: a.text,
+        };
+        const opsIdx = sections.findIndex((s) => s.key === "operations");
+        if (opsIdx >= 0) sections.splice(opsIdx + 1, 0, sec);
+        else sections.push(sec);
+      } else if (a.kind === "abstract_rewrite") {
+        const abs = find("abstract");
+        if (abs) abs.body = a.text;
+      }
+    }
+
+    this.broadened = kept.length > 0;
+    this.ledger.recordMachineEvent("disclosure_extended", ["showcase"], {
+      applied: kept.length,
+      sections: sections?.length ?? 0,
+    });
   }
 
   private async handleVariation(cardId: string, intent: Intent, input: VariationInput): Promise<void> {
@@ -399,12 +823,16 @@ export class ShowcaseModule {
     const bg = find("background");
     const sum = find("summary");
     const abs = find("abstract");
+    // Re-run guard: a detail_across section means enrichment already ran once.
+    // Appending background/summary again would duplicate prose — skip those;
+    // the abstract REWRITE and the detail_across REPLACE below stay safe.
+    const alreadyEnriched = sections.some((s) => s.key === "detail_across");
 
     // Append to background + summary, replace the abstract — each mutates a
     // different section object, so they run in parallel.
     await Promise.all([
       (async () => {
-        if (!bg) return;
+        if (!bg || alreadyEnriched) return;
         try {
           const r = await runBackgroundExtender(this.runAgent, { genus, species: kept, existing: bg.body });
           if (r.additional.trim()) bg.body = `${bg.body}\n\n${r.additional.trim()}`;
@@ -413,7 +841,7 @@ export class ShowcaseModule {
         }
       })(),
       (async () => {
-        if (!sum) return;
+        if (!sum || alreadyEnriched) return;
         try {
           const r = await runSummaryExtender(this.runAgent, { genus, species: kept, existing: sum.body });
           if (r.additional.trim()) sum.body = `${sum.body}\n\n${r.additional.trim()}`;
@@ -433,14 +861,35 @@ export class ShowcaseModule {
     ]);
 
     // Add the new "Detailed Description — Across Implementations" section after
-    // Operations (sequential — it splices the sections array).
+    // Operations (sequential — it splices the sections array). V1 shape: a fixed
+    // order of subsections (mechanism → one per species → improvements → hardware),
+    // assembled here into one section body with inline subsection titles.
     try {
-      const dd = await runDetailDescriptionExtender(this.runAgent, { genus, species: kept });
-      if (dd.body.trim()) {
+      const existingDetail = ["architecture", "data_structures", "operations"]
+        .map((k) => find(k)?.body ?? "")
+        .filter(Boolean)
+        .join("\n\n");
+      const dd = await runDetailDescriptionExtender(this.runAgent, {
+        genus,
+        species: kept,
+        existing: existingDetail,
+      });
+      const body = dd.subsections
+        .filter((s) => s.subsection_content.trim())
+        .map((s) =>
+          s.subsection_title.trim()
+            ? `${s.subsection_title.trim()}\n\n${s.subsection_content.trim()}`
+            : s.subsection_content.trim(),
+        )
+        .join("\n\n");
+      if (body.trim()) {
+        // REPLACE any prior detail_across (re-runs must not duplicate the section).
+        const prior = sections.findIndex((s) => s.key === "detail_across");
+        if (prior >= 0) sections.splice(prior, 1);
         const sec: DisclosureSection = {
           key: "detail_across",
           label: "Detailed Description — Across Implementations",
-          body: dd.body.trim(),
+          body: body.trim(),
         };
         const opsIdx = sections.findIndex((s) => s.key === "operations");
         if (opsIdx >= 0) sections.splice(opsIdx + 1, 0, sec);
@@ -464,11 +913,14 @@ export class ShowcaseModule {
     ];
     for (const aspect of aspects) {
       try {
-        const existingTitles = [...this.keyConcepts.values()].map((k) => k.title);
+        const existing = [...this.keyConcepts.values()].map((k) => ({
+          title: k.title,
+          statement: k.broadened || k.statement,
+        }));
         const r = await runKeyConceptAppender(this.runAgent, {
           genus,
           species: kept,
-          existingTitles,
+          existing,
           aspect,
         });
         if (r.key_concept_text.trim()) {
@@ -656,13 +1108,21 @@ function cloneKC(k: ShowcaseKeyConcept): ShowcaseKeyConcept {
  */
 function unwrapBody(raw: string): string {
   const t = (raw ?? "").trim();
-  if (t.startsWith("{") && t.includes('"body"')) {
-    try {
-      const o = JSON.parse(t);
-      if (o && typeof o.body === "string") return o.body.trim();
-    } catch {
-      // not valid JSON — leave as-is
-    }
+  if (!t.startsWith("{") || !t.includes('"body"')) return raw;
+  try {
+    const o = JSON.parse(t);
+    if (o && typeof o.body === "string") return o.body.trim();
+  } catch {
+    // Not valid JSON (truncated / unescaped quotes) — strip the envelope by hand.
+  }
+  const m = t.match(/^\{\s*"body"\s*:\s*"([\s\S]*)$/);
+  if (m) {
+    return m[1]
+      .replace(/"\s*\}\s*$/, "") // drop a trailing "}
+      .replace(/\\n/g, "\n")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\")
+      .trim();
   }
   return raw;
 }

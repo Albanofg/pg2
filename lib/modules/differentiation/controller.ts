@@ -7,6 +7,7 @@ import {
   runDifferentiationTeacher,
   runGapFramer,
   runHelper,
+  runNoveltyChecker,
   runKeyConceptDecomposer,
   runPohcScorer,
   runSection,
@@ -29,6 +30,7 @@ import type {
   NoveltyInput,
   ReviewActionInput,
   SectionAgent,
+  WhitespaceAnalysis,
   WhitespaceTeaching,
 } from "./types";
 
@@ -329,6 +331,49 @@ export class DifferentiationModule {
    * Flow
    * ------------------------------------------------------------------ */
 
+  /**
+   * The ONE concept to prepare in the background — strictly one at a time: the
+   * concept right AFTER the one being answered now, and only if it isn't already
+   * prepared. Returns what the compute needs (no engine mutation here — the route
+   * computes outside, then grafts via attachPrepared in a fresh, tiny write).
+   */
+  peekPrepareTarget(): {
+    conceptId: string;
+    title: string;
+    statement: string;
+    references: { publicationNumber: string; title: string; summary: string; relevanceScore?: number }[];
+  } | null {
+    if (this.phase !== "capturing") return null;
+    const pending = [...this.concepts.values()].filter(
+      (c) => c.status.state === "active" && !c.novelty && !c.differentiation_statement,
+    );
+    const target = pending[1]; // [0] is on screen now; prepare the one after it.
+    if (!target || target.prepared) return null;
+    return {
+      conceptId: target.id,
+      title: target.title,
+      statement: target.formalized_statement,
+      references: target.landscape.sources.map((s) => ({
+        publicationNumber: s.identifier ?? "",
+        title: s.title,
+        summary: s.snippet ?? "",
+        ...(s.closeness != null ? { relevanceScore: s.closeness } : {}),
+      })),
+    };
+  }
+
+  /** Graft a background-prepared analysis onto its concept (additive; skipped if
+   *  the concept moved on while the compute ran). */
+  attachPrepared(
+    conceptId: string,
+    analysis: WhitespaceAnalysis,
+    teaching?: WhitespaceTeaching,
+  ): void {
+    const concept = this.concepts.get(conceptId);
+    if (!concept || concept.novelty || concept.differentiation_statement) return;
+    concept.prepared = { analysis, ...(teaching ? { teaching } : {}) };
+  }
+
   /** Frame the next Concept that still needs the inventor's novelty call. */
   private async frameNext(): Promise<void> {
     // One concept at a time — clear any prior concept's lesson/scaffold/ask so the
@@ -343,22 +388,29 @@ export class DifferentiationModule {
     }
     const verbatim = next.conception_trail.map((t) => t.verbatim_text);
 
+    // If this concept was PREPARED in the background (while the inventor answered
+    // the previous one), use it — advancing is instant, no model calls here.
+    const prep = next.prepared;
+    if (prep) delete next.prepared;
+
     // V1 whitespace: surface each prior-art reference's mechanisms + clarification
     // questions + the Match Level, open-landscape analysis, and distinguishing
     // features. The clarification questions become the open points the inventor
     // answers in the novelty capture.
     let whitespaced = false;
     try {
-      const ws = await runWhitespace(this.runAgent, {
-        title: next.title,
-        statement: next.formalized_statement,
-        references: next.landscape.sources.map((s) => ({
-          publicationNumber: s.identifier ?? "",
-          title: s.title,
-          summary: s.snippet ?? "",
-          ...(s.closeness != null ? { relevanceScore: s.closeness } : {}),
-        })),
-      });
+      const ws =
+        prep?.analysis ??
+        (await runWhitespace(this.runAgent, {
+          title: next.title,
+          statement: next.formalized_statement,
+          references: next.landscape.sources.map((s) => ({
+            publicationNumber: s.identifier ?? "",
+            title: s.title,
+            summary: s.snippet ?? "",
+            ...(s.closeness != null ? { relevanceScore: s.closeness } : {}),
+          })),
+        }));
       next.whitespace = ws;
       const questions = [
         ...ws.patentAnalyses.flatMap((p) => p.inventorClarificationQuestions),
@@ -375,19 +427,22 @@ export class DifferentiationModule {
         conceptId: next.id,
         matchLevel: ws.overallMatchLevel.level,
         references: ws.totalPatentsAnalyzed,
+        prepared: !!prep,
       });
 
       // Teach it: trim the raw analysis into a short, scannable plain-English
       // lesson (the primary view). Optional — if it fails, the raw analysis shows.
-      let teaching: WhitespaceTeaching | undefined;
-      try {
-        teaching = await runDifferentiationTeacher(this.runAgent, {
-          title: next.title,
-          statement: next.formalized_statement,
-          analysis: ws,
-        });
-      } catch (err) {
-        console.error("[differentiation] teacher failed for", next.id, err);
+      let teaching: WhitespaceTeaching | undefined = prep?.teaching;
+      if (!teaching) {
+        try {
+          teaching = await runDifferentiationTeacher(this.runAgent, {
+            title: next.title,
+            statement: next.formalized_statement,
+            analysis: ws,
+          });
+        } catch (err) {
+          console.error("[differentiation] teacher failed for", next.id, err);
+        }
       }
 
       this.emitWhitespace(next, teaching);
@@ -443,11 +498,48 @@ export class DifferentiationModule {
   private async handleNovelty(cardId: string, intent: Intent, input: NoveltyInput): Promise<void> {
     if (intent.kind !== "novelty") return;
     const concept = this.concepts.get(intent.conceptId);
-    this.resolveCard(cardId);
-    // The inventor has answered — clear this concept's lesson (one thing at a time).
-    if (concept) this.clearFramingCards(concept.id);
     const statement = input.statement.trim();
-    if (!concept || !statement) return;
+    if (!concept || !statement) {
+      this.resolveCard(cardId);
+      if (concept) this.clearFramingCards(concept.id);
+      return;
+    }
+
+    // THE GATE — a safety net, not an approve step. Check the statement against
+    // the analysis; a real defect (restates a reference / contradicts the analysis
+    // / says nothing specific) keeps the card on screen with a plain correction
+    // naming the wrong slot(s), so the inventor fixes exactly that and resubmits.
+    // Checker infrastructure failure NEVER blocks the inventor — it passes through.
+    if (concept.whitespace) {
+      try {
+        const check = await runNoveltyChecker(this.runAgent, {
+          title: concept.title,
+          statement: concept.formalized_statement,
+          analysis: concept.whitespace,
+          answer: statement,
+          ...(input.blanks?.length ? { blanks: input.blanks } : {}),
+        });
+        if (check.verdict === "fail" && check.note.trim()) {
+          const card = this.openCards.get(cardId);
+          if (card && card.type === "novelty_capture") {
+            card.feedback = {
+              note: check.note.trim(),
+              wrongBlanks: check.wrong_blanks.filter((b) => b.label.trim()),
+            };
+          }
+          this.ledger.recordMachineEvent("novelty_check_failed", ["differentiation"], {
+            conceptId: concept.id,
+          });
+          return; // card stays; the inventor fixes and resubmits
+        }
+      } catch (err) {
+        console.error("[differentiation] novelty checker failed (passing through)", err);
+      }
+    }
+
+    // Passed — the card's job is done; clear this concept's lesson too.
+    this.resolveCard(cardId);
+    this.clearFramingCards(concept.id);
 
     // VERBATIM FIRST — the inventor's own statement of what's new (inventor_conceived).
     const e = this.ledger.recordInventorSource("novelty_statement", statement, [
@@ -585,8 +677,24 @@ export class DifferentiationModule {
     this.resolveCard(cardId);
     const anchoringLeft = [...this.openCards.values()].some((c) => c.type === "key_concept");
     if (!anchoringLeft && this.hasAnchor()) {
-      await this.compileDisclosure();
+      // Don't compile INSIDE the anchor click — that's ~12 model calls (nine
+      // disclosure sections + certifying every Key Concept) and minutes of wall
+      // clock. Flip the phase; the client sees "compiling" and drives the heavy
+      // step as its own request, with honest progress messaging.
+      this.phase = "compiling";
     }
+  }
+
+  /**
+   * The heavy step, run as its own request: compile the nine-section disclosure,
+   * then certify every Key Concept. Idempotent — only runs from the "compiling"
+   * phase, so a stray double-fire or reload can't run it twice.
+   */
+  async compile(): Promise<Module4View> {
+    if (this.phase !== "compiling") return this.view();
+    await this.compileDisclosure();
+    this.maybeCheckpoint();
+    return this.view();
   }
 
   /**
@@ -1014,14 +1122,22 @@ export class DifferentiationModule {
  * `{"body":"…the prose…"}`. Unwrap it so the disclosure shows prose, not JSON.
  */
 function unwrapBody(raw: string): string {
-  const t = raw.trim();
-  if (t.startsWith("{") && t.includes('"body"')) {
-    try {
-      const o = JSON.parse(t);
-      if (o && typeof o.body === "string") return o.body.trim();
-    } catch {
-      // not valid JSON — fall through and return the raw text as-is
-    }
+  const t = (raw ?? "").trim();
+  if (!t.startsWith("{") || !t.includes('"body"')) return raw;
+  try {
+    const o = JSON.parse(t);
+    if (o && typeof o.body === "string") return o.body.trim();
+  } catch {
+    // Not valid JSON (truncated / unescaped quotes) — strip the envelope by hand.
+  }
+  const m = t.match(/^\{\s*"body"\s*:\s*"([\s\S]*)$/);
+  if (m) {
+    return m[1]
+      .replace(/"\s*\}\s*$/, "") // drop a trailing "}
+      .replace(/\\n/g, "\n")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\")
+      .trim();
   }
   return raw;
 }

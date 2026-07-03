@@ -64,6 +64,9 @@ export const GenusOutput = z.object({
   input_pattern: z.string().default(""),
   transformation_pattern: z.string().default(""),
   output_pattern: z.string().default(""),
+  // V1's explicit rule-engine-AND-agent implementability statement — part of the
+  // genus artifact, cited by downstream drafting.
+  paradigm_neutrality_check: z.string().default(""),
 });
 export type GenusResult = z.infer<typeof GenusOutput>;
 
@@ -102,6 +105,9 @@ function renderGenus(g: Genus): string {
     `input_pattern: ${g.input_pattern}`,
     `transformation_pattern: ${g.transformation_pattern}`,
     `output_pattern: ${g.output_pattern}`,
+    ...(g.paradigm_neutrality_check
+      ? [`paradigm_neutrality_check: ${g.paradigm_neutrality_check}`]
+      : []),
   ].join("\n");
 }
 
@@ -200,7 +206,15 @@ function renderSpecies(species: Species[]): string {
 }
 
 /** Extenders that APPEND paragraphs to an existing section (background, summary). */
-export const ExtenderOutput = z.object({ additional: z.string().default("") });
+export const ExtenderOutput = z.object({
+  additional: z.string().default(""),
+  // V1's audit trails (background + summary extenders emit different subsets).
+  ai_categories_covered: z.array(z.string()).default([]),
+  limitations_identified: z.array(z.string()).default([]),
+  aspects_covered: z.array(z.string()).default([]),
+  species_named: z.array(z.string()).default([]),
+  continuity_check: z.string().default(""),
+});
 export type ExtenderResult = z.infer<typeof ExtenderOutput>;
 
 async function runExtender(
@@ -236,33 +250,53 @@ export function runSummaryExtender(
   return runExtender(runAgent, "summary-extender", input);
 }
 
-/** The new "Detailed Description — Across Implementations" section body. */
-export const SectionBodyOutput = z.object({ body: z.string().default("") });
-export type SectionBodyResult = z.infer<typeof SectionBodyOutput>;
+/** V1's "Across Implementations" body: a fixed-order sequence of subsections. */
+export const DetailDescriptionOutput = z.object({
+  subsections: z
+    .array(
+      z.object({
+        subsection_title: z.string().default(""),
+        subsection_content: z.string().default(""),
+      }),
+    )
+    .default([]),
+  species_covered: z.array(z.string()).default([]),
+});
+export type DetailDescriptionResult = z.infer<typeof DetailDescriptionOutput>;
 
 export async function runDetailDescriptionExtender(
   runAgent: AgentRunner,
-  input: { genus: Genus; species: Species[] },
-): Promise<SectionBodyResult> {
+  input: { genus: Genus; species: Species[]; existing?: string },
+): Promise<DetailDescriptionResult> {
   const system = await loadAgentPrompt("detail-description-extender");
   const prompt = [
+    "THE EXISTING DETAILED TECHNICAL SECTIONS (continue their voice; never repeat their content):",
+    input.existing?.trim() || "(none provided)",
+    "",
     "THE PARADIGM-NEUTRAL GENUS:",
     renderGenus(input.genus),
     "",
-    "THE APPROVED ALTERNATIVE IMPLEMENTATIONS (species) — render ONE subsection per species, in order, then a technical-improvements paragraph and a hardware-optimization paragraph:",
+    "THE APPROVED ALTERNATIVE IMPLEMENTATIONS (species) WITH FULL DETAILS:",
     renderSpecies(input.species),
   ].join("\n");
   return runAgent({
     agent: "detail-description-extender",
     system,
     prompt,
-    schema: SectionBodyOutput,
+    schema: DetailDescriptionOutput,
     temperature: 0.3,
   });
 }
 
 /** A complete replacement Abstract that folds in mechanism + species + hardware. */
-export const AbstractRewriteOutput = z.object({ abstract: z.string().default("") });
+export const AbstractRewriteOutput = z.object({
+  abstract: z.string().default(""),
+  // V1's audit trail.
+  word_count: z.coerce.number().default(0),
+  aspects_covered: z.array(z.string()).default([]),
+  species_named: z.array(z.string()).default([]),
+  word_budget_check: z.string().default(""),
+});
 export type AbstractRewriteResult = z.infer<typeof AbstractRewriteOutput>;
 
 export async function runAbstractRewriter(
@@ -293,6 +327,9 @@ export async function runAbstractRewriter(
 export const AppendedConceptOutput = z.object({
   title: z.string().default(""),
   key_concept_text: z.string().default(""),
+  // V1's audit trail — what the concept covers + why it doesn't duplicate.
+  covers: z.array(z.string()).default([]),
+  non_duplication_check: z.string().default(""),
 });
 export type AppendedConceptResult = z.infer<typeof AppendedConceptOutput>;
 
@@ -306,7 +343,9 @@ export async function runKeyConceptAppender(
   input: {
     genus: Genus;
     species: Species[];
-    existingTitles: string[];
+    /** The FULL existing Key Concepts — V1's non-duplication audit reads their
+     *  content, not just their titles. */
+    existing: { title: string; statement: string }[];
     aspect: ConceptAspect;
   },
 ): Promise<AppendedConceptResult> {
@@ -320,8 +359,8 @@ export async function runKeyConceptAppender(
     "THE APPROVED ALTERNATIVE IMPLEMENTATIONS (species):",
     renderSpecies(input.species),
     "",
-    "EXISTING KEY CONCEPT TITLES (do NOT duplicate or overlap these):",
-    ...input.existingTitles.map((t, i) => `(${i + 1}) ${t}`),
+    "THE EXISTING KEY CONCEPTS (audit these — the new concept must add content none of them already carries):",
+    ...input.existing.map((k, i) => `(${i + 1}) ${k.title}: ${k.statement}`),
   ].join("\n");
   return runAgent({
     agent: "key-concept-appender",

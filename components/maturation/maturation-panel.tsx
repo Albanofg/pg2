@@ -135,8 +135,8 @@ export default function MaturationPanel({
                 Ready for Landscape · pick what to search
               </div>
               <p className="font-sans text-sm text-ink">
-                These carry forward to the prior-art search. Leave one behind if you don&apos;t
-                want it searched — that sets it aside for good.
+                These carry forward to the search of what already exists. Leave one behind if
+                you don&apos;t want it searched — that sets it aside for good.
               </p>
               <ul className="mt-3 space-y-2">
                 {view.concepts.map((c) => {
@@ -181,7 +181,7 @@ export default function MaturationPanel({
                   disabled={busy || carried.length === 0}
                   className="rounded-md bg-accent px-5 py-2.5 font-sans text-sm font-medium text-brand transition-colors hover:bg-accent/90 disabled:opacity-50"
                 >
-                  Search prior art →
+                  Search existing art →
                 </button>
               </div>
             </div>

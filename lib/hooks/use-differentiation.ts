@@ -80,10 +80,22 @@ export function useDifferentiation(projectId: string | null) {
     [post],
   );
   const tell = useCallback((text: string) => post({ op: "message", text }), [post]);
+  /** Fire-and-forget: prepare the NEXT concept's analysis in the background while
+   *  the inventor answers the current one. Silent — no busy state, no view swap. */
+  const prepareNext = useCallback(() => {
+    if (!projectId) return;
+    void fetch("/api/differentiation", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "prepare_next", projectId }),
+    }).catch((e) => console.error("[differentiation] prepare_next failed", e));
+  }, [projectId]);
+  /** The heavy step after the last anchor: compile the disclosure + certify. */
+  const compile = useCallback(() => post({ op: "compile" }), [post]);
   const restart = useCallback(async () => {
     await post({ op: "reset" });
     return post({ op: "start" });
   }, [post]);
 
-  return { view, busy, error, ready, act, tell, restart };
+  return { view, busy, error, ready, act, tell, prepareNext, compile, restart };
 }

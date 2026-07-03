@@ -42,6 +42,8 @@ export type Genus = {
   input_pattern: string;
   transformation_pattern: string;
   output_pattern: string;
+  /** V1's explicit rule-engine-AND-agent implementability statement. */
+  paradigm_neutrality_check?: string;
 };
 
 export type SpeciesType = "ai_assisted" | "ai_native" | "agentic";
@@ -120,7 +122,64 @@ export type WidenedReviewCard = {
   actions: ReviewAction[];
 };
 
-export type Module5Card = ChoiceCard | VariationCard | WidenedReviewCard;
+/* ------------------------------------------------------------------ *
+ * The V1 two-gate expansion review
+ * ------------------------------------------------------------------ */
+
+/** One species inside Gate 1's single review screen. */
+export type SpeciesReviewItem = {
+  speciesType: SpeciesType;
+  /** Display name, e.g. "AI-Assisted" / "AI-Native" / "Agentic". */
+  label: string;
+  /** The species' architectural description (editable by the inventor). */
+  description: string;
+  status: "pending" | "approved" | "rejected";
+};
+
+/** GATE 1 — "Review AI implementations": all species on ONE screen, each
+ *  Approve / Edit / Reject, then Confirm & Continue. */
+export type SpeciesReviewCard = {
+  id: string;
+  type: "species_review";
+  items: SpeciesReviewItem[];
+};
+
+export type ExpansionArtifactKind =
+  | "broadened_kc"
+  | "new_kc"
+  | "background_ext"
+  | "summary_ext"
+  | "detail_ext"
+  | "abstract_rewrite";
+
+/** One reviewable artifact inside Gate 2 (Regenerate / Keep / Edit / Remove). */
+export type ExpansionArtifact = {
+  id: string;
+  kind: ExpansionArtifactKind;
+  /** Display label, e.g. "Broadened Key Concept 3" / "New Key Concept — Core Mechanism". */
+  label: string;
+  /** For broadened concepts: the original text (shown in italics above the new). */
+  original?: string;
+  text: string;
+  kept: boolean;
+  /** Regeneration / finalize context. */
+  meta?: { conceptId?: string; aspect?: string; wordCount?: number; title?: string };
+};
+
+/** GATE 2 — "Review expanded content": every artifact individually reviewable;
+ *  only Finalize Expansion weaves the kept ones into the draft. */
+export type ExpansionReviewCard = {
+  id: string;
+  type: "expansion_review";
+  artifacts: ExpansionArtifact[];
+};
+
+export type Module5Card =
+  | ChoiceCard
+  | VariationCard
+  | WidenedReviewCard
+  | SpeciesReviewCard
+  | ExpansionReviewCard;
 
 /* ------------------------------------------------------------------ *
  * Inventor action inputs
@@ -133,7 +192,27 @@ export type WidenedActionInput =
   | { action: "discard" }
   | { action: "request_edit"; correction: string };
 
-export type CardActionInput = ChoiceInput | VariationInput | WidenedActionInput;
+/** Gate 1 actions: decide each species, then confirm the set. */
+export type SpeciesReviewInput =
+  | { action: "approve"; speciesType: SpeciesType }
+  | { action: "reject"; speciesType: SpeciesType }
+  | { action: "edit"; speciesType: SpeciesType; text: string }
+  | { action: "confirm" };
+
+/** Gate 2 actions: per-artifact review, then finalize the expansion. */
+export type ExpansionReviewInput =
+  | { action: "keep"; artifactId: string }
+  | { action: "remove"; artifactId: string }
+  | { action: "edit"; artifactId: string; text: string }
+  | { action: "regenerate"; artifactId: string }
+  | { action: "finalize" };
+
+export type CardActionInput =
+  | ChoiceInput
+  | VariationInput
+  | WidenedActionInput
+  | SpeciesReviewInput
+  | ExpansionReviewInput;
 
 /* ------------------------------------------------------------------ *
  * View + deps
@@ -141,8 +220,10 @@ export type CardActionInput = ChoiceInput | VariationInput | WidenedActionInput;
 
 export type Module5Phase =
   | "choosing" // broaden or skip
-  | "selecting_variations" // Gate 1: keep which species
-  | "approving_widened" // Gate 2: approve each broadened Key Concept
+  | "selecting_variations" // (legacy) keep which species
+  | "approving_widened" // (legacy) approve each broadened Key Concept
+  | "reviewing_species" // GATE 1: approve/edit/reject each AI implementation
+  | "reviewing_artifacts" // GATE 2: review every expansion artifact, then finalize
   | "ready";
 
 export type Module5View = {
