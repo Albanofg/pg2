@@ -1,23 +1,39 @@
 "use client";
 
-import { useEffect } from "react";
-import { useWorkspace } from "@/lib/store";
+import { useEffect, useState } from "react";
+import { useWorkspace, type ModuleStage } from "@/lib/store";
 import { phaseLabel, type PhaseKey } from "@/lib/utils";
+
+const STAGES: ModuleStage[] = [
+  "brainstorm",
+  "conception",
+  "maturation",
+  "landscape",
+  "differentiation",
+  "showcase",
+];
 
 /**
  * On mount, load (or create) the inventor's active project and hydrate the
  * Shared Consciousness into the client store. Degrades gracefully if the API
  * is not yet reachable so the Triptych still renders.
+ *
+ * Returns `booting` so the workspace can hold the center pane until the resumed
+ * stage is known — otherwise a finished project flashes the first stage before
+ * jumping to where the inventor actually left off.
  */
 export function useBootstrap() {
   const activeProjectId = useWorkspace((s) => s.activeProjectId);
   const setProject = useWorkspace((s) => s.setProject);
+  const setStage = useWorkspace((s) => s.setStage);
   const setPhase = useWorkspace((s) => s.setPhase);
   const setCurrentIdea = useWorkspace((s) => s.setCurrentIdea);
   const setDraftNodes = useWorkspace((s) => s.setDraftNodes);
+  const [booting, setBooting] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
+    setBooting(true);
 
     (async () => {
       try {
@@ -31,6 +47,8 @@ export function useBootstrap() {
         if (cancelled || !data?.project) return;
 
         setProject(data.project.id, data.project.title ?? "Untitled Draft");
+        // Resume the inventor at the furthest stage the server saw them reach.
+        if (STAGES.includes(data.stage)) setStage(data.stage as ModuleStage);
         setPhase((data.project.currentPhase as PhaseKey) ?? "core_novelty");
         if (typeof data.currentIdea === "string") setCurrentIdea(data.currentIdea);
 
@@ -47,11 +65,15 @@ export function useBootstrap() {
         }
       } catch {
         // Offline / not yet provisioned — keep local state.
+      } finally {
+        if (!cancelled) setBooting(false);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [activeProjectId, setProject, setPhase, setCurrentIdea, setDraftNodes]);
+  }, [activeProjectId, setProject, setStage, setPhase, setCurrentIdea, setDraftNodes]);
+
+  return { booting };
 }

@@ -1,8 +1,54 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/lib/store";
 import type { CardActionInput, Module5View } from "@/lib/modules/showcase/types";
+
+/**
+ * Optimistically reflect a per-item decision in the local view so the buttons
+ * respond instantly while the write lands in the background. Only the cheap
+ * status toggles are patched (species approve/reject, artifact keep/remove);
+ * every other action waits for the server's authoritative view.
+ */
+function patchDecision(
+  view: Module5View,
+  cardId: string,
+  input: CardActionInput,
+): Module5View {
+  return {
+    ...view,
+    cards: view.cards.map((c) => {
+      if (c.id !== cardId) return c;
+      if (c.type === "species_review" && "speciesType" in input) {
+        const status =
+          input.action === "approve"
+            ? ("approved" as const)
+            : input.action === "reject"
+              ? ("rejected" as const)
+              : null;
+        if (!status) return c;
+        return {
+          ...c,
+          items: c.items.map((it) =>
+            it.speciesType === input.speciesType ? { ...it, status } : it,
+          ),
+        };
+      }
+      if (c.type === "expansion_review" && "artifactId" in input) {
+        const kept =
+          input.action === "keep" ? true : input.action === "remove" ? false : null;
+        if (kept === null) return c;
+        return {
+          ...c,
+          artifacts: c.artifacts.map((a) =>
+            a.id === input.artifactId ? { ...a, kept } : a,
+          ),
+        };
+      }
+      return c;
+    }),
+  };
+}
 
 const EMPTY: Module5View = {
   phase: "choosing",
@@ -28,10 +74,18 @@ export function useShowcase(projectId: string | null) {
   const [ready, setReady] = useState(false);
   const setProof = useWorkspace((s) => s.setProof);
 
-  const post = useCallback(
-    async (payload: Record<string, unknown>): Promise<Module5View | null> => {
+  // Writes are serialized behind this chain so the engine's per-project row is
+  // never hit concurrently and responses always apply in click order — a stale
+  // full-view reply can't clobber a newer decision.
+  const writeChain = useRef<Promise<unknown>>(Promise.resolve());
+
+  const runCore = useCallback(
+    async (
+      payload: Record<string, unknown>,
+      opts: { block: boolean; reconcile: boolean },
+    ): Promise<Module5View | null> => {
       if (!projectId) return null;
-      setBusy(true);
+      if (opts.block) setBusy(true);
       setError(null);
       try {
         const res = await fetch("/api/showcase", {
@@ -44,28 +98,52 @@ export function useShowcase(projectId: string | null) {
           throw new Error(detail?.detail || `showcase request failed (${res.status})`);
         }
         const data = (await res.json()) as Module5View;
-        setView(data);
-        setProof(
-          {
-            core: null,
-            concepts: data.keyConcepts.map((k) => ({
-              title: k.title,
-              text: k.broadened || k.statement,
-            })),
-          },
-          data.ledger,
-        );
+        // Decisions skip reconcile: the optimistic view already reflects them, and
+        // replacing it with an earlier serialized reply would flicker a later flip.
+        if (opts.reconcile) {
+          setView(data);
+          setProof(
+            {
+              core: null,
+              concepts: data.keyConcepts.map((k) => ({
+                title: k.title,
+                text: k.broadened || k.statement,
+              })),
+            },
+            data.ledger,
+          );
+        }
         return data;
       } catch (e) {
         setError("The Helper couldn't finish that just now. Please try again in a moment.");
         console.error(e);
         return null;
       } finally {
-        setBusy(false);
+        if (opts.block) setBusy(false);
         setReady(true);
       }
     },
     [projectId, setProof],
+  );
+
+  // Queue a write behind any in-flight ones. `block` toggles the global busy
+  // spinner (heavy actions block the UI; cheap decisions ride quietly);
+  // `reconcile` applies the server's authoritative view on return.
+  const enqueue = useCallback(
+    (
+      payload: Record<string, unknown>,
+      opts: { block: boolean; reconcile: boolean },
+    ): Promise<Module5View | null> => {
+      const run = writeChain.current.then(() => runCore(payload, opts));
+      writeChain.current = run.catch(() => {}); // one failure must not stall the queue
+      return run;
+    },
+    [runCore],
+  );
+
+  const post = useCallback(
+    (payload: Record<string, unknown>) => enqueue(payload, { block: true, reconcile: true }),
+    [enqueue],
   );
 
   useEffect(() => {
@@ -75,6 +153,23 @@ export function useShowcase(projectId: string | null) {
   const act = useCallback(
     (cardId: string, input: CardActionInput) => post({ op: "act", cardId, input }),
     [post],
+  );
+
+  // A per-item decision (species approve/reject, artifact keep/remove): update
+  // the view optimistically so the button flips instantly, then persist in the
+  // background without blocking the other buttons. If the write fails, pull the
+  // authoritative view so the optimistic flip can't linger as a lie.
+  const decide = useCallback(
+    (cardId: string, input: CardActionInput) => {
+      setView((v) => patchDecision(v, cardId, input));
+      return enqueue({ op: "act", cardId, input }, { block: false, reconcile: false }).then(
+        (r) => {
+          if (r === null) void enqueue({ op: "start" }, { block: false, reconcile: true });
+          return r;
+        },
+      );
+    },
+    [enqueue],
   );
   const tell = useCallback((text: string) => post({ op: "message", text }), [post]);
   const editSection = useCallback(
@@ -86,6 +181,8 @@ export function useShowcase(projectId: string | null) {
   /** Export the finished disclosure + RFC-3161-sealed proof package. */
   const exportDisclosure = useCallback(async (): Promise<{
     disclosure: string;
+    disclosureDocx: string;
+    proofPackage: string;
     proof: { tsaStatus: string; contentHash: string; sealedAt: string } & Record<string, unknown>;
   } | null> => {
     if (!projectId) return null;
@@ -115,5 +212,5 @@ export function useShowcase(projectId: string | null) {
     return post({ op: "start" });
   }, [post]);
 
-  return { view, busy, error, ready, act, tell, editSection, expand, restart, exportDisclosure };
+  return { view, busy, error, ready, act, decide, tell, editSection, expand, restart, exportDisclosure };
 }

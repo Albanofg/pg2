@@ -27,12 +27,27 @@ export async function POST(req: Request) {
     const core = nodes.find((n) => n.nodeKey === "core_novelty");
     const currentIdea = (core?.humanInputs ?? []).join("\n");
 
+    // Resume where the inventor was: each module writes its own key into
+    // module_state only once its engine has run for this project, so the furthest
+    // key present is the furthest stage reached. Falls back to Conception (the
+    // first working stage) when nothing has been persisted yet.
+    const ms = (project.moduleState ?? {}) as Record<string, unknown>;
+    const STAGE_ORDER = [
+      "showcase",
+      "differentiation",
+      "landscape",
+      "maturation",
+      "conception",
+    ] as const;
+    const stage = STAGE_ORDER.find((k) => ms[k] != null) ?? "conception";
+
     return NextResponse.json({
       project: {
         id: project.id,
         title: project.title,
         currentPhase: project.currentPhase,
       },
+      stage,
       currentIdea,
       nodes: nodes.map((n) => ({
         nodeKey: n.nodeKey,

@@ -21,14 +21,36 @@ import type {
  * Top actions: Genus & Species Expansion, Re-Generate Diagrams (coming soon),
  * Download the ICB, Download Proof of Human Conception.
  */
-function download(name: string, content: string, type: string) {
-  const blob = new Blob([content], { type });
+function saveBlob(name: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** Decode base64 binary (e.g. a .docx or .zip) into a Blob and download it. */
+function downloadBase64(name: string, b64: string, type: string) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  saveBlob(name, new Blob([bytes], { type }));
+}
+
+const DOCX_MIME =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/** Slugify the invention title into a safe filename base, or fall back. */
+function slugFilename(title: string | undefined | null, fallback: string): string {
+  const slug = (title ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .slice(0, 80)
+    .replace(/-+$/, "");
+  return slug || fallback;
 }
 
 const KC_TAB = "__key_concepts";
@@ -40,7 +62,7 @@ export default function ShowcasePanel({
   projectId: string | null;
   maxW?: string;
 }) {
-  const { view, busy, error, ready, act, tell, editSection, expand, restart, exportDisclosure } =
+  const { view, busy, error, ready, act, decide, tell, editSection, expand, restart, exportDisclosure } =
     useShowcase(projectId);
   const setStage = useWorkspace((s) => s.setStage);
   const working = busy || !ready;
@@ -92,14 +114,17 @@ export default function ShowcasePanel({
     const r = await exportDisclosure();
     if (!r) return;
     if (which === "icb") {
-      download("invention-concept-blueprint.md", r.disclosure, "text/markdown");
+      // Name the file after the invention (its Title section), e.g. "my-invention.docx".
+      const inventionTitle = sections.find((s) => s.key === "title")?.body;
+      const filename = `${slugFilename(inventionTitle, "invention-concept-blueprint")}.docx`;
+      downloadBase64(filename, r.disclosureDocx, DOCX_MIME);
       setNote("Downloaded your Invention Concept Blueprint.");
     } else {
-      download("proof-of-human-conception.json", JSON.stringify(r.proof, null, 2), "application/json");
+      downloadBase64("proof-of-human-conception.zip", r.proofPackage, "application/zip");
       setNote(
         r.proof.tsaStatus === "ok"
-          ? "Downloaded your Proof of Human Conception (time-sealed)."
-          : "Downloaded your Proof of Human Conception (server-timed; TSA was unreachable, re-sealable later).",
+          ? "Downloaded your Proof of Human Conception package (time-sealed)."
+          : "Downloaded your Proof of Human Conception package (server-timed; TSA was unreachable, re-sealable later).",
       );
     }
   };
@@ -203,7 +228,7 @@ export default function ShowcasePanel({
                 Genus &amp; Species Expansion · your decisions
               </div>
               {broadeningCards.map((card) => (
-                <CardView key={card.id} card={card} busy={busy} onAct={act} />
+                <CardView key={card.id} card={card} busy={busy} onAct={act} onDecide={decide} />
               ))}
             </div>
           )}
@@ -402,10 +427,12 @@ function CardView({
   card,
   busy,
   onAct,
+  onDecide,
 }: {
   card: Module5Card;
   busy: boolean;
   onAct: (cardId: string, input: never) => void;
+  onDecide: (cardId: string, input: never) => void;
 }) {
   switch (card.type) {
     case "choice":
@@ -415,9 +442,9 @@ function CardView({
     case "widened_review":
       return <WidenedReviewView card={card} busy={busy} onAct={onAct} />;
     case "species_review":
-      return <SpeciesReviewView card={card} busy={busy} onAct={onAct} />;
+      return <SpeciesReviewView card={card} busy={busy} onAct={onAct} onDecide={onDecide} />;
     case "expansion_review":
-      return <ExpansionReviewView card={card} busy={busy} onAct={onAct} />;
+      return <ExpansionReviewView card={card} busy={busy} onAct={onAct} onDecide={onDecide} />;
     default:
       return null;
   }
@@ -429,10 +456,12 @@ function SpeciesReviewView({
   card,
   busy,
   onAct,
+  onDecide,
 }: {
   card: SpeciesReviewCard;
   busy: boolean;
   onAct: (cardId: string, input: never) => void;
+  onDecide: (cardId: string, input: never) => void;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [text, setText] = useState("");
@@ -470,7 +499,7 @@ function SpeciesReviewView({
               </div>
               <div className="flex shrink-0 gap-1.5">
                 <button
-                  onClick={() => onAct(card.id, { action: "approve", speciesType: it.speciesType } as never)}
+                  onClick={() => onDecide(card.id, { action: "approve", speciesType: it.speciesType } as never)}
                   disabled={busy}
                   className={`rounded-md px-2.5 py-1 font-sans text-xs font-medium disabled:opacity-50 ${
                     it.status === "approved"
@@ -491,7 +520,7 @@ function SpeciesReviewView({
                   Edit
                 </button>
                 <button
-                  onClick={() => onAct(card.id, { action: "reject", speciesType: it.speciesType } as never)}
+                  onClick={() => onDecide(card.id, { action: "reject", speciesType: it.speciesType } as never)}
                   disabled={busy}
                   className={`rounded-md px-2.5 py-1 font-sans text-xs disabled:opacity-50 ${
                     it.status === "rejected"
@@ -566,10 +595,12 @@ function ExpansionReviewView({
   card,
   busy,
   onAct,
+  onDecide,
 }: {
   card: ExpansionReviewCard;
   busy: boolean;
   onAct: (cardId: string, input: never) => void;
+  onDecide: (cardId: string, input: never) => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [text, setText] = useState("");
@@ -611,7 +642,7 @@ function ExpansionReviewView({
                     Regenerate
                   </button>
                   <button
-                    onClick={() => onAct(card.id, { action: "keep", artifactId: a.id } as never)}
+                    onClick={() => onDecide(card.id, { action: "keep", artifactId: a.id } as never)}
                     disabled={busy}
                     className={`rounded-md px-2.5 py-1 font-sans text-xs font-medium disabled:opacity-50 ${
                       a.kept ? "bg-accent text-brand" : "border border-border text-ink-muted hover:text-ink"
@@ -630,7 +661,7 @@ function ExpansionReviewView({
                     Edit
                   </button>
                   <button
-                    onClick={() => onAct(card.id, { action: "remove", artifactId: a.id } as never)}
+                    onClick={() => onDecide(card.id, { action: "remove", artifactId: a.id } as never)}
                     disabled={busy}
                     className={`rounded-md px-2.5 py-1 font-sans text-xs disabled:opacity-50 ${
                       !a.kept

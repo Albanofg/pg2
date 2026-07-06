@@ -27,9 +27,15 @@ export default function Triptych() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef<null | "left" | "right">(null);
   const projectId = useWorkspace((s) => s.projectId);
+  const activeProjectId = useWorkspace((s) => s.activeProjectId);
   const stage = useWorkspace((s) => s.stage);
 
-  useBootstrap();
+  const { booting } = useBootstrap();
+  // Hold the center pane while a freshly-opened project is still resolving which
+  // stage to resume — the store's stage is stale until bootstrap answers, and
+  // rendering it would flash the first stage before jumping to the real one.
+  // (On reload projectId already matches, so this never blocks the common path.)
+  const stageResolving = booting && !!activeProjectId && projectId !== activeProjectId;
 
   const onMouseDown = (which: "left" | "right") => (e: React.MouseEvent) => {
     e.preventDefault();
@@ -100,7 +106,11 @@ export default function Triptych() {
         <Divider onMouseDown={onMouseDown("left")} />
       )}
       <div className="h-screen overflow-hidden bg-bg">
-        {stage === "brainstorm" ? (
+        {stageResolving ? (
+          <div className="flex h-full items-center justify-center">
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+          </div>
+        ) : stage === "brainstorm" ? (
           <BrainstormPanel maxW={maxW} />
         ) : stage === "showcase" ? (
           <ShowcasePanel projectId={projectId} maxW={maxW} />

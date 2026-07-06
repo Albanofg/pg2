@@ -214,7 +214,7 @@ export class ShowcaseModule {
       phase: this.phase,
       cards: [...this.openCards.values()],
       keyConcepts: [...this.keyConcepts.values()].map(cloneKC),
-      disclosure: this.disclosure ? this.disclosure.map((s) => ({ ...s, body: unwrapBody(s.body) })) : [],
+      disclosure: this.disclosure ? this.disclosure.map(normalizeDisclosureSection) : [],
       ...(this.genus ? { genus: { ...this.genus } } : {}),
       species: this.species.map((s) => ({ ...s, key_components: [...s.key_components], technical_improvements: [...s.technical_improvements] })),
       broadened: this.broadened,
@@ -268,7 +268,7 @@ export class ShowcaseModule {
 
   /** The Invention Disclosure carried from Module 4 (for export). */
   getDisclosure(): DisclosureSection[] | null {
-    return this.disclosure ? this.disclosure.map((s) => ({ ...s, body: unwrapBody(s.body) })) : null;
+    return this.disclosure ? this.disclosure.map(normalizeDisclosureSection) : null;
   }
 
   ledgerEntries() {
@@ -722,7 +722,7 @@ export class ShowcaseModule {
         if (prior >= 0) sections.splice(prior, 1);
         const sec: DisclosureSection = {
           key: "detail_across",
-          label: "Detailed Description — Across Implementations",
+          label: DETAIL_ACROSS_LABEL,
           body: a.text,
         };
         const opsIdx = sections.findIndex((s) => s.key === "operations");
@@ -857,7 +857,7 @@ export class ShowcaseModule {
       })(),
     ]);
 
-    // Add the new "Detailed Description — Across Implementations" section after
+    // Add the new "Detailed Description" (across-implementations) section after
     // Operations (sequential — it splices the sections array). V1 shape: a fixed
     // order of subsections (mechanism → one per species → improvements → hardware),
     // assembled here into one section body with inline subsection titles.
@@ -885,7 +885,7 @@ export class ShowcaseModule {
         if (prior >= 0) sections.splice(prior, 1);
         const sec: DisclosureSection = {
           key: "detail_across",
-          label: "Detailed Description — Across Implementations",
+          label: DETAIL_ACROSS_LABEL,
           body: body.trim(),
         };
         const opsIdx = sections.findIndex((s) => s.key === "operations");
@@ -1122,6 +1122,24 @@ function unwrapBody(raw: string): string {
       .trim();
   }
   return raw;
+}
+
+/** Single source of truth for the broadening-added section's tab label. */
+const DETAIL_ACROSS_LABEL = "Detailed Description";
+
+/**
+ * Normalize a disclosure section for display/export: unwrap any JSON body
+ * envelope and force the across-implementations section's label. This keeps it
+ * reading "Detailed Description" no matter what's persisted — projects whose
+ * saved state predates the rename, or an enrichment re-run whose extender failed
+ * and left an older label, all render correctly here.
+ */
+function normalizeDisclosureSection(s: DisclosureSection): DisclosureSection {
+  return {
+    ...s,
+    label: s.key === "detail_across" ? DETAIL_ACROSS_LABEL : s.label,
+    body: unwrapBody(s.body),
+  };
 }
 
 function defaultGenId(): string {

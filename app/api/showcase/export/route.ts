@@ -3,6 +3,8 @@ import { sealNotebook } from "@/lib/crypto/rfc3161";
 import { loadShowcase } from "@/lib/modules/showcase/registry";
 import {
   assembleDisclosureMarkdown,
+  assembleDisclosureDocx,
+  assembleProofPackage,
   buildProofContent,
 } from "@/lib/modules/showcase/export";
 
@@ -37,16 +39,31 @@ export async function POST(req: Request) {
     const entries = engine.ledgerEntries();
 
     const disclosureMarkdown = assembleDisclosureMarkdown(disclosure, keyConcepts);
+    const disclosureDocx = await assembleDisclosureDocx(disclosure, keyConcepts);
     const proofContent = buildProofContent(entries);
     const seal = await sealNotebook(proofContent);
+    const sealedAt = seal.sealedAt.toISOString();
+
+    // The whole proof package: the readable PoHC docx + the seal files, zipped.
+    const proofPackage = await assembleProofPackage({
+      entries,
+      content: proofContent,
+      contentHash: seal.contentHash,
+      rfc3161Token: seal.rfc3161Token,
+      sealedAt,
+      tsaStatus: seal.tsaStatus,
+      projectId,
+    });
 
     return NextResponse.json({
       disclosure: disclosureMarkdown,
+      disclosureDocx: disclosureDocx.toString("base64"),
+      proofPackage: proofPackage.toString("base64"),
       proof: {
         content: proofContent,
         contentHash: seal.contentHash,
         rfc3161Token: seal.rfc3161Token,
-        sealedAt: seal.sealedAt.toISOString(),
+        sealedAt,
         tsaStatus: seal.tsaStatus,
         entries,
       },
