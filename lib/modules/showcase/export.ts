@@ -15,14 +15,34 @@ export function assembleDisclosureMarkdown(
   keyConcepts: ShowcaseKeyConcept[],
   drawings: ShowcaseDrawing[] = [],
 ): string {
-  const lines: string[] = ["# Invention Disclosure", ""];
-  if (disclosure.length) {
-    for (const s of disclosure) {
-      lines.push(`## ${s.label}`, "", s.body.trim(), "");
+  // Same 37 CFR 1.77(b) order as the .docx: Title → front matter → Brief Description
+  // of the Drawings → Detailed Description (drawings walkthrough + technical) → Key
+  // Concepts → Abstract.
+  const titleSection = disclosure.find((s) => s.key === "title");
+  const abstractSection = disclosure.find((s) => s.key === "abstract");
+  const body = disclosure.filter((s) => s.key !== "title" && s.key !== "abstract");
+  const detailIdx = body.findIndex((s) => s.key === "architecture");
+  const front = detailIdx >= 0 ? body.slice(0, detailIdx) : body;
+  const detail = detailIdx >= 0 ? body.slice(detailIdx) : [];
+
+  const lines: string[] = [`# ${titleSection?.body?.trim() || "Invention Disclosure"}`, ""];
+
+  for (const s of front) lines.push(`## ${s.label}`, "", s.body.trim(), "");
+
+  if (drawings.length) {
+    lines.push("## Brief Description of the Drawings", "");
+    for (const d of drawings) {
+      lines.push(`- ${d.briefDescription || `FIG. ${d.figNumber} — ${d.title}`}`);
     }
-  } else {
-    lines.push("_(no compiled disclosure available)_", "");
+    lines.push("");
+    lines.push("## Detailed Description of the Drawings", "");
+    for (const d of drawings) {
+      if (d.detailedDescription) lines.push(d.detailedDescription.trim(), "");
+    }
   }
+
+  for (const s of detail) lines.push(`## ${s.label}`, "", s.body.trim(), "");
+
   lines.push("## Key Concepts", "");
   if (keyConcepts.length) {
     keyConcepts.forEach((k, i) => {
@@ -33,17 +53,15 @@ export function assembleDisclosureMarkdown(
     lines.push("_(no Key Concepts)_");
   }
   lines.push("");
-  if (drawings.length) {
-    lines.push("## Drawings", "");
-    lines.push("### Brief Description of the Drawings", "");
-    for (const d of drawings) {
-      lines.push(`- ${d.briefDescription || `FIG. ${d.figNumber} — ${d.title}`}`);
-    }
-    lines.push("", "### Detailed Description of the Drawings", "");
-    for (const d of drawings) {
-      if (d.detailedDescription) lines.push(d.detailedDescription.trim(), "");
-    }
+
+  if (abstractSection) {
+    lines.push("## Abstract", "", abstractSection.body.trim(), "");
   }
+
+  if (!body.length && !drawings.length) {
+    lines.push("_(no compiled disclosure available)_", "");
+  }
+
   return lines.join("\n");
 }
 
@@ -265,8 +283,9 @@ function sectionHeading(
     heading: HeadingLevel.HEADING_1,
     pageBreakBefore: !!opts.pageBreakBefore,
     spacing: { before: 240, after: 120 },
-    // Override the docx HEADING_1 default (16pt Word-blue, not bold) → black bold.
-    children: [new TextRun({ text: label.toUpperCase(), bold: true, color: BLACK, size: SECTION, font: FONT })],
+    // MPEP 608.01(a): section headings uppercase, WITHOUT bold or underline.
+    // (Override the docx HEADING_1 default of 16pt Word-blue → plain black.)
+    children: [new TextRun({ text: label.toUpperCase(), bold: false, color: BLACK, size: SECTION, font: FONT })],
   });
 }
 
@@ -317,44 +336,35 @@ function keyConceptParagraphs(
   return out;
 }
 
-/**
- * The Drawings section: "Brief Description of the Drawings" (one numbered line per
- * figure) then "Detailed Description of the Drawings" (the grounded per-figure
- * walkthrough). Text only — the figure images themselves live in the app's
- * Drawings tab and the per-figure PDFs; embedding raster images in the .docx would
- * need an SVG→PNG rasterizer (a follow-up).
- */
-function drawingParagraphs(
+/** "Brief Description of the Drawings" body — one numbered line per figure. Placed
+ *  BEFORE the Detailed Description per 37 CFR 1.77(b)(9). */
+function briefDrawingParagraphs(
+  drawings: ShowcaseDrawing[],
+  docx: typeof import("docx"),
+  counter: { n: number },
+): DocxParagraph[] {
+  const { Paragraph, TextRun } = docx;
+  return drawings.map((d) => {
+    const brief = (d.briefDescription || `FIG. ${d.figNumber} is a diagram of ${d.title}.`).trim();
+    return new Paragraph({
+      spacing: { line: LINE, after: 60 },
+      children: [
+        new TextRun({ text: `${formatParaNumber(counter.n++)} `, size: BODY }),
+        new TextRun({ text: brief, size: BODY }),
+      ],
+    });
+  });
+}
+
+/** "Detailed Description of the Drawings" body — the grounded per-figure walkthrough.
+ *  Part of the Detailed Description (37 CFR 1.77(b)(10)). */
+function detailedDrawingParagraphs(
   drawings: ShowcaseDrawing[],
   docx: typeof import("docx"),
   counter: { n: number },
 ): DocxParagraph[] {
   const { Paragraph, TextRun } = docx;
   const out: DocxParagraph[] = [];
-  out.push(
-    new Paragraph({
-      spacing: { line: LINE, before: 160, after: 80 },
-      children: [new TextRun({ text: "Brief Description of the Drawings", bold: true, size: SUBHEAD })],
-    }),
-  );
-  drawings.forEach((d) => {
-    const brief = (d.briefDescription || `FIG. ${d.figNumber} is a diagram of ${d.title}.`).trim();
-    out.push(
-      new Paragraph({
-        spacing: { line: LINE, after: 60 },
-        children: [
-          new TextRun({ text: `${formatParaNumber(counter.n++)} `, size: BODY }),
-          new TextRun({ text: brief, size: BODY }),
-        ],
-      }),
-    );
-  });
-  out.push(
-    new Paragraph({
-      spacing: { line: LINE, before: 200, after: 80 },
-      children: [new TextRun({ text: "Detailed Description of the Drawings", bold: true, size: SUBHEAD })],
-    }),
-  );
   drawings.forEach((d) => {
     const detail = (d.detailedDescription || "").trim();
     if (!detail) return;
@@ -372,10 +382,54 @@ function drawingParagraphs(
 }
 
 /**
+ * Rasterize each figure's SVG to a PNG (buffer + pixel size) so it can be embedded
+ * in the .docx. `@resvg/resvg-js` is imported lazily and renders the black line art
+ * on white; if it's unavailable, the map is empty and drawings still export as
+ * text (their descriptions). Per-figure failures are skipped, never fatal.
+ */
+/**
+ * Strip the standalone-sheet chrome the document doesn't want: the "N / M" page
+ * counter the service bakes in (the .docx paginates itself). The figure's own
+ * "FIG. N" title is kept. Text is real `<text>`, so this targeted strip is safe.
+ */
+function cleanFigureSvg(svg: string): string {
+  return svg.replace(/<text\b[^>]*>\s*\d+\s*\/\s*\d+\s*<\/text>/g, "");
+}
+
+async function rasterizeDrawings(
+  drawings: ShowcaseDrawing[],
+): Promise<Map<number, { png: Buffer; width: number; height: number }>> {
+  const map = new Map<number, { png: Buffer; width: number; height: number }>();
+  if (!drawings.length) return map;
+  let Resvg: typeof import("@resvg/resvg-js").Resvg;
+  try {
+    ({ Resvg } = await import("@resvg/resvg-js"));
+  } catch {
+    return map; // rasterizer unavailable — export proceeds text-only
+  }
+  for (const d of drawings) {
+    if (!d.svgData) continue;
+    try {
+      const resvg = new Resvg(cleanFigureSvg(d.svgData), {
+        fitTo: { mode: "width", value: 1600 },
+        background: "white",
+        font: { loadSystemFonts: true },
+      });
+      const r = resvg.render();
+      map.set(d.figNumber, { png: Buffer.from(r.asPng()), width: r.width, height: r.height });
+    } catch {
+      // skip this figure's image — its description still appears in the text section
+    }
+  }
+  return map;
+}
+
+/**
  * Assemble the Invention Disclosure as a real Word document and return the
  * serialized .docx bytes (Node Buffer). Sections render in app 2's canonical
  * order; a Drawings section (descriptions) sits before Key Concepts; the Abstract
- * is pulled out and forced to the very end on its own page.
+ * is on its own page; then each figure is embedded on its OWN page as a drawing
+ * sheet (landscape when the figure is wide) so the diagrams read large and clear.
  */
 export async function assembleDisclosureDocx(
   disclosure: DisclosureSection[],
@@ -384,18 +438,34 @@ export async function assembleDisclosureDocx(
 ): Promise<Buffer> {
   const docx = await import("docx");
   const { marked } = await import("marked");
-  const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Footer, PageNumber } =
-    docx;
+  const {
+    Document,
+    Packer,
+    Paragraph,
+    TextRun,
+    HeadingLevel,
+    AlignmentType,
+    Footer,
+    PageNumber,
+    ImageRun,
+    PageOrientation,
+  } = docx;
   const counter = { n: 1 };
 
   const titleSection = disclosure.find((s) => s.key === "title");
   const abstractSection = disclosure.find((s) => s.key === "abstract");
-  // Everything else, in the canonical order it already arrives in.
-  const bodySections = disclosure.filter((s) => s.key !== "title" && s.key !== "abstract");
-  // Analog of V1's "Detailed Description starts a new page": the technical body begins here.
+  // The Detailed Description begins here (its technical sections).
   const DETAIL_START = "architecture";
+  // Body (everything but Title/Abstract) split into front matter (Background,
+  // Summary…) and the Detailed Description's technical sections.
+  const bodySections = disclosure.filter((s) => s.key !== "title" && s.key !== "abstract");
+  const detailIdx = bodySections.findIndex((s) => s.key === DETAIL_START);
+  const frontSections = detailIdx >= 0 ? bodySections.slice(0, detailIdx) : bodySections;
+  const detailSections = detailIdx >= 0 ? bodySections.slice(detailIdx) : [];
 
-  const children: DocxParagraph[] = [
+  // ---- HEAD: everything before the figures — Title → front matter → Brief
+  // Description of the Drawings.
+  const head: DocxParagraph[] = [
     new Paragraph({
       heading: HeadingLevel.TITLE,
       alignment: AlignmentType.CENTER,
@@ -412,65 +482,144 @@ export async function assembleDisclosureDocx(
     }),
   ];
 
-  if (bodySections.length) {
-    for (const s of bodySections) {
-      children.push(sectionHeading(s.label, docx, { pageBreakBefore: s.key === DETAIL_START }));
-      children.push(...markdownToParagraphs(processTextForDocx(s.body), docx, marked, counter));
-    }
-  } else {
-    children.push(
+  if (!bodySections.length && !drawings.length) {
+    head.push(
       new Paragraph({
         children: [new TextRun({ text: "(no compiled disclosure available)", italics: true, size: BODY })],
       }),
     );
   }
 
-  // Drawings — own page (descriptions; the figures render in-app + as PDFs).
+  // Front matter — Background, (Brief) Summary (37 CFR 1.77(b)(7)-(8)).
+  for (const s of frontSections) {
+    head.push(sectionHeading(s.label, docx));
+    head.push(...markdownToParagraphs(processTextForDocx(s.body), docx, marked, counter));
+  }
+
+  // Brief Description of the Drawings — right before the figures (37 CFR 1.77(b)(9)).
   if (drawings.length) {
-    children.push(sectionHeading("Drawings", docx, { pageBreakBefore: true }));
-    children.push(...drawingParagraphs(drawings, docx, counter));
+    head.push(sectionHeading("Brief Description of the Drawings", docx));
+    head.push(...briefDrawingParagraphs(drawings, docx, counter));
   }
 
-  // Key Concepts — own page.
-  children.push(sectionHeading("Key Concepts", docx, { pageBreakBefore: true }));
-  children.push(...keyConceptParagraphs(keyConcepts, docx, counter));
+  // ---- FIGURE SHEETS: each figure on its OWN page, placed right AFTER the Brief
+  // Description of the Drawings — landscape when the figure is wide. Text-only if
+  // rasterizing failed.
+  const raster = await rasterizeDrawings(drawings);
+  const FIG_MARGIN = 720; // 0.5" (twips). Content px @96 DPI = (page − 2·margin)/1440·96.
+  const figureSections = drawings
+    .filter((d) => raster.has(d.figNumber))
+    .map((d) => {
+      const img = raster.get(d.figNumber)!;
+      const landscape = img.width / Math.max(1, img.height) >= 1.15;
+      // The ACTUAL page size after rendering. `docx` swaps width/height when
+      // orientation is LANDSCAPE, so we always pass PORTRAIT base dims and let the
+      // orientation flag do the swap — otherwise the page stays portrait and the
+      // image overflows the right margin.
+      const trueW = landscape ? 15840 : 12240;
+      const trueH = landscape ? 12240 : 15840;
+      const contentWpx = Math.round(((trueW - 2 * FIG_MARGIN) / 1440) * 96);
+      const contentHpx = Math.round(((trueH - 2 * FIG_MARGIN) / 1440) * 96);
+      // Fit inside the content box with headroom (never edge-to-edge → no clipping);
+      // reserve a little vertical room for the caption line.
+      const scale = Math.min((contentWpx * 0.96) / img.width, (contentHpx * 0.9) / img.height, 1);
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      return {
+        properties: {
+          page: {
+            size: {
+              width: 12240,
+              height: 15840,
+              orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT,
+            },
+            margin: { top: FIG_MARGIN, right: FIG_MARGIN, bottom: FIG_MARGIN, left: FIG_MARGIN },
+          },
+        },
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [new ImageRun({ type: "png", data: img.png, transformation: { width: w, height: h } })],
+          }),
+          // The figure carries its own "FIG. N" title; add just the descriptive
+          // caption below (skip when there's no title).
+          ...(d.title
+            ? [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  spacing: { before: 120 },
+                  children: [new TextRun({ text: d.title, italics: true, size: NOTE, color: MUTED, font: FONT })],
+                }),
+              ]
+            : []),
+        ],
+      };
+    });
 
-  // Abstract — forced last, own page (nothing after it).
+  // ---- TAIL: everything after the figures — Detailed Description → Key Concepts →
+  // Abstract (the very last thing, on its own page).
+  const tail: DocxParagraph[] = [];
+  // With drawings, the tail is its own docx section (which already begins a new
+  // page), so the Detailed Description's first block must not add an extra break.
+  const detailNeedsBreak = !drawings.length;
+  let detailStarted = false;
+  const pushDetail = (label: string, body: DocxParagraph[]) => {
+    tail.push(sectionHeading(label, docx, { pageBreakBefore: detailNeedsBreak && !detailStarted }));
+    tail.push(...body);
+    detailStarted = true;
+  };
+  if (drawings.length) {
+    pushDetail("Detailed Description of the Drawings", detailedDrawingParagraphs(drawings, docx, counter));
+  }
+  for (const s of detailSections) {
+    pushDetail(s.label, markdownToParagraphs(processTextForDocx(s.body), docx, marked, counter));
+  }
+
+  // Key Concepts — own page (the "claims" slot; claims commence on a separate sheet).
+  tail.push(sectionHeading("Key Concepts", docx, { pageBreakBefore: true }));
+  tail.push(...keyConceptParagraphs(keyConcepts, docx, counter));
+
+  // Abstract — the VERY LAST thing in the document, on its own page (37 CFR 1.72(b)).
   if (abstractSection) {
-    children.push(sectionHeading("Abstract", docx, { pageBreakBefore: true }));
-    children.push(...markdownToParagraphs(processTextForDocx(abstractSection.body), docx, marked, counter));
+    tail.push(sectionHeading("Abstract", docx, { pageBreakBefore: true }));
+    tail.push(...markdownToParagraphs(processTextForDocx(abstractSection.body), docx, marked, counter));
   }
+
+  // ---- Assemble. With drawings: [text head] → [figure sheets] → [text tail]; the
+  // figures land right after the Brief Description of the Drawings, the Abstract last.
+  const portraitPage = {
+    // USPTO 37 CFR 1.52: Letter, portrait; margins ≥ 1" left, ≥ 0.75" others.
+    size: { width: 12240, height: 15840 },
+    margin: { top: 1440, right: 1080, bottom: 1080, left: 1440 },
+  };
+  const pageFooter = () => ({
+    default: new Footer({
+      children: [
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [
+            new TextRun({ text: "Page ", size: NOTE, color: "888888" }),
+            new TextRun({ children: [PageNumber.CURRENT], size: NOTE, color: "888888" }),
+            new TextRun({ text: " of ", size: NOTE, color: "888888" }),
+            new TextRun({ children: [PageNumber.TOTAL_PAGES], size: NOTE, color: "888888" }),
+          ],
+        }),
+      ],
+    }),
+  });
+
+  const sections = drawings.length
+    ? [
+        { properties: { page: portraitPage }, footers: pageFooter(), children: head },
+        ...figureSections,
+        { properties: { page: portraitPage }, footers: pageFooter(), children: tail },
+      ]
+    : [{ properties: { page: portraitPage }, footers: pageFooter(), children: [...head, ...tail] }];
 
   const doc = new Document({
     // Document-wide defaults: nonscript 12pt font, everywhere.
     styles: { default: { document: { run: { font: FONT, size: BODY } } } },
-    sections: [
-      {
-        properties: {
-          // USPTO 37 CFR 1.52: Letter, portrait; margins ≥ 1" left, ≥ 0.75" others.
-          page: {
-            size: { width: 12240, height: 15840 },
-            margin: { top: 1440, right: 1080, bottom: 1080, left: 1440 },
-          },
-        },
-        footers: {
-          default: new Footer({
-            children: [
-              new Paragraph({
-                alignment: AlignmentType.CENTER,
-                children: [
-                  new TextRun({ text: "Page ", size: NOTE, color: "888888" }),
-                  new TextRun({ children: [PageNumber.CURRENT], size: NOTE, color: "888888" }),
-                  new TextRun({ text: " of ", size: NOTE, color: "888888" }),
-                  new TextRun({ children: [PageNumber.TOTAL_PAGES], size: NOTE, color: "888888" }),
-                ],
-              }),
-            ],
-          }),
-        },
-        children,
-      },
-    ],
+    sections,
   });
 
   return Packer.toBuffer(doc);

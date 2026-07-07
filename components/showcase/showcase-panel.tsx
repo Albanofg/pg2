@@ -54,6 +54,18 @@ function slugFilename(title: string | undefined | null, fallback: string): strin
   return slug || fallback;
 }
 
+/** A human-readable filename fragment: keep spaces/case, drop characters illegal
+ *  in filenames, collapse whitespace, cap the length. */
+function cleanTitleForFilename(title: string | undefined | null): string {
+  return (title ?? "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100)
+    .trim();
+}
+
 const KC_TAB = "__key_concepts";
 const DRAWINGS_TAB = "__drawings";
 
@@ -98,6 +110,15 @@ export default function ShowcasePanel({
   const drawings = view.drawings;
   // The invention's Title section — used to name downloaded files.
   const inventionTitle = sections.find((s) => s.key === "title")?.body;
+  // Why the gated actions are locked, so the required order is obvious.
+  const gateHint =
+    sections.length === 0
+      ? null
+      : !view.broadened
+        ? "Complete the Genus & Species Expansion above to unlock diagram generation."
+        : drawings.length === 0
+          ? "Generate the diagrams to unlock the Invention Concept Blueprint and Proof of Human Conception downloads."
+          : null;
   const tabs = [
     ...sections.map((s) => ({ key: s.key, label: s.label })),
     ...(view.keyConcepts.length ? [{ key: KC_TAB, label: "Key Concepts" }] : []),
@@ -139,8 +160,11 @@ export default function ShowcasePanel({
     const r = await exportDisclosure();
     if (!r) return;
     if (which === "icb") {
-      // Name the file after the invention (its Title section), e.g. "my-invention.docx".
-      const filename = `${slugFilename(inventionTitle, "invention-concept-blueprint")}.docx`;
+      // "Invention Concept Blueprint - <Title>.docx", falling back when untitled.
+      const cleanTitle = cleanTitleForFilename(inventionTitle);
+      const filename = cleanTitle
+        ? `Invention Concept Blueprint - ${cleanTitle}.docx`
+        : "Invention Concept Blueprint.docx";
       downloadBase64(filename, r.disclosureDocx, DOCX_MIME);
       setNote("Downloaded your Invention Concept Blueprint.");
     } else {
@@ -221,24 +245,32 @@ export default function ShowcasePanel({
             />
             <ActionButton
               onClick={() => void doGenerateDiagrams()}
-              disabled={busy || diagramsBusy || sections.length === 0}
+              disabled={busy || diagramsBusy || sections.length === 0 || !view.broadened}
               label={drawings.length > 0 ? "Re-Generate Diagrams" : "Generate Diagrams"}
               icon="▤"
+              hint={!view.broadened ? "Do the expansion first" : undefined}
             />
             <ActionButton
               onClick={() => void doExport("icb")}
-              disabled={busy || sections.length === 0}
+              disabled={busy || sections.length === 0 || drawings.length === 0}
               primary
               label="Download the Invention Concept Blueprint"
               icon="⭳"
+              hint={drawings.length === 0 ? "Generate diagrams first" : undefined}
             />
             <ActionButton
               onClick={() => void doExport("proof")}
-              disabled={busy}
+              disabled={busy || drawings.length === 0}
               label="Download Proof of Human Conception"
               icon="⭳"
+              hint={drawings.length === 0 ? "Generate diagrams first" : undefined}
             />
           </div>
+          {gateHint && (
+            <p className="flex items-center justify-center gap-1.5 text-center font-mono text-[11px] text-ink-muted">
+              <span aria-hidden>🔒</span> {gateHint}
+            </p>
+          )}
           {note && <p className="text-center font-mono text-[11px] text-ink-muted">{note}</p>}
 
           {error && (
@@ -634,20 +666,27 @@ function ActionButton({
   hint?: string;
 }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      title={hint}
-      className={`flex items-center justify-center gap-2 rounded-md border px-4 py-3 font-sans text-sm font-medium transition-colors disabled:opacity-50 ${
-        primary
-          ? "border-accent/40 bg-accent/15 text-accent hover:bg-accent/25"
-          : "border-border bg-panel text-ink-muted hover:text-ink"
-      }`}
-    >
-      <span aria-hidden>{icon}</span>
-      {label}
-      {hint && <span className="ml-1 font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted">({hint})</span>}
-    </button>
+    // Wrapper span carries the tooltip: a disabled <button> doesn't fire hover in
+    // most browsers, so the title must live on a non-disabled element.
+    <span title={hint} className="flex w-full">
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        className={`flex w-full items-center justify-center gap-2 rounded-md border px-4 py-3 font-sans text-sm font-medium transition-colors disabled:opacity-50 ${
+          primary
+            ? "border-accent/40 bg-accent/15 text-accent hover:bg-accent/25"
+            : "border-border bg-panel text-ink-muted hover:text-ink"
+        }`}
+      >
+        <span aria-hidden>{icon}</span>
+        {label}
+        {hint && (
+          <span className="ml-1 font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted">
+            ({hint})
+          </span>
+        )}
+      </button>
+    </span>
   );
 }
 
