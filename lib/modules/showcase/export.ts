@@ -1,7 +1,7 @@
 import "server-only";
 import type { Paragraph as DocxParagraph, TextRun as DocxTextRun } from "docx";
 import type { LedgerEntry } from "@/lib/modules/shared";
-import type { DisclosureSection, ShowcaseKeyConcept } from "./types";
+import type { DisclosureSection, ShowcaseDrawing, ShowcaseKeyConcept } from "./types";
 
 /**
  * Export assembly for Module 5 — turns the finished module state into the two
@@ -9,10 +9,11 @@ import type { DisclosureSection, ShowcaseKeyConcept } from "./types";
  * that gets RFC-3161 sealed. Pure string assembly; the route does the sealing.
  */
 
-/** Assemble the Invention Disclosure as Markdown (sections + Key Concepts). */
+/** Assemble the Invention Disclosure as Markdown (sections + Key Concepts + Drawings). */
 export function assembleDisclosureMarkdown(
   disclosure: DisclosureSection[],
   keyConcepts: ShowcaseKeyConcept[],
+  drawings: ShowcaseDrawing[] = [],
 ): string {
   const lines: string[] = ["# Invention Disclosure", ""];
   if (disclosure.length) {
@@ -32,7 +33,33 @@ export function assembleDisclosureMarkdown(
     lines.push("_(no Key Concepts)_");
   }
   lines.push("");
+  if (drawings.length) {
+    lines.push("## Drawings", "");
+    lines.push("### Brief Description of the Drawings", "");
+    for (const d of drawings) {
+      lines.push(`- ${d.briefDescription || `FIG. ${d.figNumber} — ${d.title}`}`);
+    }
+    lines.push("", "### Detailed Description of the Drawings", "");
+    for (const d of drawings) {
+      if (d.detailedDescription) lines.push(d.detailedDescription.trim(), "");
+    }
+  }
   return lines.join("\n");
+}
+
+/**
+ * Compact text of just the Key Concepts — the CAPPED input for diagram
+ * generation. The diagram service renders the full disclosure too slowly (and
+ * can wedge its single worker on large input), so for now we feed it only the
+ * Key Concepts: one line per concept, "N. <title> — <broadened|statement>".
+ * Revisit (send more of the draft) once that service is faster or async.
+ */
+export function assembleKeyConceptsText(keyConcepts: ShowcaseKeyConcept[]): string {
+  const lines: string[] = ["Key Concepts", ""];
+  keyConcepts.forEach((k, i) => {
+    lines.push(`${i + 1}. ${k.title} — ${(k.broadened || k.statement).trim()}`);
+  });
+  return lines.join("\n").trim();
 }
 
 /* ------------------------------------------------------------------ *
@@ -291,13 +318,69 @@ function keyConceptParagraphs(
 }
 
 /**
+ * The Drawings section: "Brief Description of the Drawings" (one numbered line per
+ * figure) then "Detailed Description of the Drawings" (the grounded per-figure
+ * walkthrough). Text only — the figure images themselves live in the app's
+ * Drawings tab and the per-figure PDFs; embedding raster images in the .docx would
+ * need an SVG→PNG rasterizer (a follow-up).
+ */
+function drawingParagraphs(
+  drawings: ShowcaseDrawing[],
+  docx: typeof import("docx"),
+  counter: { n: number },
+): DocxParagraph[] {
+  const { Paragraph, TextRun } = docx;
+  const out: DocxParagraph[] = [];
+  out.push(
+    new Paragraph({
+      spacing: { line: LINE, before: 160, after: 80 },
+      children: [new TextRun({ text: "Brief Description of the Drawings", bold: true, size: SUBHEAD })],
+    }),
+  );
+  drawings.forEach((d) => {
+    const brief = (d.briefDescription || `FIG. ${d.figNumber} is a diagram of ${d.title}.`).trim();
+    out.push(
+      new Paragraph({
+        spacing: { line: LINE, after: 60 },
+        children: [
+          new TextRun({ text: `${formatParaNumber(counter.n++)} `, size: BODY }),
+          new TextRun({ text: brief, size: BODY }),
+        ],
+      }),
+    );
+  });
+  out.push(
+    new Paragraph({
+      spacing: { line: LINE, before: 200, after: 80 },
+      children: [new TextRun({ text: "Detailed Description of the Drawings", bold: true, size: SUBHEAD })],
+    }),
+  );
+  drawings.forEach((d) => {
+    const detail = (d.detailedDescription || "").trim();
+    if (!detail) return;
+    out.push(
+      new Paragraph({
+        spacing: { line: LINE, after: 120 },
+        children: [
+          new TextRun({ text: `${formatParaNumber(counter.n++)} `, size: BODY }),
+          new TextRun({ text: detail, size: BODY }),
+        ],
+      }),
+    );
+  });
+  return out;
+}
+
+/**
  * Assemble the Invention Disclosure as a real Word document and return the
  * serialized .docx bytes (Node Buffer). Sections render in app 2's canonical
- * order; the Abstract is pulled out and forced to the very end on its own page.
+ * order; a Drawings section (descriptions) sits before Key Concepts; the Abstract
+ * is pulled out and forced to the very end on its own page.
  */
 export async function assembleDisclosureDocx(
   disclosure: DisclosureSection[],
   keyConcepts: ShowcaseKeyConcept[],
+  drawings: ShowcaseDrawing[] = [],
 ): Promise<Buffer> {
   const docx = await import("docx");
   const { marked } = await import("marked");
@@ -340,6 +423,12 @@ export async function assembleDisclosureDocx(
         children: [new TextRun({ text: "(no compiled disclosure available)", italics: true, size: BODY })],
       }),
     );
+  }
+
+  // Drawings — own page (descriptions; the figures render in-app + as PDFs).
+  if (drawings.length) {
+    children.push(sectionHeading("Drawings", docx, { pageBreakBefore: true }));
+    children.push(...drawingParagraphs(drawings, docx, counter));
   }
 
   // Key Concepts — own page.

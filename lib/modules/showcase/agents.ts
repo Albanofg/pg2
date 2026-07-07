@@ -27,6 +27,7 @@ const PROMPT_FILES: Record<AgentName, string> = {
   "detail-description-extender": `${MODULE_5_DIR}/07-detail-description-extender.md`,
   "abstract-rewriter": `${MODULE_5_DIR}/08-abstract-rewriter.md`,
   "key-concept-appender": `${MODULE_5_DIR}/09-key-concept-appender.md`,
+  "figure-planner": `${MODULE_5_DIR}/10-figure-planner.md`,
 };
 
 const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
@@ -40,6 +41,8 @@ const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
   "detail-description-extender": ["broadening", "enablement_101"],
   "abstract-rewriter": ["broadening", "abstract_rules"],
   "key-concept-appender": ["broadening"],
+  // The figure planner needs the CORE vocabulary discipline only — no broadening.
+  "figure-planner": [],
 };
 
 const promptCache = new Map<AgentName, string>();
@@ -93,6 +96,68 @@ export const VerifierOutput = z.object({
   note: z.string().default(""),
 });
 export type VerifierResult = z.infer<typeof VerifierOutput>;
+
+/**
+ * The figure PLAN: the complete drawing set + numeral ledger + a grounded
+ * description per figure. app 2 owns this stage (plan-mode); the diagram service
+ * only draws it. `briefDescription`/`detailedDescription` are OUR document text —
+ * each is built strictly from that figure's ledger numerals, never invented.
+ */
+export const FigurePlanOutput = z.object({
+  figures: z
+    .array(
+      z.object({
+        figNumber: z.number().int(),
+        figType: z.enum([
+          "system",
+          "module",
+          "flowchart",
+          "dataflow",
+          "sequence",
+          "state",
+          "hardware",
+          "record",
+        ]),
+        title: z.string().default(""),
+        briefDescription: z.string().default(""),
+        detailedDescription: z.string().default(""),
+        outline: z.string().default(""),
+        numerals: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
+  numerals: z
+    .array(
+      z.object({
+        ref: z.string(),
+        feature: z.string().default(""),
+        figures: z.array(z.number().int()).default([]),
+        definedInSpec: z.boolean().default(false),
+      }),
+    )
+    .default([]),
+  gaps: z.array(z.string()).default([]),
+});
+export type FigurePlanResult = z.infer<typeof FigurePlanOutput>;
+
+export async function runFigurePlanner(
+  runAgent: AgentRunner,
+  input: { specText: string },
+): Promise<FigurePlanResult> {
+  const system = await loadAgentPrompt("figure-planner");
+  const prompt = [
+    "THE INVENTION CONCEPT BLUEPRINT (draft sections + Key Concepts):",
+    "",
+    input.specText,
+  ].join("\n");
+  return runAgent({
+    agent: "figure-planner",
+    system,
+    prompt,
+    schema: FigurePlanOutput,
+    temperature: 0.2,
+  });
+}
 
 /* ------------------------------------------------------------------ *
  * Run functions

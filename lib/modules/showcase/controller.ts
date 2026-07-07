@@ -5,6 +5,7 @@ import {
   runAbstractRewriter,
   runBackgroundExtender,
   runDetailDescriptionExtender,
+  runFigurePlanner,
   runGenusExtractor,
   runHelper,
   runKeyConceptAppender,
@@ -20,12 +21,14 @@ import type {
   DisclosureSection,
   ExpansionArtifact,
   ExpansionReviewInput,
+  FigureRenderer,
   Genus,
   HelperTurn,
   Module5Card,
   Module5Phase,
   Module5View,
   ShowcaseDeps,
+  ShowcaseDrawing,
   ShowcaseKeyConcept,
   Species,
   SpeciesReviewInput,
@@ -65,6 +68,7 @@ export type ShowcaseSnapshot = {
   intents: [string, Intent][];
   conversation: HelperTurn[];
   ledger: import("@/lib/modules/shared").LedgerEntry[];
+  drawings: ShowcaseDrawing[];
 };
 
 export class ShowcaseModule {
@@ -84,6 +88,7 @@ export class ShowcaseModule {
   private openCards = new Map<string, Module5Card>();
   private intents = new Map<string, Intent>();
   private conversation: HelperTurn[] = [];
+  private drawings: ShowcaseDrawing[] = [];
 
   constructor(deps: ShowcaseDeps) {
     this.runAgent = deps.runAgent;
@@ -221,6 +226,7 @@ export class ShowcaseModule {
       conversation: this.conversation.map((t) => ({ ...t })),
       ledger: this.ledger.serialize(),
       complete: this.isComplete(),
+      drawings: this.drawings.map((d) => ({ ...d, numerals: [...d.numerals] })),
     };
   }
 
@@ -269,6 +275,75 @@ export class ShowcaseModule {
   /** The Invention Disclosure carried from Module 4 (for export). */
   getDisclosure(): DisclosureSection[] | null {
     return this.disclosure ? this.disclosure.map(normalizeDisclosureSection) : null;
+  }
+
+  /** The finished drawings (figure + descriptions) — for the ICB view and export. */
+  getDrawings(): ShowcaseDrawing[] {
+    return this.drawings.map((d) => ({ ...d, numerals: [...d.numerals] }));
+  }
+
+  /**
+   * Plan the figure set from the finished draft, hand the plan to the injected
+   * renderer (the diagram service, in plan mode), and fuse each rendered figure
+   * with its plan-authored descriptions. One plan drives BOTH the drawing and its
+   * description, so they can't disagree; each description's numerals are reconciled
+   * to what was actually drawn. The renderer is injected so the engine stays free
+   * of HTTP/transport.
+   */
+  async generateDrawings(render: FigureRenderer): Promise<Module5View> {
+    const specText = this.assembleSpecForPlanner();
+    if (specText.trim().length < 20) return this.view();
+
+    const plan = await runFigurePlanner(this.runAgent, { specText });
+    const figures = plan.figures.filter((f) => f.outline.trim() || f.numerals.length);
+    if (!figures.length) {
+      this.ledger.recordMachineEvent("drawings_plan_empty", ["showcase", "drawings"], {});
+      return this.view();
+    }
+
+    const rendered = await render({ figures, numerals: plan.numerals, gaps: plan.gaps });
+    const byNum = new Map(rendered.map((r) => [r.figNumber, r]));
+
+    const drawings: ShowcaseDrawing[] = [];
+    for (const f of figures) {
+      const r = byNum.get(f.figNumber);
+      if (!r) continue; // figure the service couldn't draw — drop it (no orphan text)
+      // Reconcile the description's numerals to what was actually rendered.
+      const drawn = new Set(r.numerals.length ? r.numerals : f.numerals);
+      drawings.push({
+        figNumber: f.figNumber,
+        figType: f.figType,
+        title: (f.title || r.title || `Figure ${f.figNumber}`).trim(),
+        briefDescription: f.briefDescription.trim(),
+        detailedDescription: f.detailedDescription.trim(),
+        numerals: f.numerals.filter((n) => drawn.has(n)),
+        svgData: r.svgData,
+        pdfBase64: r.pdfBase64,
+      });
+    }
+    drawings.sort((a, b) => a.figNumber - b.figNumber);
+    this.drawings = drawings;
+    this.ledger.recordMachineEvent("drawings_generated", ["showcase", "drawings"], {
+      figures: drawings.length,
+    });
+    return this.view();
+  }
+
+  /** Assemble the draft (sections + Key Concepts) as the planner's input text. */
+  private assembleSpecForPlanner(): string {
+    const lines: string[] = [];
+    const disc = this.disclosure ? this.disclosure.map(normalizeDisclosureSection) : [];
+    for (const s of disc) {
+      lines.push(`## ${s.label}`, s.body.trim(), "");
+    }
+    const kcs = [...this.keyConcepts.values()];
+    if (kcs.length) {
+      lines.push("## Key Concepts", "");
+      kcs.forEach((k, i) =>
+        lines.push(`${i + 1}. ${k.title} — ${(k.broadened || k.statement).trim()}`),
+      );
+    }
+    return lines.join("\n").trim();
   }
 
   ledgerEntries() {
@@ -1071,6 +1146,7 @@ export class ShowcaseModule {
       intents: [...this.intents.entries()],
       conversation: this.conversation.map((t) => ({ ...t })),
       ledger: this.ledger.serialize(),
+      drawings: this.drawings.map((d) => ({ ...d, numerals: [...d.numerals] })),
     };
   }
 
@@ -1089,6 +1165,7 @@ export class ShowcaseModule {
     m.openCards = new Map(snap.openCards.map((c) => [c.id, c]));
     m.intents = new Map(snap.intents);
     m.conversation = (snap.conversation ?? []).map((t) => ({ ...t }));
+    m.drawings = (snap.drawings ?? []).map((d) => ({ ...d, numerals: [...d.numerals] }));
     return m;
   }
 }

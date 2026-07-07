@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useWorkspace } from "@/lib/store";
-import type { CardActionInput, Module5View } from "@/lib/modules/showcase/types";
+import type { CardActionInput, Module5View, ShowcaseDrawing } from "@/lib/modules/showcase/types";
 
 /**
  * Optimistically reflect a per-item decision in the local view so the buttons
@@ -60,6 +60,7 @@ const EMPTY: Module5View = {
   conversation: [],
   ledger: [],
   complete: false,
+  drawings: [],
 };
 
 /**
@@ -150,6 +151,18 @@ export function useShowcase(projectId: string | null) {
     if (projectId) void post({ op: "start" });
   }, [projectId, post]);
 
+  // Warm the (sleep-after-idle) diagram service the moment the last stage opens,
+  // so the container is awake by the time the inventor asks for figures.
+  // Fire-and-forget: warming never blocks and never surfaces an error.
+  useEffect(() => {
+    if (!projectId) return;
+    void fetch("/api/showcase/diagrams", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ warm: true }),
+    }).catch(() => {});
+  }, [projectId]);
+
   const act = useCallback(
     (cardId: string, input: CardActionInput) => post({ op: "act", cardId, input }),
     [post],
@@ -207,10 +220,50 @@ export function useShowcase(projectId: string | null) {
       setBusy(false);
     }
   }, [projectId]);
+  /**
+   * Generate the ICB's drawings for the finished draft. The server plans the
+   * figure set, has the diagram service draw it, fuses each figure with its
+   * plan-authored description, and persists the result — so this returns the
+   * finished, re-viewable drawings. It's a slow call (planning + render), so it
+   * deliberately does NOT flip the shared `busy`/`error` state — the panel owns
+   * the diagram modal's own busy/error and catches the thrown message here. On
+   * success the persisted drawings also land in `view.drawings` on the next start.
+   */
+  const generateDiagrams = useCallback(async (): Promise<{ drawings: ShowcaseDrawing[] }> => {
+    if (!projectId) throw new Error("No project.");
+    const res = await fetch("/api/showcase/diagrams", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId }),
+    });
+    if (!res.ok) {
+      const d = (await res.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(d?.detail || `diagram request failed (${res.status})`);
+    }
+    const data = (await res.json()) as { drawings?: ShowcaseDrawing[] };
+    const drawings = data.drawings ?? [];
+    // Reflect the freshly-persisted drawings in the live view immediately.
+    setView((v) => ({ ...v, drawings }));
+    return { drawings };
+  }, [projectId]);
+
   const restart = useCallback(async () => {
     await post({ op: "reset" });
     return post({ op: "start" });
   }, [post]);
 
-  return { view, busy, error, ready, act, decide, tell, editSection, expand, restart, exportDisclosure };
+  return {
+    view,
+    busy,
+    error,
+    ready,
+    act,
+    decide,
+    tell,
+    editSection,
+    expand,
+    restart,
+    exportDisclosure,
+    generateDiagrams,
+  };
 }

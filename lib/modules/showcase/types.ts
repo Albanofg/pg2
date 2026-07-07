@@ -63,6 +63,106 @@ export type Species = {
 /** The disclosure carried from Module 4 (for the later export slice). */
 export type DisclosureSection = { key: string; label: string; body: string };
 
+/**
+ * A figure returned by the external diagram service — a self-contained SVG for
+ * display plus a bare-base64 single-page PDF for download. Shared between the
+ * server seam (`diagrams.ts`), the route, the hook, and the panel.
+ */
+export type DiagramFigure = {
+  /** Stable id, always "fig-<n>". */
+  id: string;
+  /** Human-readable figure caption. */
+  title: string;
+  /** Raw `<svg…>…</svg>` markup (black-and-white, PCT-style). */
+  svgData: string;
+  /** Base64 of a single-page PDF — prepend `data:application/pdf;base64,` to use. */
+  pdfBase64: string;
+};
+
+/* ------------------------------------------------------------------ *
+ * Drawings — the plan-mode figure pipeline
+ *
+ * app 2 owns the PLANNER: it reads the finished draft and emits a figure PLAN
+ * (the figure set + a numeral ledger + a grounded description per figure). The
+ * external diagram service is handed the plan and only DRAWS it (see
+ * DIAGRAM_SERVICE_PLAN_MODE.md). Because one plan drives BOTH the drawing and its
+ * description, the two can never disagree — each description is composed from the
+ * same numerals/features that were drawn, never guessed.
+ * ------------------------------------------------------------------ */
+
+export type DrawingFigType =
+  | "system"
+  | "module"
+  | "flowchart"
+  | "dataflow"
+  | "sequence"
+  | "state"
+  | "hardware"
+  | "record";
+
+/** One row of the numeral ledger: a reference numeral bound to a feature name. */
+export type NumeralLedgerEntry = {
+  ref: string;
+  feature: string;
+  figures: number[];
+  definedInSpec: boolean;
+};
+
+/** One planned figure — the drafter's instructions plus our own descriptions. */
+export type PlannedFigure = {
+  figNumber: number;
+  figType: DrawingFigType;
+  title: string;
+  /** "FIG. N is a block diagram of …" — the Brief Description of the Drawings line. */
+  briefDescription: string;
+  /** The grounded walkthrough — every numbered element and how they connect. */
+  detailedDescription: string;
+  /** Directive drawing instructions for the diagram service's drafter. */
+  outline: string;
+  /** The numerals this figure uses (a subset of the ledger). */
+  numerals: string[];
+};
+
+/** The full plan app 2 sends to the diagram service's plan-mode endpoint. */
+export type FigurePlan = {
+  figures: PlannedFigure[];
+  numerals: NumeralLedgerEntry[];
+  gaps: string[];
+};
+
+/** A figure the diagram service rendered from the plan (joined back by figNumber). */
+export type PlanFigureResult = {
+  figNumber: number;
+  title: string;
+  svgData: string;
+  pdfBase64: string;
+  /** The numerals actually drawn (after the drafter's legibility budget). */
+  numerals: string[];
+};
+
+/**
+ * A finished drawing as stored on the project and shown in the ICB: the rendered
+ * figure (SVG + PDF) fused with its plan-authored descriptions. This is what the
+ * "Drawings" part of the ICB displays and the export includes.
+ */
+export type ShowcaseDrawing = {
+  figNumber: number;
+  figType: DrawingFigType;
+  title: string;
+  briefDescription: string;
+  detailedDescription: string;
+  numerals: string[];
+  svgData: string;
+  pdfBase64: string;
+};
+
+/**
+ * The rendering seam: hands a plan to the diagram service and returns the figures
+ * it drew. Injected into the engine so the controller stays free of HTTP/transport
+ * (mirrors how Module 3 injects its prior-art search).
+ */
+export type FigureRenderer = (plan: FigurePlan) => Promise<PlanFigureResult[]>;
+
 /* ------------------------------------------------------------------ *
  * Ledger vocabulary
  * ------------------------------------------------------------------ */
@@ -240,6 +340,8 @@ export type Module5View = {
   conversation: HelperTurn[];
   ledger: LedgerEntry[];
   complete: boolean;
+  /** The finished figures + their descriptions — the ICB's Drawings part. */
+  drawings: ShowcaseDrawing[];
 };
 
 /** The sub-agents Module 5 calls. Never user-facing. */
@@ -254,7 +356,9 @@ export type AgentName =
   | "summary-extender"
   | "detail-description-extender"
   | "abstract-rewriter"
-  | "key-concept-appender";
+  | "key-concept-appender"
+  // Plans the figure set + numeral ledger + grounded descriptions (plan-mode drawings).
+  | "figure-planner";
 
 export type ShowcaseDeps = {
   runAgent: AgentRunner;

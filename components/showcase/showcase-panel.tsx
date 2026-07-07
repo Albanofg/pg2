@@ -10,6 +10,7 @@ import type {
   ChoiceCard,
   ExpansionReviewCard,
   Module5Card,
+  ShowcaseDrawing,
   SpeciesReviewCard,
   VariationCard,
   WidenedReviewCard,
@@ -54,6 +55,7 @@ function slugFilename(title: string | undefined | null, fallback: string): strin
 }
 
 const KC_TAB = "__key_concepts";
+const DRAWINGS_TAB = "__drawings";
 
 export default function ShowcasePanel({
   projectId,
@@ -62,8 +64,20 @@ export default function ShowcasePanel({
   projectId: string | null;
   maxW?: string;
 }) {
-  const { view, busy, error, ready, act, decide, tell, editSection, expand, restart, exportDisclosure } =
-    useShowcase(projectId);
+  const {
+    view,
+    busy,
+    error,
+    ready,
+    act,
+    decide,
+    tell,
+    editSection,
+    expand,
+    restart,
+    exportDisclosure,
+    generateDiagrams,
+  } = useShowcase(projectId);
   const setStage = useWorkspace((s) => s.setStage);
   const working = busy || !ready;
 
@@ -73,10 +87,21 @@ export default function ShowcasePanel({
   const [query, setQuery] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
+  // Diagrams generation modal — its own busy/error so the slow (planning + render)
+  // run never hijacks the panel's module spinner. The finished figures live in the
+  // ICB's Drawings tab (view.drawings), not here — this modal is just progress.
+  const [diagramsOpen, setDiagramsOpen] = useState(false);
+  const [diagramsBusy, setDiagramsBusy] = useState(false);
+  const [diagramsError, setDiagramsError] = useState<string | null>(null);
+
   const sections = view.disclosure;
+  const drawings = view.drawings;
+  // The invention's Title section — used to name downloaded files.
+  const inventionTitle = sections.find((s) => s.key === "title")?.body;
   const tabs = [
     ...sections.map((s) => ({ key: s.key, label: s.label })),
     ...(view.keyConcepts.length ? [{ key: KC_TAB, label: "Key Concepts" }] : []),
+    ...(drawings.length ? [{ key: DRAWINGS_TAB, label: "Drawings" }] : []),
   ];
   // Resolve the selected tab (default to the first section).
   const currentKey = tabs.some((t) => t.key === activeKey) ? activeKey : (tabs[0]?.key ?? "");
@@ -115,7 +140,6 @@ export default function ShowcasePanel({
     if (!r) return;
     if (which === "icb") {
       // Name the file after the invention (its Title section), e.g. "my-invention.docx".
-      const inventionTitle = sections.find((s) => s.key === "title")?.body;
       const filename = `${slugFilename(inventionTitle, "invention-concept-blueprint")}.docx`;
       downloadBase64(filename, r.disclosureDocx, DOCX_MIME);
       setNote("Downloaded your Invention Concept Blueprint.");
@@ -126,6 +150,35 @@ export default function ShowcasePanel({
           ? "Downloaded your Proof of Human Conception package (time-sealed)."
           : "Downloaded your Proof of Human Conception package (server-timed; TSA was unreachable, re-sealable later).",
       );
+    }
+  };
+
+  // Plan + draw the figures, persist them to the ICB, then jump to the Drawings
+  // tab. Opens a progress modal (planning + render can take a couple of minutes);
+  // on success it closes and the figures live permanently in the Drawings tab.
+  const doGenerateDiagrams = async () => {
+    setDiagramsOpen(true);
+    setDiagramsBusy(true);
+    setDiagramsError(null);
+    try {
+      const r = await generateDiagrams();
+      if (r.drawings.length) {
+        setDiagramsOpen(false);
+        setActiveKey(DRAWINGS_TAB);
+        setNote(
+          `Added ${r.drawings.length} figure${r.drawings.length === 1 ? "" : "s"} to your ICB — see the Drawings tab.`,
+        );
+      } else {
+        setDiagramsError("We couldn't derive any figures from this draft yet.");
+      }
+    } catch (e) {
+      setDiagramsError(
+        e instanceof Error && e.message
+          ? e.message
+          : "Couldn't generate diagrams just now. Please try again in a moment.",
+      );
+    } finally {
+      setDiagramsBusy(false);
     }
   };
 
@@ -167,10 +220,10 @@ export default function ShowcasePanel({
               icon="✦"
             />
             <ActionButton
-              disabled
-              label="Re-Generate Diagrams"
+              onClick={() => void doGenerateDiagrams()}
+              disabled={busy || diagramsBusy || sections.length === 0}
+              label={drawings.length > 0 ? "Re-Generate Diagrams" : "Generate Diagrams"}
               icon="▤"
-              hint="Coming soon"
             />
             <ActionButton
               onClick={() => void doExport("icb")}
@@ -281,7 +334,12 @@ export default function ShowcasePanel({
 
                 {/* Right pane */}
                 <div className="min-w-0 flex-1 p-4">
-                  {currentKey === KC_TAB ? (
+                  {currentKey === DRAWINGS_TAB ? (
+                    <DrawingsView
+                      drawings={drawings}
+                      titleBase={slugFilename(inventionTitle, "figure")}
+                    />
+                  ) : currentKey === KC_TAB ? (
                     <div>
                       <div className="mb-2 font-sans text-sm font-semibold text-ink">Key Concepts</div>
                       <ul className="space-y-3">
@@ -384,7 +442,177 @@ export default function ShowcasePanel({
           <HelperComposer placeholder="Ask the Helper to polish a section…" busy={busy} onSend={tell} />
         </div>
       </div>
+
+      {diagramsOpen && (
+        <DiagramsProgressModal
+          busy={diagramsBusy}
+          error={diagramsError}
+          onRetry={() => void doGenerateDiagrams()}
+          onClose={() => setDiagramsOpen(false)}
+        />
+      )}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+/** Transient progress modal for figure generation — spinner while planning +
+ *  rendering, or the error with a retry. The finished figures live in the
+ *  Drawings tab, not here. */
+function DiagramsProgressModal({
+  busy,
+  error,
+  onRetry,
+  onClose,
+}: {
+  busy: boolean;
+  error: string | null;
+  onRetry: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-lg border border-border bg-panel shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-accent">Drawings</div>
+            <div className="mt-0.5 font-sans text-sm font-semibold text-ink">
+              Generating your figures
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-2 py-1 font-mono text-xs text-ink-muted hover:text-ink"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="p-6">
+          {busy ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-8 text-center">
+              <span className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+              <p className="font-mono text-xs text-ink-muted">
+                Planning the figure set and drawing each one…
+              </p>
+              <p className="max-w-xs font-sans text-[11px] text-ink-muted">
+                This can take a couple of minutes. They'll be saved to the Drawings tab of your ICB.
+              </p>
+            </div>
+          ) : error ? (
+            <div className="flex flex-col gap-3">
+              <div className="rounded-md border border-red-500/40 bg-red-500/10 p-3 font-mono text-xs text-red-300">
+                {error}
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90"
+                >
+                  Try again
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The Drawings part of the ICB: every figure with its drawing (SVG on white, so
+ *  the black line art is visible in either theme) plus its grounded Brief and
+ *  Detailed descriptions, and a per-figure PDF download. Re-viewable any time. */
+function DrawingsView({
+  drawings,
+  titleBase,
+}: {
+  drawings: ShowcaseDrawing[];
+  titleBase: string;
+}) {
+  if (!drawings.length) {
+    return <p className="font-sans text-sm text-ink-muted">No drawings yet.</p>;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="mb-1 font-sans text-sm font-semibold text-ink">Drawings</div>
+      <p className="mb-2 font-sans text-xs text-ink-muted">
+        Each figure is drawn from your draft, with a description written from the same elements —
+        so the words match the drawing.
+      </p>
+
+      {/* Brief Description of the Drawings — the one-line-per-figure index. */}
+      <div className="rounded-md border border-border bg-bg p-3">
+        <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+          Brief Description of the Drawings
+        </div>
+        <ul className="mt-2 space-y-1">
+          {drawings.map((d) => (
+            <li key={d.figNumber} className="font-sans text-[13px] leading-relaxed text-ink">
+              {d.briefDescription || `FIG. ${d.figNumber} — ${d.title}`}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Each figure + its detailed description. */}
+      <div className="mt-2 flex flex-col gap-6">
+        {drawings.map((d) => (
+          <DrawingCard key={d.figNumber} drawing={d} titleBase={titleBase} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DrawingCard({ drawing, titleBase }: { drawing: ShowcaseDrawing; titleBase: string }) {
+  return (
+    <figure className="rounded-lg border border-border bg-panel">
+      <figcaption className="flex items-center justify-between gap-3 border-b border-border p-3">
+        <span className="min-w-0 font-sans text-sm font-semibold text-ink">
+          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            Fig. {drawing.figNumber}
+          </span>{" "}
+          {drawing.title}
+        </span>
+        {drawing.pdfBase64 && (
+          <a
+            href={`data:application/pdf;base64,${drawing.pdfBase64}`}
+            download={`${titleBase}-fig-${drawing.figNumber}.pdf`}
+            className="shrink-0 rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted transition-colors hover:text-ink"
+          >
+            ⭳ PDF
+          </a>
+        )}
+      </figcaption>
+      {/* Black line art — render on white so it's visible in either theme; wide
+          diagrams scroll inside their own box and never overflow the page. */}
+      <div
+        className="diagram-svg overflow-x-auto bg-white p-4 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full"
+        dangerouslySetInnerHTML={{ __html: drawing.svgData }}
+      />
+      {drawing.detailedDescription && (
+        <p className="whitespace-pre-wrap border-t border-border p-3 font-sans text-[13px] leading-relaxed text-ink">
+          {drawing.detailedDescription}
+        </p>
+      )}
+    </figure>
   );
 }
 

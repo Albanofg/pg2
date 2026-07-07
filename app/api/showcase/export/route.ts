@@ -36,10 +36,11 @@ export async function POST(req: Request) {
     }
     const disclosure = engine.getDisclosure() ?? [];
     const keyConcepts = engine.finish();
+    const drawings = engine.getDrawings();
     const entries = engine.ledgerEntries();
 
-    const disclosureMarkdown = assembleDisclosureMarkdown(disclosure, keyConcepts);
-    const disclosureDocx = await assembleDisclosureDocx(disclosure, keyConcepts);
+    const disclosureMarkdown = assembleDisclosureMarkdown(disclosure, keyConcepts, drawings);
+    const disclosureDocx = await assembleDisclosureDocx(disclosure, keyConcepts, drawings);
     const proofContent = buildProofContent(entries);
     const seal = await sealNotebook(proofContent);
     const sealedAt = seal.sealedAt.toISOString();
