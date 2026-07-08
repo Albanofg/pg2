@@ -15,8 +15,6 @@ import { getUsageContext } from "./usage-context";
  * full inference. Logging never affects the call's result or errors.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 function modelOf(opts: any): { model: string; provider?: string } {
   const m = opts?.model;
   return { model: (m?.modelId as string) ?? "unknown", provider: m?.provider as string | undefined };

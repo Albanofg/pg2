@@ -536,7 +536,7 @@ function DiagramsProgressModal({
                 Planning the figure set and drawing each one…
               </p>
               <p className="max-w-xs font-sans text-[11px] text-ink-muted">
-                This can take a couple of minutes. They'll be saved to the Drawings tab of your ICB.
+                This can take a couple of minutes. They will be saved to the Drawings tab of your ICB.
               </p>
             </div>
           ) : error ? (

@@ -87,7 +87,6 @@ export async function getSummary(f: UsageFilters): Promise<UsageSummary> {
 
 export type Breakdown = { key: string | null; calls: number; totalTokens: number; inputTokens: number; outputTokens: number; cachedTokens: number };
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 async function groupBy(col: any, f: UsageFilters): Promise<Breakdown[]> {
   return db
     .select({ key: col, calls: CALLS, totalTokens: TOTAL, inputTokens: IN, outputTokens: OUT, cachedTokens: CACHED })
