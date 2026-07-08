@@ -6,6 +6,7 @@ import {
 } from "@/lib/modules/shared/consciousness-store";
 import { ConceptionModule, type ConceptionSnapshot } from "./controller";
 import { openaiAgentRunner } from "./runner.openai";
+import { refreshFamilyArtifactsBackground } from "@/lib/families/digest";
 
 /**
  * DB-backed conception sessions. The project row's `module_state.conception`
@@ -37,6 +38,7 @@ export async function saveConception(
 ): Promise<void> {
   await saveModuleState(projectId, { conception: engine.toSnapshot() });
   await persistConsciousness(projectId, engine.consciousnessInstance());
+  refreshFamilyArtifactsBackground(projectId, "conception");
 }
 
 /** Start the conception session over — the shared draft memory is untouched. */

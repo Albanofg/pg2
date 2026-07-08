@@ -8,6 +8,8 @@ import {
   integer,
   bigserial,
   index,
+  uniqueIndex,
+  vector,
 } from "drizzle-orm/pg-core";
 
 /**
@@ -32,6 +34,31 @@ export const users = pg.table("users", {
   passwordHash: text("password_hash"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// Project Families — an owner-scoped label grouping sibling Projects that cover one
+// product/subject domain, so distinct filings don't accidentally overlap.
+// Organizational only: no content is shared or merged between member Projects.
+export const projectFamilies = pg.table(
+  "project_families",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    title: text("title").notNull(),
+    description: text("description"),
+    // Free-text family background injected into the Helper's FAMILY CONTEXT every
+    // turn — distinct from `description` (a short card label).
+    context: text("context"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (t) => ({
+    userIdx: index("project_families_user_idx").on(t.userId),
+  }),
+);
+export type ProjectFamily = typeof projectFamilies.$inferSelect;
 
 // Projects — one Invention Concept Blueprint (ICB).
 export const projects = pg.table("projects", {
@@ -59,9 +86,117 @@ export const projects = pg.table("projects", {
    * each other (lost-update protection for a multi-user / multi-tab deployment).
    */
   version: integer("version").default(0).notNull(),
+  // The family this project belongs to (organizational grouping), or null if standalone.
+  familyId: uuid("family_id").references(() => projectFamilies.id, { onDelete: "set null" }),
+  // Editable project details (filing status etc.) — all optional. Feeds the Helper's
+  // tone-by-status and the family context.
+  inventorNames: text("inventor_names"), // comma-separated
+  filedDate: text("filed_date"), // ISO date string (yyyy-mm-dd)
+  status: text("status"), // draft | filed | granted | abandoned | archived
+  applicationNumber: text("application_number"),
+  notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+// The digest cache — one row per notable artifact in a member Project. Computed once
+// per save by the owning Project; every cross-sibling overlap check is then a pure
+// indexed SQL read (no AI calls, no live re-read of other projects). FK-less on
+// text; the refresh writer deletes-and-reinserts by kind rather than upserting.
+export const projectFamilyArtifacts = pg.table(
+  "project_family_artifacts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    projectId: uuid("project_id")
+      .references(() => projects.id, { onDelete: "cascade" })
+      .notNull(),
+    // Mirrors the owning project's current family; kept in sync on attach/detach.
+    familyId: uuid("family_id").references(() => projectFamilies.id, { onDelete: "set null" }),
+    artifactKind: text("artifact_kind").notNull(), // idea_summary | extracted_idea | key_concept
+    artifactRef: text("artifact_ref").notNull(), // stable ref (concept id or index)
+    preview: text("preview").notNull(), // full artifact text, never truncated at write
+    charCount: integer("char_count").notNull(),
+    hash: text("hash").notNull(), // sha256 of normalized text
+    // Semantic-retrieval vector (gemini-embedding-001 @ 1536 dims = EMBED_DIMS in
+    // lib/ai/openai.ts). Nullable: written best-effort, null until embedded.
+    embedding: vector("embedding", { dimensions: 1536 }),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    unique: uniqueIndex("project_family_artifacts_unique").on(
+      t.projectId,
+      t.artifactKind,
+      t.artifactRef,
+    ),
+    familyKindIdx: index("project_family_artifacts_family_kind_idx").on(t.familyId, t.artifactKind),
+    familyHashIdx: index("project_family_artifacts_family_hash_idx").on(t.familyId, t.hash),
+    projectIdx: index("project_family_artifacts_project_idx").on(t.projectId),
+  }),
+);
+export type ProjectFamilyArtifact = typeof projectFamilyArtifacts.$inferSelect;
+
+// Family reference documents — external files (PDF/DOCX) uploaded once per family
+// and shared by every sibling Project as background. Extracted to plain text at
+// upload (mammoth for DOCX, pdf-parse for PDF), then AI-summarized. The Helper
+// reads the summary (and, on demand, the full text) as background context, citing
+// by name and never lifting. UPL-safe: these are "reference documents", never
+// "prior art". Soft-deleted so a removed file leaves the family cleanly.
+export const projectFamilyContextFiles = pg.table(
+  "project_family_context_files",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    familyId: uuid("family_id")
+      .references(() => projectFamilies.id, { onDelete: "cascade" })
+      .notNull(),
+    // Nullable so a file survives its uploader's account deletion.
+    uploadedByUserId: text("uploaded_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    filename: text("filename").notNull(),
+    mimeType: text("mime_type").notNull(), // application/pdf | DOCX MIME
+    blobUrl: text("blob_url").notNull(),
+    sizeBytes: integer("size_bytes").default(0).notNull(),
+    extractedText: text("extracted_text"), // full plain text (null until extracted)
+    summary: text("summary"), // one-line AI summary (null until summarized)
+    // pending (extracting) | ok (text + summary ready) | failed (see error)
+    extractionStatus: text("extraction_status").default("pending").notNull(),
+    extractionError: text("extraction_error"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (t) => ({
+    familyIdx: index("project_family_context_files_family_idx").on(t.familyId),
+  }),
+);
+export type ProjectFamilyContextFile = typeof projectFamilyContextFiles.$inferSelect;
+
+// Reference-document passages — each uploaded file's extracted text is chunked and
+// embedded for semantic retrieval (the Helper + working agents pull the most
+// relevant passages, not a full-text dump). `familyId` + `filename` are denormalized
+// so the ANN query is filter-and-rank with no join. Chunks are hard-deleted when
+// their file is removed (keeps the vector corpus clean).
+export const projectFamilyContextFileChunks = pg.table(
+  "project_family_context_file_chunks",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    fileId: uuid("file_id")
+      .references(() => projectFamilyContextFiles.id, { onDelete: "cascade" })
+      .notNull(),
+    familyId: uuid("family_id").references(() => projectFamilies.id, { onDelete: "set null" }),
+    filename: text("filename").notNull(),
+    chunkIndex: integer("chunk_index").notNull(),
+    content: text("content").notNull(),
+    // gemini-embedding-001 @ 1536 dims (EMBED_DIMS). Nullable: best-effort at write.
+    embedding: vector("embedding", { dimensions: 1536 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    fileIdx: index("pf_context_file_chunks_file_idx").on(t.fileId),
+    familyIdx: index("pf_context_file_chunks_family_idx").on(t.familyId),
+  }),
+);
+export type ProjectFamilyContextFileChunk = typeof projectFamilyContextFileChunks.$inferSelect;
 
 /**
  * The Shared Consciousness — the cross-module draft memory, as an append-only

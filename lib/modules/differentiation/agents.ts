@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { withBackpack, type BackpackSection } from "@/lib/modules/shared";
 import { buildHelperPrompt, HelperOutput, type HelperResult } from "@/lib/modules/shared/helper-agent";
+import { resolveFamilyBlock } from "@/lib/families/helper-context";
 import type { AgentName, AgentRunner, ConceptLandscape, SectionAgent } from "./types";
 
 /**
@@ -568,6 +569,7 @@ export async function runHelper(
   },
 ): Promise<HelperResult> {
   const system = await loadAgentPrompt("helper");
+  const familyContext = (await resolveFamilyBlock(input.message)) ?? undefined;
   const prompt = buildHelperPrompt({
     message: input.message,
     where:
@@ -577,6 +579,7 @@ export async function runHelper(
     inventorMaterial: input.inventorMaterial,
     conversation: input.conversation,
     ...(input.consciousness ? { consciousness: input.consciousness } : {}),
+    ...(familyContext ? { familyContext } : {}),
   });
   return runAgent({ agent: "helper", system, prompt, schema: HelperOutput, temperature: 0.4 });
 }

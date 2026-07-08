@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { saveModuleState, type ModuleStateBlob } from "@/lib/modules/persistence";
+import { refreshFamilyArtifactsBackground } from "@/lib/families/digest";
 
 /**
  * Cascade restart. Going back to an earlier part of the process and changing your
@@ -42,6 +43,7 @@ export async function POST(req: Request) {
 
   try {
     await saveModuleState(body.projectId, patch);
+    refreshFamilyArtifactsBackground(body.projectId, "all");
     return NextResponse.json({ cleared: downstream });
   } catch (err) {
     console.error("[flow/restart] failed", err);

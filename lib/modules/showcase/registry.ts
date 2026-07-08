@@ -10,6 +10,7 @@ import { ShowcaseModule, type ShowcaseSnapshot } from "./controller";
 import { SHOWCASE_HUMAN_SOURCE_TYPES } from "./types";
 import type { DisclosureSection, ShowcaseKeyConcept } from "./types";
 import { openaiAgentRunner } from "./runner.openai";
+import { refreshFamilyArtifactsBackground } from "@/lib/families/digest";
 
 /**
  * DB-backed showcase sessions. `module_state.showcase` is the source of truth for
@@ -51,8 +52,10 @@ export function seedShowcase(
 export async function saveShowcase(projectId: string, engine: ShowcaseModule): Promise<void> {
   await saveModuleState(projectId, { showcase: engine.toSnapshot() });
   await persistConsciousness(projectId, engine.consciousnessInstance());
+  refreshFamilyArtifactsBackground(projectId, "showcase");
 }
 
 export async function clearShowcase(projectId: string): Promise<void> {
   await saveModuleState(projectId, { showcase: null });
+  refreshFamilyArtifactsBackground(projectId, "showcase");
 }

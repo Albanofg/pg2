@@ -46,6 +46,8 @@ export function buildHelperPrompt(input: {
   conversation: { role: string; text: string }[];
   /** What's already settled for this patent (optional). */
   consciousness?: string;
+  /** The `## FAMILY CONTEXT` block (sibling Projects' concepts + family background), optional. */
+  familyContext?: string;
 }): string {
   return [
     "HOW TO REPLY: keep `reply` to 1–3 sentences. Ask AT MOST ONE short question, and only if you genuinely need it — put it in `question.ask` with 2–4 short tap-to-answer `options`. Accept simple answers; never re-ask the same thing with more questions. If nothing is needed, leave `question.ask` empty.",
@@ -70,5 +72,6 @@ export function buildHelperPrompt(input: {
     ...(input.consciousness
       ? ["", "WHAT'S ALREADY SETTLED FOR THIS PATENT (stay consistent):", input.consciousness]
       : []),
+    ...(input.familyContext ? ["", input.familyContext] : []),
   ].join("\n");
 }

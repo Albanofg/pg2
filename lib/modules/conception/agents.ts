@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { withBackpack, type BackpackSection } from "@/lib/modules/shared";
 import type { AgentName, AgentRunner } from "./types";
+import { resolveFamilyBlock } from "@/lib/families/helper-context";
 
 /**
  * Module 1 — the five sub-agents.
@@ -227,6 +228,7 @@ export async function runHelper(
   },
 ): Promise<HelperResult> {
   const system = await loadAgentPrompt("helper");
+  const familyBlock = await resolveFamilyBlock(input.message);
   const list = (items: string[]) =>
     items.length ? items.map((s) => `- ${s}`).join("\n") : "(none)";
   const prompt = [
@@ -262,6 +264,7 @@ export async function runHelper(
     ...(input.consciousness
       ? ["", "WHAT'S ALREADY SETTLED FOR THIS PATENT (stay consistent):", input.consciousness]
       : []),
+    ...(familyBlock ? ["", familyBlock] : []),
   ].join("\n");
   return runAgent({
     agent: "helper",

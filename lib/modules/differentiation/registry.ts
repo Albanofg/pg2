@@ -14,6 +14,7 @@ import { DifferentiationModule, type DifferentiationSnapshot } from "./controlle
 import { DIFFERENTIATION_HUMAN_SOURCE_TYPES } from "./types";
 import type { ConceptLandscape } from "./types";
 import { openaiAgentRunner } from "./runner.openai";
+import { refreshFamilyArtifactsBackground } from "@/lib/families/digest";
 
 /**
  * DB-backed differentiation sessions. `module_state.differentiation` is the
@@ -69,8 +70,10 @@ export async function saveDifferentiation(
 ): Promise<void> {
   await saveModuleState(projectId, { differentiation: engine.toSnapshot() });
   await persistConsciousness(projectId, engine.consciousnessInstance());
+  refreshFamilyArtifactsBackground(projectId, "differentiation");
 }
 
 export async function clearDifferentiation(projectId: string): Promise<void> {
   await saveModuleState(projectId, { differentiation: null });
+  refreshFamilyArtifactsBackground(projectId, "differentiation");
 }

@@ -68,6 +68,12 @@ export async function listProjects(userId: string) {
       id: projects.id,
       title: projects.title,
       currentPhase: projects.currentPhase,
+      familyId: projects.familyId,
+      inventorNames: projects.inventorNames,
+      filedDate: projects.filedDate,
+      status: projects.status,
+      applicationNumber: projects.applicationNumber,
+      notes: projects.notes,
       createdAt: projects.createdAt,
       updatedAt: projects.updatedAt,
     })
@@ -111,6 +117,38 @@ export async function renameProject(
   await db
     .update(projects)
     .set({ title: title.trim() || "Untitled Draft", updatedAt: new Date() })
+    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
+  return true;
+}
+
+/** Update a project's editable details (title + filing metadata). Undefined fields
+ *  are left untouched; explicit values are trimmed, empties normalized to null. */
+export async function updateProjectDetails(
+  userId: string,
+  projectId: string,
+  patch: {
+    title?: string;
+    inventorNames?: string | null;
+    filedDate?: string | null;
+    status?: string | null;
+    applicationNumber?: string | null;
+    notes?: string | null;
+  },
+) {
+  if (!(await assertOwnership(projectId, userId))) return false;
+  await db
+    .update(projects)
+    .set({
+      updatedAt: new Date(),
+      ...(patch.title !== undefined ? { title: patch.title.trim() || "Untitled Draft" } : {}),
+      ...(patch.inventorNames !== undefined ? { inventorNames: patch.inventorNames?.trim() || null } : {}),
+      ...(patch.filedDate !== undefined ? { filedDate: patch.filedDate?.trim() || null } : {}),
+      ...(patch.status !== undefined ? { status: patch.status?.trim() || null } : {}),
+      ...(patch.applicationNumber !== undefined
+        ? { applicationNumber: patch.applicationNumber?.trim() || null }
+        : {}),
+      ...(patch.notes !== undefined ? { notes: patch.notes?.trim() || null } : {}),
+    })
     .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
   return true;
 }

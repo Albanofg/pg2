@@ -7,6 +7,7 @@ import {
   HelperOutput,
   type HelperResult,
 } from "@/lib/modules/shared/helper-agent";
+import { resolveFamilyBlock } from "@/lib/families/helper-context";
 
 /**
  * Module 3 (Landscape) has no drafting agents — it searches real prior art. Its
@@ -34,6 +35,7 @@ export async function runHelper(
   },
 ): Promise<HelperResult> {
   const system = await loadHelperPrompt();
+  const familyContext = (await resolveFamilyBlock(input.message)) ?? undefined;
   const prompt = buildHelperPrompt({
     message: input.message,
     where:
@@ -41,6 +43,7 @@ export async function runHelper(
     context: input.context,
     inventorMaterial: input.inventorMaterial,
     conversation: input.conversation,
+    ...(familyContext ? { familyContext } : {}),
   });
   return runAgent({ agent: "helper", system, prompt, schema: HelperOutput, temperature: 0.4 });
 }

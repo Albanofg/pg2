@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { deleteProject, renameProject } from "@/lib/db/projects";
+import { deleteProject, updateProjectDetails } from "@/lib/db/projects";
 
 export const runtime = "nodejs";
 
@@ -26,33 +26,37 @@ export async function DELETE(_req: Request, { params }: Params) {
   }
 }
 
-/** PATCH /api/projects/:id — rename a project. Body: { title: string }. */
+/**
+ * PATCH /api/projects/:id — update a project's editable details. Body may include
+ * any of: title, inventorNames, filedDate, status, applicationNumber, notes.
+ * Undefined fields are left untouched (so a title-only rename still works).
+ */
 export async function PATCH(req: Request, { params }: Params) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { userId } = user;
-  let title = "";
+  let body: {
+    title?: string;
+    inventorNames?: string | null;
+    filedDate?: string | null;
+    status?: string | null;
+    applicationNumber?: string | null;
+    notes?: string | null;
+  } = {};
   try {
-    const body = (await req.json()) as { title?: string };
-    title = body?.title ?? "";
+    body = (await req.json()) as typeof body;
   } catch {
-    // fall through to validation below
-  }
-  if (!title.trim()) {
-    return NextResponse.json({ error: "title_required" }, { status: 400 });
+    return NextResponse.json({ error: "bad_request" }, { status: 400 });
   }
 
   try {
-    const ok = await renameProject(userId, params.id, title);
+    const ok = await updateProjectDetails(userId, params.id, body);
     if (!ok) {
       return NextResponse.json({ error: "not_found" }, { status: 404 });
     }
     return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("[projects] rename failed", err);
-    return NextResponse.json(
-      { error: "rename_failed", detail: String(err) },
-      { status: 500 }
-    );
+    console.error("[projects] update failed", err);
+    return NextResponse.json({ error: "update_failed", detail: String(err) }, { status: 500 });
   }
 }

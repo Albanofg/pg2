@@ -78,6 +78,8 @@ export default function AdminUsagePage() {
   const [data, setData] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexMsg, setReindexMsg] = useState<string | null>(null);
 
   const buildParams = useCallback(() => {
     const p = new URLSearchParams();
@@ -107,6 +109,26 @@ export default function AdminUsagePage() {
     }
   }, [buildParams]);
 
+  const reindexFamilies = useCallback(async () => {
+    if (!window.confirm("Re-embed every family's concepts and reference documents? Safe to run anytime; may take a while on a large dataset.")) {
+      return;
+    }
+    setReindexing(true);
+    setReindexMsg(null);
+    try {
+      const res = await fetch("/api/admin/reindex-families", { method: "POST" });
+      const d = (await res.json().catch(() => null)) as
+        | { projects?: number; files?: number; error?: string; detail?: string }
+        | null;
+      if (!res.ok) throw new Error(d?.detail || d?.error || `failed (${res.status})`);
+      setReindexMsg(`Reindexed ${d?.projects ?? 0} project(s) and ${d?.files ?? 0} document(s).`);
+    } catch (e) {
+      setReindexMsg(e instanceof Error ? e.message : "Reindex failed");
+    } finally {
+      setReindexing(false);
+    }
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -123,6 +145,17 @@ export default function AdminUsagePage() {
             <h1 className="mt-0.5 font-sans text-xl font-semibold text-ink">AI Usage</h1>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => void reindexFamilies()}
+              disabled={reindexing}
+              title="Embed all existing family concepts + reference documents for semantic retrieval"
+              className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted transition-colors hover:text-ink disabled:opacity-50"
+            >
+              {reindexing && (
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+              )}
+              {reindexing ? "Reindexing…" : "Reindex families"}
+            </button>
             <a
               href={exportUrl}
               className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted transition-colors hover:text-ink"
@@ -214,6 +247,12 @@ export default function AdminUsagePage() {
         {error && (
           <div className="rounded-md border border-red-500/40 bg-red-500/10 p-3 font-mono text-xs text-red-300">
             {error}
+          </div>
+        )}
+
+        {reindexMsg && (
+          <div className="rounded-md border border-accent/40 bg-accent/10 p-3 font-mono text-xs text-accent">
+            {reindexMsg}
           </div>
         )}
 

@@ -3,6 +3,7 @@ import { generateObject } from "@/lib/ai/gen";
 import { withUsageContext } from "@/lib/ai/usage-context";
 import { MODELS } from "@/lib/ai/openai";
 import type { AgentRunner } from "@/lib/modules/shared";
+import { familyAugmentedSystem } from "@/lib/modules/shared/family-inject";
 import type { AgentName } from "./types";
 
 /**
@@ -34,10 +35,11 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
 
 export const openaiAgentRunner: AgentRunner = async (req) =>
   withUsageContext({ agentCode: `differentiation/${req.agent}` }, async () => {
+    const system = await familyAugmentedSystem(req.agent, req.system, req.subject ?? req.prompt);
     const { object } = await generateObject({
       model: MODEL_FOR[req.agent as AgentName] ?? MODELS.drafter,
       schema: req.schema,
-      system: req.system,
+      system,
       prompt: req.prompt,
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     });

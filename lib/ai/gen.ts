@@ -3,6 +3,8 @@ import {
   generateObject as _generateObject,
   generateText as _generateText,
   streamText as _streamText,
+  embed as _embed,
+  embedMany as _embedMany,
 } from "ai";
 import { recordUsage } from "./usage-log";
 import { getUsageContext } from "./usage-context";
@@ -59,6 +61,50 @@ export const generateText: typeof _generateText = (async (opts: any) => {
   try {
     const result: any = await _generateText(opts);
     recordUsage({ ...info, ...tokensOf(result), durationMs: Date.now() - start, status: "ok" });
+    return result;
+  } catch (e) {
+    recordUsage({
+      ...info,
+      durationMs: Date.now() - start,
+      status: "error",
+      errorMessage: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+}) as any;
+
+/** Embedding usage is `{ tokens }` (no prompt/completion split), so `tokensOf`
+ *  can't read it — map the scalar onto input/total, guarding NaN/undefined. */
+function embedTokensOf(result: any): { inputTokens: number; outputTokens: number; totalTokens: number; cachedTokens: number } {
+  const raw = result?.usage?.tokens;
+  const t = Number.isFinite(raw) ? (raw as number) : 0;
+  return { inputTokens: t, outputTokens: 0, totalTokens: t, cachedTokens: 0 };
+}
+
+export const embed: typeof _embed = (async (opts: any) => {
+  const start = Date.now();
+  const info = modelOf(opts);
+  try {
+    const result: any = await _embed(opts);
+    recordUsage({ ...info, ...embedTokensOf(result), durationMs: Date.now() - start, status: "ok" });
+    return result;
+  } catch (e) {
+    recordUsage({
+      ...info,
+      durationMs: Date.now() - start,
+      status: "error",
+      errorMessage: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+}) as any;
+
+export const embedMany: typeof _embedMany = (async (opts: any) => {
+  const start = Date.now();
+  const info = modelOf(opts);
+  try {
+    const result: any = await _embedMany(opts);
+    recordUsage({ ...info, ...embedTokensOf(result), durationMs: Date.now() - start, status: "ok" });
     return result;
   } catch (e) {
     recordUsage({

@@ -21,6 +21,10 @@ export type AgentRunRequest<S extends ZodTypeAny> = {
   schema: S;
   /** Optional sampling hint; the runner may ignore it. */
   temperature?: number;
+  /** Optional retrieval query — the subject under analysis/drafting (concept title,
+   *  statement, section name). Used to fetch the most relevant family knowledge; the
+   *  runner falls back to `prompt` when unset. */
+  subject?: string;
 };
 
 export type AgentRunner = <S extends ZodTypeAny>(
