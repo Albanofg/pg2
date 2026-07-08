@@ -1,5 +1,6 @@
 import "server-only";
-import { generateObject } from "ai";
+import { generateObject } from "@/lib/ai/gen";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import { z } from "zod";
 import { MODELS } from "./openai";
 import { INVENTORSHIP_LAW, PHASE_GUIDE } from "./backpack";
@@ -31,9 +32,10 @@ export async function runDrafter(opts: {
     return { status: "gap_detected", draft: "", gap: `No inventor input yet for ${nodeKey}.` };
   }
 
-  const { object } = await generateObject({
-    model: MODELS.drafter,
-    schema: DrafterOutput,
+  const { object } = await withUsageContext({ agentCode: "mesh/drafter" }, () =>
+    generateObject({
+      model: MODELS.drafter,
+      schema: DrafterOutput,
     system: [
       "You are the Drafter agent in a patent-drafting mesh.",
       INVENTORSHIP_LAW,
@@ -49,7 +51,8 @@ export async function runDrafter(opts: {
       .filter(Boolean)
       .join("\n\n"),
     temperature: 0.2,
-  });
+    }),
+  );
 
   return object;
 }

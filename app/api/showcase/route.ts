@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import { loadConsciousness } from "@/lib/modules/shared/consciousness-store";
 import { loadDifferentiation } from "@/lib/modules/differentiation/registry";
 import {
@@ -53,6 +54,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "projectId_required" }, { status: 400 });
   }
 
+  return withUsageContext({ projectId: body.projectId, stage: "showcase" }, async () => {
   try {
     switch (body.op) {
       case "view": {
@@ -139,4 +141,5 @@ export async function POST(req: Request) {
       { status: 500 },
     );
   }
+  });
 }

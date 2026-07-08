@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import { db } from "@/db";
 import { messages as messagesTable } from "@/db/schema";
 import { assertOwnership } from "@/lib/db/projects";
@@ -55,6 +56,7 @@ export async function POST(req: NextRequest) {
       const send = (event: { type: string; value: any }) =>
         controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
 
+      return withUsageContext({ projectId, userId, email: user.email, stage: "conception" }, async () => {
       try {
         await ensureNodes(projectId);
         const contextSummary = await buildContextSummary(projectId);
@@ -157,6 +159,7 @@ export async function POST(req: NextRequest) {
       } finally {
         controller.close();
       }
+      });
     },
   });
 

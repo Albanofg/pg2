@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import type { ConceptObject } from "@/lib/modules/shared";
 import { loadConsciousness } from "@/lib/modules/shared/consciousness-store";
 import { loadConception } from "@/lib/modules/conception/registry";
@@ -58,6 +59,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "projectId_required" }, { status: 400 });
   }
 
+  return withUsageContext({ projectId: body.projectId, stage: "differentiation" }, async () => {
   try {
     switch (body.op) {
       case "view": {
@@ -194,4 +196,5 @@ export async function POST(req: Request) {
       { status: 500 },
     );
   }
+  });
 }

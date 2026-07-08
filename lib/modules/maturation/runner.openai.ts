@@ -1,5 +1,6 @@
 import "server-only";
-import { generateObject } from "ai";
+import { generateObject } from "@/lib/ai/gen";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import { MODELS } from "@/lib/ai/openai";
 import type { AgentRunner } from "@/lib/modules/shared";
 import type { AgentName } from "./types";
@@ -16,13 +17,14 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   helper: MODELS.drafter,
 };
 
-export const openaiAgentRunner: AgentRunner = async (req) => {
-  const { object } = await generateObject({
-    model: MODEL_FOR[req.agent as AgentName] ?? MODELS.drafter,
-    schema: req.schema,
-    system: req.system,
-    prompt: req.prompt,
-    ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+export const openaiAgentRunner: AgentRunner = async (req) =>
+  withUsageContext({ agentCode: `maturation/${req.agent}` }, async () => {
+    const { object } = await generateObject({
+      model: MODEL_FOR[req.agent as AgentName] ?? MODELS.drafter,
+      schema: req.schema,
+      system: req.system,
+      prompt: req.prompt,
+      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+    });
+    return object;
   });
-  return object;
-};

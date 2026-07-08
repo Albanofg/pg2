@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import { loadShowcase, saveShowcase } from "@/lib/modules/showcase/registry";
 import { DiagramApiError, generateFiguresFromPlan, warmDiagrams } from "@/lib/modules/showcase/diagrams";
 
@@ -36,6 +37,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "projectId_required" }, { status: 400 });
   }
 
+  return withUsageContext({ projectId, stage: "showcase" }, async () => {
   try {
     const engine = await loadShowcase(projectId);
     if (!engine) {
@@ -117,4 +119,5 @@ export async function POST(req: Request) {
       { status: 500 },
     );
   }
+  });
 }

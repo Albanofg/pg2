@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import { loadConception } from "@/lib/modules/conception/registry";
 import {
   clearMaturation,
@@ -43,6 +44,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "projectId_required" }, { status: 400 });
   }
 
+  return withUsageContext({ projectId: body.projectId, stage: "maturation" }, async () => {
   try {
     switch (body.op) {
       case "view": {
@@ -104,4 +106,5 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+  });
 }

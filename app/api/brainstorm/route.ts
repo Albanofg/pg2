@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import {
   deepenFrontier,
   openLens,
@@ -31,8 +32,10 @@ export const maxDuration = 300;
 export async function GET() {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const result = await runExcavationFrontier(brainstormRunner, { spark: sampleProblem });
-  return NextResponse.json(result);
+  return withUsageContext({ userId: user.userId, email: user.email, stage: "brainstorm" }, async () => {
+    const result = await runExcavationFrontier(brainstormRunner, { spark: sampleProblem });
+    return NextResponse.json(result);
+  });
 }
 
 export async function POST(req: Request) {
@@ -56,6 +59,7 @@ export async function POST(req: Request) {
     teaching?: boolean;
   };
 
+  return withUsageContext({ userId: user.userId, email: user.email, stage: "brainstorm" }, async () => {
   // op: "open" — the inventor picked a card; reconstruct + open its walk.
   if (body.op === "open") {
     if (!body.card) {
@@ -108,4 +112,5 @@ export async function POST(req: Request) {
     ...(body.skipClassify ? { skipClassify: true } : {}),
   });
   return NextResponse.json(result);
+  });
 }

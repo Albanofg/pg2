@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { generateObject } from "ai";
+import { generateObject } from "@/lib/ai/gen";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import { z } from "zod";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -111,9 +112,12 @@ export async function POST(req: Request) {
   ].join("\n");
 
   try {
-    const { object } = await generateObject({
-      model: MODELS.drafter,
-      schema: TeachOutput,
+    const { object } = await withUsageContext(
+      { projectId: body.projectId, userId: user.userId, email: user.email, stage: "conception", agentCode: "conception/teach" },
+      () =>
+        generateObject({
+          model: MODELS.drafter,
+          schema: TeachOutput,
       system,
       messages: messages.length
         ? messages
@@ -125,7 +129,8 @@ export async function POST(req: Request) {
             },
           ],
       temperature: 0.5,
-    });
+        }),
+    );
     return NextResponse.json({
       reply: object.reply.trim(),
       scaffold: object.scaffold && object.scaffold.template.trim() ? object.scaffold : null,

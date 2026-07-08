@@ -7,6 +7,7 @@ import {
   jsonb,
   integer,
   bigserial,
+  index,
 } from "drizzle-orm/pg-core";
 
 /**
@@ -159,6 +160,39 @@ export const notebooks = pg.table("notebooks", {
   rfc3161Token: text("rfc3161_token"), // base64 ASN.1 TimeStampResp
   sealedAt: timestamp("sealed_at").defaultNow().notNull(),
 });
+
+// AI usage log — one row per server-side model call. Observability only; the
+// write is fire-and-forget (recordUsage) so a broken log never breaks an AI call.
+// Deliberately FK-less: `user_email` is captured at insert time so rows stay
+// readable even if the user/project is later deleted.
+export const aiUsageLog = pg.table("ai_usage_log", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  seq: bigserial("seq", { mode: "number" }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  userId: text("user_id"), // nullable — some calls can't be attributed
+  userEmail: text("user_email"),
+  projectId: uuid("project_id"),
+  stage: text("stage"), // brainstorm|conception|maturation|landscape|differentiation|showcase
+  agentCode: text("agent_code"), // stable code, e.g. "showcase/figure-planner"
+  agentLabel: text("agent_label"), // human-readable
+  model: text("model").notNull(), // "gpt-5.4" | "gpt-5.4-mini" | "gemini-2.5-pro" | ...
+  provider: text("provider"),
+  inputTokens: integer("input_tokens").default(0).notNull(),
+  outputTokens: integer("output_tokens").default(0).notNull(),
+  cachedTokens: integer("cached_tokens").default(0).notNull(),
+  totalTokens: integer("total_tokens").default(0).notNull(),
+  durationMs: integer("duration_ms").default(0).notNull(),
+  status: text("status").default("ok").notNull(), // ok | error
+  errorMessage: text("error_message"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+}, (t) => ({
+  createdAtIdx: index("ai_usage_log_created_at_idx").on(t.createdAt),
+  userEmailIdx: index("ai_usage_log_user_email_idx").on(t.userEmail),
+  modelIdx: index("ai_usage_log_model_idx").on(t.model),
+  agentIdx: index("ai_usage_log_agent_idx").on(t.agentLabel),
+  stageIdx: index("ai_usage_log_stage_idx").on(t.stage),
+}));
+export type AiUsageRow = typeof aiUsageLog.$inferSelect;
 
 export type Project = typeof projects.$inferSelect;
 export type ConsciousnessNode = typeof sharedConsciousness.$inferSelect;

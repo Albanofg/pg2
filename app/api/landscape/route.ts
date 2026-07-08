@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import { loadMaturation } from "@/lib/modules/maturation/registry";
 import {
   clearLandscape,
@@ -42,6 +43,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "projectId_required" }, { status: 400 });
   }
 
+  return withUsageContext({ projectId: body.projectId, stage: "landscape" }, async () => {
   try {
     switch (body.op) {
       case "view": {
@@ -101,4 +103,5 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+  });
 }

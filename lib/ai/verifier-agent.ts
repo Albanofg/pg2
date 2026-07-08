@@ -1,5 +1,6 @@
 import "server-only";
-import { generateText } from "ai";
+import { generateText } from "@/lib/ai/gen";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import { MODELS } from "./openai";
 import { VERIFIER_LAW } from "./backpack";
 
@@ -38,10 +39,12 @@ export async function runVerifier(opts: {
     "  REJECT: <the specific invented substance the Drafter introduced>",
   ].join("\n");
 
-  const { text } = await generateText({
-    model: MODELS.verifier,
-    prompt,
-  });
+  const { text } = await withUsageContext({ agentCode: "mesh/verifier" }, () =>
+    generateText({
+      model: MODELS.verifier,
+      prompt,
+    }),
+  );
 
   const firstLine = text.trim().split("\n")[0]?.trim() ?? "";
   if (/^approve/i.test(firstLine)) {

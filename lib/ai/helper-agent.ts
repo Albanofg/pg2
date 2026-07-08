@@ -1,5 +1,6 @@
 import "server-only";
-import { streamText, generateText } from "ai";
+import { streamText, generateText } from "@/lib/ai/gen";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import { MODELS } from "./openai";
 import {
   HELPER_PERSONA,
@@ -46,12 +47,14 @@ export async function streamHelperQuestion(opts: {
     .filter(Boolean)
     .join("\n\n");
 
-  const result = await streamText({
-    model: MODELS.helper,
-    system,
-    messages: [...toModelMessages(history), { role: "user", content: message }],
-    temperature: 0.4,
-  });
+  const result = await withUsageContext({ agentCode: "mesh/helper" }, async () =>
+    streamText({
+      model: MODELS.helper,
+      system,
+      messages: [...toModelMessages(history), { role: "user", content: message }],
+      temperature: 0.4,
+    }),
+  );
 
   return result.textStream;
 }
@@ -67,9 +70,10 @@ export async function socraticFallback(opts: {
   contextSummary?: string;
 }) {
   const { phase, gap, strategy, contextSummary } = opts;
-  const { text } = await generateText({
-    model: MODELS.helper,
-    system: [
+  const { text } = await withUsageContext({ agentCode: "mesh/socratic-fallback" }, () =>
+    generateText({
+      model: MODELS.helper,
+      system: [
       HELPER_PERSONA,
       backpackFor(phase),
       `STRATEGY: ${SOCRATIC_STRATEGIES[strategy]}`,
@@ -81,7 +85,8 @@ export async function socraticFallback(opts: {
       .join("\n\n"),
     prompt: `A drafting gap was detected: "${gap}". Using the strategy above, ask ONE question that extracts exactly the missing detail. Output only the question.`,
     temperature: 0.5,
-  });
+    }),
+  );
   return text.trim();
 }
 
@@ -92,13 +97,15 @@ export async function socraticFallback(opts: {
  */
 export async function distillIdea(humanInputs: string[]): Promise<string> {
   if (humanInputs.length === 0) return "";
-  const { text } = await generateText({
-    model: MODELS.distiller,
+  const { text } = await withUsageContext({ agentCode: "mesh/distiller" }, () =>
+    generateText({
+      model: MODELS.distiller,
     system:
       "You compress an inventor's own statements into a crisp 1-2 sentence summary of their invention. Use ONLY their words and facts. Add nothing. No preamble.",
     prompt: humanInputs.map((h, i) => `(${i + 1}) ${h}`).join("\n"),
     temperature: 0,
-  });
+    }),
+  );
   return text.trim();
 }
 

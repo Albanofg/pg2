@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withUsageContext } from "@/lib/ai/usage-context";
 import {
   loadConception,
   resetConception,
@@ -41,6 +42,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "projectId_required" }, { status: 400 });
   }
 
+  return withUsageContext({ projectId: body.projectId, stage: "conception" }, async () => {
   try {
     if (body.op === "view") {
       const engine = await loadConception(body.projectId);
@@ -69,4 +71,5 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+  });
 }
