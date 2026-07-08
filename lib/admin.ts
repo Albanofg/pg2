@@ -9,6 +9,7 @@ const DEFAULT_ADMINS = [
   "albano@bookingboostpro.com",
   "tim.bratton@gmail.com",
   "tim@patentgeyser.com",
+  "mercer@tomitrader.com",
 ];
 
 export function adminEmails(): string[] {
