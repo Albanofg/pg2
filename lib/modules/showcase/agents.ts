@@ -18,8 +18,9 @@ const MODULE_5_DIR = "module-5-showcase";
 
 const PROMPT_FILES: Record<AgentName, string> = {
   helper: `${MODULE_5_DIR}/00-helper.md`,
-  "genus-extractor": `${MODULE_5_DIR}/01-genus-extractor.md`,
-  "species-synthesizer": `${MODULE_5_DIR}/02-species-synthesizer.md`,
+  // Genus & Species Expansion agents live in their own subfolder.
+  "genus-extractor": `${MODULE_5_DIR}/genus-species/01-genus-extractor.md`,
+  "species-synthesizer": `${MODULE_5_DIR}/genus-species/02-species-synthesizer.md`,
   "key-concept-broadener": `${MODULE_5_DIR}/03-key-concept-broadener.md`,
   verifier: `${MODULE_5_DIR}/04-verifier.md`,
   // The 5c extender second pass.
