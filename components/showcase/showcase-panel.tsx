@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useShowcase } from "@/lib/hooks/use-showcase";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
@@ -578,6 +578,8 @@ function DrawingsView({
   drawings: ShowcaseDrawing[];
   titleBase: string;
 }) {
+  // Which figure is open in the full-screen enlarge view (null = none).
+  const [zoomed, setZoomed] = useState<ShowcaseDrawing | null>(null);
   if (!drawings.length) {
     return <p className="font-sans text-sm text-ink-muted">No drawings yet.</p>;
   }
@@ -606,14 +608,29 @@ function DrawingsView({
       {/* Each figure + its detailed description. */}
       <div className="mt-2 flex flex-col gap-6">
         {drawings.map((d) => (
-          <DrawingCard key={d.figNumber} drawing={d} titleBase={titleBase} />
+          <DrawingCard
+            key={d.figNumber}
+            drawing={d}
+            titleBase={titleBase}
+            onEnlarge={() => setZoomed(d)}
+          />
         ))}
       </div>
+
+      {zoomed && <DrawingLightbox drawing={zoomed} onClose={() => setZoomed(null)} />}
     </div>
   );
 }
 
-function DrawingCard({ drawing, titleBase }: { drawing: ShowcaseDrawing; titleBase: string }) {
+function DrawingCard({
+  drawing,
+  titleBase,
+  onEnlarge,
+}: {
+  drawing: ShowcaseDrawing;
+  titleBase: string;
+  onEnlarge: () => void;
+}) {
   return (
     <figure className="rounded-lg border border-border bg-panel">
       <figcaption className="flex items-center justify-between gap-3 border-b border-border p-3">
@@ -623,28 +640,113 @@ function DrawingCard({ drawing, titleBase }: { drawing: ShowcaseDrawing; titleBa
           </span>{" "}
           {drawing.title}
         </span>
-        {drawing.pdfBase64 && (
-          <a
-            href={`data:application/pdf;base64,${drawing.pdfBase64}`}
-            download={`${titleBase}-fig-${drawing.figNumber}.pdf`}
-            className="shrink-0 rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted transition-colors hover:text-ink"
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onEnlarge}
+            className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted transition-colors hover:text-ink"
           >
-            ⭳ PDF
-          </a>
-        )}
+            ⤢ Enlarge
+          </button>
+          {drawing.pdfBase64 && (
+            <a
+              href={`data:application/pdf;base64,${drawing.pdfBase64}`}
+              download={`${titleBase}-fig-${drawing.figNumber}.pdf`}
+              className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted transition-colors hover:text-ink"
+            >
+              ⭳ PDF
+            </a>
+          )}
+        </div>
       </figcaption>
       {/* Black line art — render on white so it's visible in either theme; wide
-          diagrams scroll inside their own box and never overflow the page. */}
-      <div
-        className="diagram-svg overflow-x-auto bg-white p-4 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full"
-        dangerouslySetInnerHTML={{ __html: drawing.svgData }}
-      />
+          diagrams scroll inside their own box and never overflow the page. Click
+          (or Enter/Space) enlarges it in a full-screen lightbox. */}
+      <div className="group relative">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onEnlarge}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onEnlarge();
+            }
+          }}
+          title="Click to enlarge"
+          aria-label={`Enlarge Figure ${drawing.figNumber} — ${drawing.title}`}
+          className="diagram-svg block cursor-zoom-in overflow-x-auto bg-white p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full"
+          dangerouslySetInnerHTML={{ __html: drawing.svgData }}
+        />
+        <span className="pointer-events-none absolute bottom-2 right-2 rounded bg-black/60 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-white opacity-0 transition-opacity group-hover:opacity-100">
+          ⤢ Click to enlarge
+        </span>
+      </div>
       {drawing.detailedDescription && (
         <p className="whitespace-pre-wrap border-t border-border p-3 font-sans text-[13px] leading-relaxed text-ink">
           {drawing.detailedDescription}
         </p>
       )}
     </figure>
+  );
+}
+
+/** Full-screen enlarge view for one figure — opened by clicking the drawing or its
+ *  Enlarge button. The SAME SVG is re-rendered to fill a large white canvas (vector,
+ *  so it stays crisp at any size) and scrolls if it overflows. Closes on backdrop
+ *  click, the ✕, or Escape; body scroll is locked while open. */
+function DrawingLightbox({ drawing, onClose }: { drawing: ShowcaseDrawing; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex flex-col bg-black/80 p-4 sm:p-6"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Figure ${drawing.figNumber} — ${drawing.title}`}
+    >
+      <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 pb-3">
+        <span className="min-w-0 truncate font-sans text-sm font-semibold text-white">
+          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-white/60">
+            Fig. {drawing.figNumber}
+          </span>{" "}
+          {drawing.title}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 rounded-md border border-white/30 px-3 py-1.5 font-mono text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+        >
+          ✕ Close
+        </button>
+      </div>
+      {/* The enlarged drawing — stop the backdrop click so clicking the drawing
+          itself doesn't close the lightbox. */}
+      <div
+        className="mx-auto flex w-full max-w-6xl flex-1 overflow-auto rounded-lg bg-white"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="diagram-svg m-auto w-full p-6 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:w-full [&_svg]:max-w-full"
+          dangerouslySetInnerHTML={{ __html: drawing.svgData }}
+        />
+      </div>
+      <p className="mx-auto mt-3 w-full max-w-6xl text-center font-mono text-[10px] text-white/50">
+        Click outside the drawing or press Esc to close
+      </p>
+    </div>
   );
 }
 

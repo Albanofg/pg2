@@ -204,10 +204,13 @@ export const useWorkspace = create<WorkspaceState>()(
       name: "patent-geyser-workspace",
       storage: createJSONStorage(() => localStorage),
       // Persist chat + idea state for offline resilience; never persist live mesh log.
+      // NOT `stage`: it's a per-project value (the furthest module reached), resolved
+      // authoritatively by /api/projects/bootstrap on load. Persisting it globally
+      // made a fresh project open on whatever stage was last viewed for a DIFFERENT
+      // project — landing you on a stage this project hasn't reached.
       partialize: (s) => ({
         projectId: s.projectId,
         activeProjectId: s.activeProjectId,
-        stage: s.stage,
         title: s.title,
         phase: s.phase,
         currentIdea: s.currentIdea,

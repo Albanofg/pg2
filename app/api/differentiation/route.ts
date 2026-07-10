@@ -83,10 +83,16 @@ export async function POST(req: Request) {
           loadConception(body.projectId),
         ]);
         if (!maturation || !landscape) {
+          // Name the EARLIEST missing stage so the client can route straight there
+          // and say exactly what's left. Maturation feeds Landscape, so if
+          // Maturation isn't done that's the one to finish first.
+          const missing = !maturation ? "maturation" : "landscape";
+          const label = !maturation ? "Maturation" : "Landscape";
           return NextResponse.json(
             {
               error: "prior_modules_incomplete",
-              detail: "Complete Maturation and Landscape before Differentiation.",
+              missing,
+              detail: `Finish ${label} before Differentiation.`,
             },
             { status: 409 },
           );

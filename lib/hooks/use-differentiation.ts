@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useWorkspace } from "@/lib/store";
+import { useWorkspace, type ModuleStage } from "@/lib/store";
 import type {
   CardActionInput,
   Module4View,
@@ -25,6 +25,10 @@ export function useDifferentiation(projectId: string | null) {
   const [view, setView] = useState<Module4View>(EMPTY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Expected gate (prior stages not finished yet) — NOT a failure. Kept separate
+  // from `error` so the panel can show a plain "finish X first" with a way there,
+  // instead of a red "the Helper couldn't respond".
+  const [blocked, setBlocked] = useState<{ message: string; stage: ModuleStage } | null>(null);
   const [ready, setReady] = useState(false);
   const setProof = useWorkspace((s) => s.setProof);
 
@@ -33,6 +37,7 @@ export function useDifferentiation(projectId: string | null) {
       if (!projectId) return null;
       setBusy(true);
       setError(null);
+      setBlocked(null);
       try {
         const res = await fetch("/api/differentiation", {
           method: "POST",
@@ -40,8 +45,19 @@ export function useDifferentiation(projectId: string | null) {
           body: JSON.stringify({ ...payload, projectId }),
         });
         if (!res.ok) {
-          const detail = (await res.json().catch(() => null)) as { detail?: string } | null;
-          throw new Error(detail?.detail || `differentiation request failed (${res.status})`);
+          const data = (await res.json().catch(() => null)) as
+            | { error?: string; detail?: string; missing?: string }
+            | null;
+          // Prior modules not done yet is an EXPECTED gate — surface the reason and
+          // where to go, not a scary generic error.
+          if (res.status === 409 && data?.error === "prior_modules_incomplete") {
+            setBlocked({
+              message: data.detail || "Finish the earlier stages before Differentiation.",
+              stage: data.missing === "maturation" ? "maturation" : "landscape",
+            });
+            return null;
+          }
+          throw new Error(data?.detail || `differentiation request failed (${res.status})`);
         }
         const data = (await res.json()) as Module4View;
         setView(data);
@@ -97,5 +113,5 @@ export function useDifferentiation(projectId: string | null) {
     return post({ op: "start" });
   }, [post]);
 
-  return { view, busy, error, ready, act, tell, prepareNext, compile, restart };
+  return { view, busy, error, blocked, ready, act, tell, prepareNext, compile, restart };
 }

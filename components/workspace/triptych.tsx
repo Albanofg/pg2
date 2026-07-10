@@ -31,11 +31,13 @@ export default function Triptych() {
   const stage = useWorkspace((s) => s.stage);
 
   const { booting } = useBootstrap();
-  // Hold the center pane while a freshly-opened project is still resolving which
-  // stage to resume — the store's stage is stale until bootstrap answers, and
-  // rendering it would flash the first stage before jumping to the real one.
-  // (On reload projectId already matches, so this never blocks the common path.)
-  const stageResolving = booting && !!activeProjectId && projectId !== activeProjectId;
+  // Hold the center pane until bootstrap resolves which stage THIS project actually
+  // reached. `stage` is no longer persisted, so until bootstrap answers it's just
+  // the default — rendering it (or a leftover from a previously-viewed project)
+  // would land the inventor on a stage this project hasn't reached. Holding on
+  // every load with an active project (not only cross-project switches) is what
+  // makes the resumed stage authoritative; bootstrap is a fast DB read.
+  const stageResolving = booting && !!activeProjectId;
 
   const onMouseDown = (which: "left" | "right") => (e: React.MouseEvent) => {
     e.preventDefault();

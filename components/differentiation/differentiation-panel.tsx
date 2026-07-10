@@ -30,7 +30,7 @@ export default function DifferentiationPanel({
   projectId: string | null;
   maxW?: string;
 }) {
-  const { view, busy, error, ready, act, tell, prepareNext, compile, restart } =
+  const { view, busy, error, blocked, ready, act, tell, prepareNext, compile, restart } =
     useDifferentiation(projectId);
   const setStage = useWorkspace((s) => s.setStage);
   const working = busy || !ready;
@@ -138,10 +138,30 @@ export default function DifferentiationPanel({
             </div>
           )}
 
-          {!working && view.cards.length === 0 && view.concepts.length === 0 && !view.complete && (
+          {/* Prior stages not finished yet — an EXPECTED gate, shown plainly with a
+              way to go finish the missing one (never the red "Helper" error). */}
+          {!working && blocked && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-5 text-center">
+              <p className="font-sans text-sm font-medium text-ink">{blocked.message}</p>
+              <p className="mt-1 font-mono text-xs leading-relaxed text-ink-muted">
+                Differentiation builds on the earlier stages — finish{" "}
+                {blocked.stage === "maturation" ? "Maturation" : "Landscape"} and it opens up here.
+              </p>
+              <div className="mt-3 flex justify-center">
+                <button
+                  onClick={() => setStage(blocked.stage)}
+                  className="rounded-md bg-accent px-4 py-2 font-sans text-sm font-medium text-brand hover:bg-accent/90"
+                >
+                  Go to {blocked.stage === "maturation" ? "Maturation" : "Landscape"} →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!working && !blocked && view.cards.length === 0 && view.concepts.length === 0 && !view.complete && (
             <div className="rounded-md border border-border bg-panel p-5 text-center">
               <p className="font-mono text-xs leading-relaxed text-ink-muted">
-                Nothing to differentiate yet — complete Expansion and Landscape first.
+                Nothing to differentiate yet — finish Maturation and Landscape first.
               </p>
               <div className="mt-3 flex justify-center gap-2">
                 <button
