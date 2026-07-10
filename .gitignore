@@ -1,15 +1,98 @@
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
 node_modules
+/.pnp
+.pnp.js
+.pnp.cjs
+.yarn/install-state.gz
+
+# ---------------------------------------------------------------------------
+# Build output & caches
+# ---------------------------------------------------------------------------
 .next
 out
 build
+/dist
+.swc
+.turbo
+.cache
+
+# ---------------------------------------------------------------------------
+# TypeScript / Next generated files
+# ---------------------------------------------------------------------------
+*.tsbuildinfo
+next-env.d.ts
+
+# ---------------------------------------------------------------------------
+# Environment & secrets  (holds the DB password + API keys — NEVER commit)
+# ---------------------------------------------------------------------------
 .env
 .env.local
 .env*.local
+*.pem
+
+# ---------------------------------------------------------------------------
+# Deploy / platform
+# ---------------------------------------------------------------------------
 .vercel
-*.tsbuildinfo
-next-env.d.ts
+
+# ---------------------------------------------------------------------------
+# Test & coverage
+# ---------------------------------------------------------------------------
+/coverage
+
+# ---------------------------------------------------------------------------
+# Logs & debug output
+# ---------------------------------------------------------------------------
+*.log
+logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ---------------------------------------------------------------------------
+# Editor / IDE state
+# ---------------------------------------------------------------------------
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# OS & OneDrive junk  (this repo lives under OneDrive on Windows)
+# ---------------------------------------------------------------------------
 .DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
+$RECYCLE.BIN/
+
+# ---------------------------------------------------------------------------
+# Drizzle  (migration SQL is committed; local meta snapshots are not)
+# ---------------------------------------------------------------------------
 drizzle/meta
+
+# ---------------------------------------------------------------------------
+# Local-only working files — not part of the shipped project
+#   CLAUDE.md          Claude Code project config
+#   Z V1 Prompts       prior-version prompt dump (reference)
+#   leap-design-pattern  design reference
+# ---------------------------------------------------------------------------
 CLAUDE.md
 Z V1 Prompts
 leap-design-pattern
+
+# ---------------------------------------------------------------------------
+# Internal working docs — planning notes, agent briefs, personal TODO, and
+# design specs. Not required to build or run the app; kept out of the repo.
+# (Already-tracked ones must also be removed once with `git rm --cached`.)
+# ---------------------------------------------------------------------------
+TODO.md
+DIAGRAM_TEXT_FIX_PROMPT.md
+DIAGRAM_SERVICE_PLAN_MODE.md
+patent-geyser-2.0-concept.md
+patent-geyser-process.md
