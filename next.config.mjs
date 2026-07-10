@@ -10,6 +10,15 @@ const nextConfig = {
       "@resvg/resvg-js",
       "mammoth",
     ],
+    // The .docx export rasterizes each figure's SVG with @resvg/resvg-js, which
+    // needs a real font file (serverless has ~no system fonts). We read the
+    // bundled DejaVu Sans via fs at runtime using a process.cwd()-relative path,
+    // which Next's tracer can't discover statically — so include it explicitly so
+    // it ships in the serverless function. (Next 14: under `experimental`; Next 15
+    // moves this to the top level.) Add any other route that rasterizes figures.
+    outputFileTracingIncludes: {
+      "/api/showcase/export": ["./assets/fonts/**"],
+    },
   },
 };
 

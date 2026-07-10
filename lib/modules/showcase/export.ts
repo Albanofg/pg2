@@ -1,4 +1,6 @@
 import "server-only";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { Paragraph as DocxParagraph, TextRun as DocxTextRun } from "docx";
 import type { LedgerEntry } from "@/lib/modules/shared";
 import type { DisclosureSection, ShowcaseDrawing, ShowcaseKeyConcept } from "./types";
@@ -396,6 +398,40 @@ function cleanFigureSvg(svg: string): string {
   return svg.replace(/<text\b[^>]*>\s*\d+\s*\/\s*\d+\s*<\/text>/g, "");
 }
 
+/**
+ * The diagram font, bundled with the app so it exists on serverless — Vercel's
+ * runtime has essentially no system fonts, and without a real font file resvg
+ * shapes no `<text>` glyphs and silently drops every box label and reference
+ * numeral (vector shapes still render). The service is Matplotlib-based, whose
+ * default family is "DejaVu Sans", so that is the family the SVG `<text>`
+ * requests; we bundle exactly that face.
+ *
+ * NOTE: `@resvg/resvg-js@2.6.2` loads fonts by PATH (`fontFiles`), not by buffer.
+ * (There is no `fontBuffers` option in this version; passing one silently
+ * corrupts the whole options object — `fitTo`/`background` get dropped — so we
+ * must hand resvg an on-disk path.) `next.config.mjs` traces this file into the
+ * serverless function via `outputFileTracingIncludes`.
+ *
+ * Resolved + cached once. `null` if the file is somehow absent, so the export
+ * still proceeds (system-font fallback, dev only) rather than crashing.
+ */
+const DIAGRAM_FONT_REL = "assets/fonts/DejaVuSans.ttf";
+let diagramFontPathCache: string | null | undefined;
+function diagramFontPath(): string | null {
+  if (diagramFontPathCache !== undefined) return diagramFontPathCache;
+  const p = join(process.cwd(), DIAGRAM_FONT_REL);
+  if (existsSync(p)) {
+    diagramFontPathCache = p;
+  } else {
+    console.error(
+      `[showcase] diagram font not found at ${p} — figures will export without text; ` +
+        `ensure ${DIAGRAM_FONT_REL} is committed and traced into the serverless bundle`,
+    );
+    diagramFontPathCache = null;
+  }
+  return diagramFontPathCache;
+}
+
 async function rasterizeDrawings(
   drawings: ShowcaseDrawing[],
 ): Promise<Map<number, { png: Buffer; width: number; height: number }>> {
@@ -407,13 +443,26 @@ async function rasterizeDrawings(
   } catch {
     return map; // rasterizer unavailable — export proceeds text-only
   }
+  // Resolve the bundled font once. When present we point EVERY generic family at
+  // it and disable system fonts, so rendering is deterministic across local and
+  // serverless and any `font-family` the SVG requests resolves to the one face.
+  const fontPath = diagramFontPath();
+  const fontOptions = fontPath
+    ? {
+        loadSystemFonts: false,
+        fontFiles: [fontPath],
+        defaultFontFamily: "DejaVu Sans",
+        serifFamily: "DejaVu Sans",
+        sansSerifFamily: "DejaVu Sans",
+      }
+    : { loadSystemFonts: true }; // dev fallback if the bundled file is absent
   for (const d of drawings) {
     if (!d.svgData) continue;
     try {
       const resvg = new Resvg(cleanFigureSvg(d.svgData), {
         fitTo: { mode: "width", value: 1600 },
         background: "white",
-        font: { loadSystemFonts: true },
+        font: fontOptions,
       });
       const r = resvg.render();
       map.set(d.figNumber, { png: Buffer.from(r.asPng()), width: r.width, height: r.height });
