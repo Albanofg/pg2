@@ -114,9 +114,14 @@ const renderPassages = (passages: RelevantPassage[]) =>
   }));
 
 /**
- * The `## FAMILY CONTEXT` block for a project's Helper turn, or null if standalone.
- * Semantic mode when `query` is present and something relevant is embedded; else the
- * recency fallback (top-N recent siblings + budgeted reference-doc full text).
+ * The Helper context blocks for a project's turn, joined (or null if it has none):
+ *  - `## PROJECT STATUS` — the current Project's filing status, a PROJECT-level
+ *    signal (independent of family) that drives the doctrine's tone-by-status
+ *    behavior. Emitted for STANDALONE and family projects alike whenever any
+ *    filing field is set.
+ *  - `## FAMILY CONTEXT` — siblings + family background + reference docs (semantic
+ *    when a query is present and something relevant is embedded, else the recency
+ *    fallback). Family projects only.
  */
 export async function buildFamilyContext(projectId: string, query?: string): Promise<string | null> {
   const [row] = await db
@@ -132,10 +137,12 @@ export async function buildFamilyContext(projectId: string, query?: string): Pro
     .leftJoin(projectFamilies, eq(projects.familyId, projectFamilies.id))
     .where(eq(projects.id, projectId))
     .limit(1);
-  if (!row?.familyId) return null;
+  if (!row) return null;
 
-  // The current Project's filing status — drives the doctrine's TONE-by-status
-  // behavior (filed/granted/archived → maintenance tone). Only emitted when set.
+  // PROJECT STATUS — the current Project's filing status. Drives the doctrine's
+  // tone-by-status behavior (filed/granted/archived → maintenance tone). This is a
+  // per-project fact, NOT a family one, so it is emitted for standalone projects
+  // too — its own block, independent of whether a family block exists.
   const filedStatus =
     row.status || row.filedDate || row.applicationNumber || row.inventorNames
       ? {
@@ -147,16 +154,38 @@ export async function buildFamilyContext(projectId: string, query?: string): Pro
             : [],
         }
       : null;
+  const statusBlock = filedStatus
+    ? `## PROJECT STATUS\n${JSON.stringify({ projectFiledStatus: filedStatus }, null, 2)}`
+    : null;
 
+  // FAMILY CONTEXT — only for projects that belong to a family.
+  const familyBlock = row.familyId
+    ? await buildFamilyBlock(projectId, row.familyId, row.context ?? null, query)
+    : null;
+
+  return [familyBlock, statusBlock].filter(Boolean).join("\n\n") || null;
+}
+
+/**
+ * Assemble the `## FAMILY CONTEXT` block for a project known to belong to `familyId`:
+ * siblings + family background + reference docs. Semantic mode when `query` is present
+ * and something relevant is embedded; else the recency fallback (top-N recent siblings
+ * + budgeted reference-doc full text). Null when the family has nothing to say.
+ */
+async function buildFamilyBlock(
+  projectId: string,
+  familyId: string,
+  familyContext: string | null,
+  query?: string,
+): Promise<string | null> {
   // ── Semantic mode ──────────────────────────────────────────────────────────
   if (query && query.trim()) {
-    const rel = await retrieveRelevant(projectId, row.familyId, query);
+    const rel = await retrieveRelevant(projectId, familyId, query);
     if (rel) {
-      const files = await getContextFilesForPrompt(row.familyId);
+      const files = await getContextFilesForPrompt(familyId);
       const payload = {
-        familyId: row.familyId,
-        familyContext: row.context ?? null,
-        projectFiledStatus: filedStatus,
+        familyId,
+        familyContext,
         retrievalMode: "semantic" as const,
         relevantConcepts: renderConcepts(rel.concepts),
         relevantPassages: renderPassages(rel.passages),
@@ -177,7 +206,7 @@ export async function buildFamilyContext(projectId: string, query?: string): Pro
   const siblings = await getSiblingsReference(projectId);
   const capped = siblings.slice(0, SIBLING_PROMPT_CAP);
 
-  const files = await getContextFilesForPrompt(row.familyId);
+  const files = await getContextFilesForPrompt(familyId);
   const cappedFiles = files.slice(0, CONTEXT_FILE_PROMPT_CAP);
   let textBudget = FILE_TEXT_TOTAL;
   const referenceFiles = cappedFiles.map((f) => {
@@ -198,9 +227,8 @@ export async function buildFamilyContext(projectId: string, query?: string): Pro
   });
 
   const payload = {
-    familyId: row.familyId,
-    familyContext: row.context ?? null,
-    projectFiledStatus: filedStatus,
+    familyId,
+    familyContext,
     retrievalMode: "recency" as const,
     siblings: capped.map((s) => ({
       siblingId: s.siblingId,
@@ -214,8 +242,7 @@ export async function buildFamilyContext(projectId: string, query?: string): Pro
     referenceFiles,
     referenceFilesOverflow: Math.max(0, files.length - cappedFiles.length),
   };
-  if (!payload.siblings.length && !payload.familyContext && !filedStatus && !referenceFiles.length)
-    return null;
+  if (!payload.siblings.length && !payload.familyContext && !referenceFiles.length) return null;
   return `## FAMILY CONTEXT\n${JSON.stringify(payload, null, 2)}`;
 }
 

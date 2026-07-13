@@ -190,7 +190,14 @@ export async function runGenusExtractor(
     "THE INVENTOR'S OWN WORDS (only source of substance):",
     ...input.verbatim.map((v, i) => `[${i + 1}] ${v}`),
   ].join("\n");
-  return runAgent({ agent: "genus-extractor", system, prompt, schema: GenusOutput, temperature: 0.2 });
+  return runAgent({
+    agent: "genus-extractor",
+    system,
+    prompt,
+    schema: GenusOutput,
+    temperature: 0.2,
+    subject: input.keyConcepts.map((k) => k.title).join("; "),
+  });
 }
 
 export async function runSpeciesSynthesizer(
@@ -204,7 +211,14 @@ export async function runSpeciesSynthesizer(
     "",
     `THE ASSIGNED SPECIES TYPE: ${input.speciesType}`,
   ].join("\n");
-  return runAgent({ agent: "species-synthesizer", system, prompt, schema: SpeciesOutput, temperature: 0.3 });
+  return runAgent({
+    agent: "species-synthesizer",
+    system,
+    prompt,
+    schema: SpeciesOutput,
+    temperature: 0.3,
+    subject: `${input.genus.genus_name} — ${input.speciesType}`,
+  });
 }
 
 export async function runKeyConceptBroadener(
@@ -231,6 +245,7 @@ export async function runKeyConceptBroadener(
     prompt,
     schema: BroadenedOutput,
     temperature: 0.2,
+    subject: input.original,
   });
 }
 
@@ -249,7 +264,14 @@ export async function runVerifier(
       ? ["", "THE SHARED CONSCIOUSNESS (must stay consistent):", input.consciousness]
       : []),
   ].join("\n");
-  return runAgent({ agent: "verifier", system, prompt, schema: VerifierOutput, temperature: 0 });
+  return runAgent({
+    agent: "verifier",
+    system,
+    prompt,
+    schema: VerifierOutput,
+    temperature: 0,
+    subject: input.piece,
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -300,7 +322,14 @@ async function runExtender(
     "THE APPROVED ALTERNATIVE IMPLEMENTATIONS (species):",
     renderSpecies(input.species),
   ].join("\n");
-  return runAgent({ agent, system, prompt, schema: ExtenderOutput, temperature: 0.3 });
+  return runAgent({
+    agent,
+    system,
+    prompt,
+    schema: ExtenderOutput,
+    temperature: 0.3,
+    subject: input.genus.genus_name,
+  });
 }
 
 export function runBackgroundExtender(
@@ -352,6 +381,7 @@ export async function runDetailDescriptionExtender(
     prompt,
     schema: DetailDescriptionOutput,
     temperature: 0.3,
+    subject: input.genus.genus_name,
   });
 }
 
@@ -387,6 +417,7 @@ export async function runAbstractRewriter(
     prompt,
     schema: AbstractRewriteOutput,
     temperature: 0.2,
+    subject: input.genus.genus_name,
   });
 }
 
@@ -435,6 +466,7 @@ export async function runKeyConceptAppender(
     prompt,
     schema: AppendedConceptOutput,
     temperature: 0.3,
+    subject: `${input.aspect}: ${input.genus.genus_name}`,
   });
 }
 

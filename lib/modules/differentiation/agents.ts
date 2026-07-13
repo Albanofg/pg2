@@ -115,6 +115,7 @@ export async function runKeyConceptDecomposer(
     prompt,
     schema: KeyConceptDecomposerOutput,
     temperature: 0.2,
+    subject: `${input.title}: ${input.statement}`,
   });
 }
 
@@ -175,7 +176,14 @@ export async function runWhitespace(
           .join("\n")
       : "(no prior art found — return totalPatentsAnalyzed 0, a Green Match, an empty patentAnalyses list, and an open-landscape paragraph noting the area appears open)",
   ].join("\n");
-  return runAgent({ agent: "whitespace", system, prompt, schema: WhitespaceOutput, temperature: 0.2 });
+  return runAgent({
+    agent: "whitespace",
+    system,
+    prompt,
+    schema: WhitespaceOutput,
+    temperature: 0.2,
+    subject: `${input.title}: ${input.statement}`,
+  });
 }
 
 /**
@@ -246,12 +254,14 @@ export async function runDifferentiationTeacher(
     "THE OPEN-LANDSCAPE SYNTHESIS (context):",
     a.consolidatedOpenLandscapeAnalysis || "(none)",
   ].join("\n");
+  const subject = `${input.title}: ${input.statement}`;
   const first = await runAgent({
     agent: "differentiation-teacher",
     system,
     prompt,
     schema: DiffTeachOutput,
     temperature: 0.3,
+    subject,
   });
 
   // MECHANICAL COPY-TEST GUARD: every blank label must be a question. The model
@@ -273,6 +283,7 @@ export async function runDifferentiationTeacher(
         ].join("\n"),
         schema: DiffTeachOutput,
         temperature: 0.2,
+        subject,
       });
     } catch {
       out = first;
@@ -354,6 +365,7 @@ export async function runNoveltyChecker(
     prompt,
     schema: NoveltyCheckOutput,
     temperature: 0,
+    subject: `${input.title}: ${input.statement}`,
   });
 }
 
@@ -429,7 +441,14 @@ export async function runGapFramer(
       ? ["", "WHAT'S ALREADY SETTLED FOR THIS PATENT (Shared Consciousness):", input.consciousness]
       : []),
   ].join("\n");
-  return runAgent({ agent: "gap-framer", system, prompt, schema: GapFramerOutput, temperature: 0.2 });
+  return runAgent({
+    agent: "gap-framer",
+    system,
+    prompt,
+    schema: GapFramerOutput,
+    temperature: 0.2,
+    subject: input.statement,
+  });
 }
 
 export async function runDifferentiationFormalizer(
@@ -456,6 +475,7 @@ export async function runDifferentiationFormalizer(
     prompt,
     schema: DifferentiationFormalizerOutput,
     temperature: 0.1,
+    subject: input.statement,
   });
 }
 
@@ -518,7 +538,14 @@ export async function runSection(
         ]
       : []),
   ].join("\n");
-  return runAgent({ agent, system, prompt, schema: SectionOutput, temperature: 0.3 });
+  return runAgent({
+    agent,
+    system,
+    prompt,
+    schema: SectionOutput,
+    temperature: 0.3,
+    subject: input.keyConcepts.map((k) => k.title).join("; "),
+  });
 }
 
 export async function runPohcScorer(
@@ -534,7 +561,14 @@ export async function runPohcScorer(
     "THE INVENTOR'S OWN RECORDED WORDS (the only evidence — quote from these):",
     ...input.verbatim.map((v, i) => `[${i + 1}] ${v}`),
   ].join("\n");
-  return runAgent({ agent: "pohc-scorer", system, prompt, schema: PohcOutput, temperature: 0 });
+  return runAgent({
+    agent: "pohc-scorer",
+    system,
+    prompt,
+    schema: PohcOutput,
+    temperature: 0,
+    subject: `${input.title}: ${input.statement}`,
+  });
 }
 
 export async function runVerifier(
@@ -552,7 +586,14 @@ export async function runVerifier(
       ? ["", "THE SHARED CONSCIOUSNESS (must stay consistent with what's settled):", input.consciousness]
       : []),
   ].join("\n");
-  return runAgent({ agent: "verifier", system, prompt, schema: VerifierOutput, temperature: 0 });
+  return runAgent({
+    agent: "verifier",
+    system,
+    prompt,
+    schema: VerifierOutput,
+    temperature: 0,
+    subject: input.piece,
+  });
 }
 
 /** The module Helper — replies to the inventor, teaches, brainstorms (Differentiation context). */

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sealNotebook } from "@/lib/crypto/rfc3161";
+import { getProjectMeta } from "@/lib/db/projects";
 import { loadShowcase } from "@/lib/modules/showcase/registry";
 import {
   assembleDisclosureMarkdown,
@@ -39,8 +40,9 @@ export async function POST(req: Request) {
     const drawings = engine.getDrawings();
     const entries = engine.ledgerEntries();
 
-    const disclosureMarkdown = assembleDisclosureMarkdown(disclosure, keyConcepts, drawings);
-    const disclosureDocx = await assembleDisclosureDocx(disclosure, keyConcepts, drawings);
+    const meta = (await getProjectMeta(projectId)) ?? undefined;
+    const disclosureMarkdown = assembleDisclosureMarkdown(disclosure, keyConcepts, drawings, meta);
+    const disclosureDocx = await assembleDisclosureDocx(disclosure, keyConcepts, drawings, meta);
     const proofContent = buildProofContent(entries);
     const seal = await sealNotebook(proofContent);
     const sealedAt = seal.sealedAt.toISOString();

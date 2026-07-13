@@ -117,6 +117,7 @@ export async function runDeepener(
     prompt,
     schema: DeepenerOutput,
     temperature: 0.3,
+    subject: input.statement,
   });
 }
 
@@ -159,5 +160,5 @@ export async function runVerifier(
       ? ["", "THE SHARED CONSCIOUSNESS (must stay consistent with what's settled):", input.consciousness]
       : []),
   ].join("\n");
-  return runAgent({ agent: "verifier", system, prompt, schema: VerifierOutput, temperature: 0 });
+  return runAgent({ agent: "verifier", system, prompt, schema: VerifierOutput, temperature: 0, subject: input.piece });
 }

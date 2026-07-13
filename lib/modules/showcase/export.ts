@@ -11,11 +11,33 @@ import type { DisclosureSection, ShowcaseDrawing, ShowcaseKeyConcept } from "./t
  * that gets RFC-3161 sealed. Pure string assembly; the route does the sealing.
  */
 
+/** Filing metadata surfaced on the ICB cover. Each field optional — shown only when set. */
+export type IcbMeta = {
+  inventorNames?: string | null;
+  applicationNumber?: string | null;
+  filedDate?: string | null;
+  status?: string | null;
+};
+
+/** Build the ICB cover lines from the filing metadata: an "Inventor(s)" line and a
+ *  "·"-joined filing line (Application No. / Filed / Status). Either may be null when
+ *  the inventor hasn't filled those fields in on the project's details. */
+function coverMetaLines(meta?: IcbMeta): { inventors: string | null; filing: string | null } {
+  const inv = (meta?.inventorNames ?? "").split(",").map((n) => n.trim()).filter(Boolean);
+  const inventors = inv.length ? `Inventor${inv.length > 1 ? "s" : ""}: ${inv.join(", ")}` : null;
+  const parts: string[] = [];
+  if (meta?.applicationNumber?.trim()) parts.push(`Application No.: ${meta.applicationNumber.trim()}`);
+  if (meta?.filedDate?.trim()) parts.push(`Filed: ${meta.filedDate.trim()}`);
+  if (meta?.status?.trim()) parts.push(`Status: ${meta.status.trim()}`);
+  return { inventors, filing: parts.length ? parts.join("  ·  ") : null };
+}
+
 /** Assemble the Invention Disclosure as Markdown (sections + Key Concepts + Drawings). */
 export function assembleDisclosureMarkdown(
   disclosure: DisclosureSection[],
   keyConcepts: ShowcaseKeyConcept[],
   drawings: ShowcaseDrawing[] = [],
+  meta?: IcbMeta,
 ): string {
   // Same 37 CFR 1.77(b) order as the .docx: Title → front matter → Brief Description
   // of the Drawings → Detailed Description (drawings walkthrough + technical) → Key
@@ -28,6 +50,11 @@ export function assembleDisclosureMarkdown(
   const detail = detailIdx >= 0 ? body.slice(detailIdx) : [];
 
   const lines: string[] = [`# ${titleSection?.body?.trim() || "Invention Disclosure"}`, ""];
+
+  // Cover metadata (inventor / application no. / filed / status) — only when set.
+  const cover = coverMetaLines(meta);
+  if (cover.inventors) lines.push(`**${cover.inventors}**`, "");
+  if (cover.filing) lines.push(`_${cover.filing}_`, "");
 
   for (const s of front) lines.push(`## ${s.label}`, "", s.body.trim(), "");
 
@@ -484,6 +511,7 @@ export async function assembleDisclosureDocx(
   disclosure: DisclosureSection[],
   keyConcepts: ShowcaseKeyConcept[],
   drawings: ShowcaseDrawing[] = [],
+  meta?: IcbMeta,
 ): Promise<Buffer> {
   const docx = await import("docx");
   const { marked } = await import("marked");
@@ -530,6 +558,28 @@ export async function assembleDisclosureDocx(
       ],
     }),
   ];
+
+  // Cover metadata under the title (inventor / application no. / filed / status) —
+  // each rendered only when the inventor filled it in on the project's details.
+  const cover = coverMetaLines(meta);
+  if (cover.inventors) {
+    head.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { after: cover.filing ? 40 : 200 },
+        children: [new TextRun({ text: cover.inventors, size: BODY, color: BLACK, font: FONT })],
+      }),
+    );
+  }
+  if (cover.filing) {
+    head.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 200 },
+        children: [new TextRun({ text: cover.filing, size: NOTE, color: MUTED, font: FONT })],
+      }),
+    );
+  }
 
   if (!bodySections.length && !drawings.length) {
     head.push(

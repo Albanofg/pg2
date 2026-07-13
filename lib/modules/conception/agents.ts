@@ -290,6 +290,7 @@ export async function runDistiller(
     prompt,
     schema: DistillerOutput,
     temperature: 0.2,
+    subject: input.verbatim.join("\n"),
   });
 }
 
@@ -314,6 +315,7 @@ export async function runReviser(
     prompt,
     schema: ReviserOutput,
     temperature: 0.2,
+    subject: input.current,
   });
 }
 
@@ -333,7 +335,14 @@ export async function runVerifier(
       : []),
   ].join("\n");
   // Temperature 0: this is an independent check, not a creative task.
-  return runAgent({ agent: "verifier", system, prompt, schema: VerifierOutput, temperature: 0 });
+  return runAgent({
+    agent: "verifier",
+    system,
+    prompt,
+    schema: VerifierOutput,
+    temperature: 0,
+    subject: input.piece,
+  });
 }
 
 export async function runDecomposer(
@@ -352,7 +361,14 @@ export async function runDecomposer(
   ]
     .filter(Boolean)
     .join("\n\n");
-  return runAgent({ agent: "decomposer", system, prompt, schema: DecomposerOutput, temperature: 0.2 });
+  return runAgent({
+    agent: "decomposer",
+    system,
+    prompt,
+    schema: DecomposerOutput,
+    temperature: 0.2,
+    subject: input.material,
+  });
 }
 
 /** Render a candidate Concept list as readable text for the advocate/examiner prompts. */
@@ -375,7 +391,14 @@ export async function runAdvocate(
     "INVENTOR'S MATERIAL (your only permitted source — restate, never add):",
     input.material,
   ].join("\n");
-  return runAgent({ agent: "advocate", system, prompt, schema: AdvocateOutput, temperature: 0.3 });
+  return runAgent({
+    agent: "advocate",
+    system,
+    prompt,
+    schema: AdvocateOutput,
+    temperature: 0.3,
+    subject: input.material,
+  });
 }
 
 /** The skeptical consolidation pass — returns the FINAL, de-duplicated, correctly-split Concept set. */
@@ -391,7 +414,14 @@ export async function runExaminer(
     "INVENTOR'S MATERIAL (the ground truth and ONLY source of substance — restate, never add):",
     input.material,
   ].join("\n");
-  return runAgent({ agent: "examiner", system, prompt, schema: ExaminerOutput, temperature: 0.1 });
+  return runAgent({
+    agent: "examiner",
+    system,
+    prompt,
+    schema: ExaminerOutput,
+    temperature: 0.1,
+    subject: input.material,
+  });
 }
 
 export async function runClarifier(
@@ -403,7 +433,14 @@ export async function runClarifier(
     "INVENTOR'S MATERIAL (ask only where genuinely unclear; never propose answers):",
     input.material,
   ].join("\n\n");
-  return runAgent({ agent: "clarifier", system, prompt, schema: ClarifierOutput, temperature: 0.3 });
+  return runAgent({
+    agent: "clarifier",
+    system,
+    prompt,
+    schema: ClarifierOutput,
+    temperature: 0.3,
+    subject: input.material,
+  });
 }
 
 export async function runBoundaryClassifier(
@@ -419,7 +456,14 @@ export async function runBoundaryClassifier(
     input.content,
   ].join("\n");
   // Low temperature: this is a safety gate, not a creative task.
-  return runAgent({ agent: "boundary-classifier", system, prompt, schema: BoundaryOutput, temperature: 0 });
+  return runAgent({
+    agent: "boundary-classifier",
+    system,
+    prompt,
+    schema: BoundaryOutput,
+    temperature: 0,
+    subject: input.content,
+  });
 }
 
 export async function runFormalizer(
@@ -431,7 +475,14 @@ export async function runFormalizer(
     "INVENTOR'S EXACT WORDS FOR THIS CONCEPT (your only permitted source):",
     ...input.verbatim.map((v, i) => `[${i + 1}] ${v}`),
   ].join("\n");
-  return runAgent({ agent: "formalizer", system, prompt, schema: FormalizerOutput, temperature: 0.1 });
+  return runAgent({
+    agent: "formalizer",
+    system,
+    prompt,
+    schema: FormalizerOutput,
+    temperature: 0.1,
+    subject: input.verbatim.join("\n"),
+  });
 }
 
 export async function runBrainstorm(
@@ -465,6 +516,7 @@ export async function runBrainstorm(
     prompt,
     schema: BrainstormOutput,
     temperature: 0.5,
+    subject: input.core,
   });
 }
 
@@ -486,5 +538,6 @@ export async function runCodeGenerator(
     prompt,
     schema: CodeGeneratorOutput,
     temperature: 0.2,
+    subject: input.statement,
   });
 }

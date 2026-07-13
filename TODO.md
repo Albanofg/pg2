@@ -23,8 +23,6 @@ Starter already removed sleep/cold-starts + gave more RAM. It does **not** fix t
 ## 🔧 Open — small, ready to do
 
 - **Admin: add `mercer@tomitrader.com`.** Already added in code (`lib/admin.ts`); needs a **deploy**. ALSO **check if `ADMIN_EMAILS` is set in the Vercel/production env** — if it is, it overrides the code list, so he must be added there too (comma-separated).
-- **Surface project metadata on the ICB.** Put inventor name(s) / application number / filed date (the per-project "Edit details" fields) onto the ICB cover / docx export. Offered, not yet decided or built.
-- **Standalone tone-by-status.** The Helper's filed/granted/archived → maintenance tone currently only fires for projects **inside a family**. Extend it to standalone projects.
 
 ---
 
@@ -38,12 +36,15 @@ Starter already removed sleep/cold-starts + gave more RAM. It does **not** fix t
 
 ## ✨ Families Phase 2 — optional polish (feature is shipped & working)
 
-- **Per-agent retrieval `subject`.** Working agents currently query semantic retrieval with their full prompt (capped); setting a focused `subject` per agent (concept title/section) would sharpen results.
-- **Reranking pass.** An optional rerank over the top-K retrieved passages is a future quality lever.
+- **Per-agent retrieval `subject` — DONE for the 4 core content modules** (Conception, Maturation, Differentiation, Showcase; 31 agents). Each now queries semantic retrieval with a focused subject (concept title/statement, section key-concepts, or the piece under review) instead of its full instruction-laden prompt. **Remaining:** Module-0 brainstorm agents (deferred — pre-conception ideation, less central to overlap-catching) and Showcase's figure-planner (its prompt is already the draft content).
+- **Reranking pass.** An optional rerank over the top-K retrieved passages. NOTE: a dedicated rerank API (Cohere/Voyage) is a **new vendor** — blocked without sign-off (per the no-new-vendors rule). The only no-vendor route is an extra LLM rerank call per retrieval, which adds latency/cost to every agent turn. Deferred pending a decision.
 
 ---
 
 ## ✅ Recently shipped (context, no action)
+
+- **Project metadata on the ICB.** Inventor(s) / Application No. / Filed / Status now render as a cover block under the title in both the `.docx` and markdown export (each field shown only when set on the project's "Edit details"). New `getProjectMeta` getter + `IcbMeta` threaded through `assembleDisclosureDocx` / `assembleDisclosureMarkdown`.
+- **Standalone tone-by-status.** Filing status (filed/granted/archived → maintenance tone) is now its own project-level `## PROJECT STATUS` block, emitted for standalone projects too — no longer gated behind family membership. Doctrine's tone rule lifted out of FAMILY AWARENESS.
 
 - Diagram integration (plan-mode planner + re-viewable Drawings part of ICB + landscape docx sheets), gating (diagrams locked until Genus/Species; ICB/PoHC locked until diagrams), ICB filename + USPTO structure + Abstract-last.
 - Admin AI-usage dashboard (`/admin`) + **Reindex families** button.

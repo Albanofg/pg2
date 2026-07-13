@@ -61,6 +61,22 @@ export async function bootstrapProject(
   return project;
 }
 
+/** Filing metadata for the ICB export — inventor / application no. / filed date /
+ *  status, by projectId (the export route already holds it). Null if not found. */
+export async function getProjectMeta(projectId: string) {
+  const [row] = await db
+    .select({
+      inventorNames: projects.inventorNames,
+      applicationNumber: projects.applicationNumber,
+      filedDate: projects.filedDate,
+      status: projects.status,
+    })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  return row ?? null;
+}
+
 /** All of the user's projects, newest first — for the dashboard. */
 export async function listProjects(userId: string) {
   return db
