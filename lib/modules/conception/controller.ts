@@ -22,6 +22,7 @@ import {
   type BoundaryClassifier,
 } from "@/lib/modules/shared";
 import { hasCheckpoint, sealCheckpoint } from "@/lib/modules/shared/checkpoint";
+import { renderScreenCards } from "@/lib/modules/shared/helper-agent";
 import { MODULE1_HUMAN_SOURCE_TYPES } from "./types";
 import type {
   BrainstormCard,
@@ -321,6 +322,7 @@ export class ConceptionModule {
         conversation: this.conversation.slice(-6).map((tn) => ({ role: tn.role, text: tn.text })),
         inventorMaterial: this.material.join("\n"),
         consciousness: this.consciousness.renderForAgent({ part: CORE_PART }),
+        onScreen: renderScreenCards([...this.openCards.values()]),
       });
     } catch (err) {
       console.error("[conception] helper brain failed", err);

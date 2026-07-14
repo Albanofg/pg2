@@ -21,6 +21,7 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   "abstract-rewriter": MODELS.drafter,
   "key-concept-appender": MODELS.drafter,
   "figure-planner": MODELS.drafter,
+  "section-polisher": MODELS.drafter,
 };
 
 export const openaiAgentRunner: AgentRunner = async (req) =>

@@ -30,6 +30,7 @@ const PROMPT_FILES: Record<AgentName, string> = {
   "abstract-rewriter": `${MODULE_5_DIR}/08-abstract-rewriter.md`,
   "key-concept-appender": `${MODULE_5_DIR}/09-key-concept-appender.md`,
   "figure-planner": `${MODULE_5_DIR}/10-figure-planner.md`,
+  "section-polisher": `${MODULE_5_DIR}/11-section-polisher.md`,
 };
 
 const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
@@ -45,6 +46,9 @@ const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
   "key-concept-appender": ["broadening"],
   // The figure planner needs the CORE vocabulary discipline only — no broadening.
   "figure-planner": [],
+  // The section polisher composes established material into prose; broadening
+  // gives it the vocabulary discipline, abstract_rules the Abstract constraints.
+  "section-polisher": ["broadening", "abstract_rules"],
 };
 
 const promptCache = new Map<AgentName, string>();
@@ -69,6 +73,13 @@ export const GenusOutput = z.object({
   input_pattern: z.string().default(""),
   transformation_pattern: z.string().default(""),
   output_pattern: z.string().default(""),
+  // V2 §101/§112 scaffolding — the formal mapping and the constraints/invariants
+  // that define the genus boundary. Empty on genera extracted by V1.
+  formal_mapping_statement: z.string().default(""),
+  computational_constraints: z.array(z.string()).default([]),
+  logical_invariants: z.array(z.string()).default([]),
+  technical_problem: z.string().default(""),
+  technical_effect: z.string().default(""),
   // V1's explicit rule-engine-AND-agent implementability statement — part of the
   // genus artifact, cited by downstream drafting.
   paradigm_neutrality_check: z.string().default(""),
@@ -79,9 +90,17 @@ export const SpeciesOutput = z.object({
   species_type: z.enum(["ai_assisted", "ai_native", "agentic"]),
   species_name: z.string(),
   architectural_description: z.string().default(""),
+  // V2 §112 algorithmic disclosure — the step-by-step corresponding structure and
+  // the genus constraint/invariant discharge maps. Empty on V1-drafted species.
+  sequence_of_operations: z.array(z.string()).default([]),
   data_flow: z.string().default(""),
   key_components: z.array(z.string()).default([]),
+  constraint_enforcement_map: z.array(z.string()).default([]),
+  invariant_preservation_map: z.array(z.string()).default([]),
   technical_improvements: z.array(z.string()).default([]),
+  // V2 renamed differentiation_from_traditional → differentiation_from_siblings.
+  // Accept both so V1 and V2 prompt outputs both parse; downstream prefers siblings.
+  differentiation_from_siblings: z.string().default(""),
   differentiation_from_traditional: z.string().default(""),
 });
 export type SpeciesResult = z.infer<typeof SpeciesOutput>;
@@ -172,6 +191,17 @@ function renderGenus(g: Genus): string {
     `input_pattern: ${g.input_pattern}`,
     `transformation_pattern: ${g.transformation_pattern}`,
     `output_pattern: ${g.output_pattern}`,
+    ...(g.formal_mapping_statement
+      ? [`formal_mapping_statement: ${g.formal_mapping_statement}`]
+      : []),
+    ...(g.computational_constraints?.length
+      ? ["computational_constraints:", ...g.computational_constraints.map((c) => `  - ${c}`)]
+      : []),
+    ...(g.logical_invariants?.length
+      ? ["logical_invariants:", ...g.logical_invariants.map((v) => `  - ${v}`)]
+      : []),
+    ...(g.technical_problem ? [`technical_problem: ${g.technical_problem}`] : []),
+    ...(g.technical_effect ? [`technical_effect: ${g.technical_effect}`] : []),
     ...(g.paradigm_neutrality_check
       ? [`paradigm_neutrality_check: ${g.paradigm_neutrality_check}`]
       : []),
@@ -285,10 +315,19 @@ function renderSpecies(species: Species[]): string {
       [
         `(${i + 1}) [${s.species_type}] ${s.species_name}`,
         `    architecture: ${s.architectural_description}`,
+        ...(s.sequence_of_operations?.length
+          ? ["    sequence of operations:", ...s.sequence_of_operations.map((o) => `      - ${o}`)]
+          : []),
         `    data flow: ${s.data_flow}`,
         `    key components: ${s.key_components.join("; ")}`,
+        ...(s.constraint_enforcement_map?.length
+          ? [`    constraint enforcement: ${s.constraint_enforcement_map.join("; ")}`]
+          : []),
+        ...(s.invariant_preservation_map?.length
+          ? [`    invariant preservation: ${s.invariant_preservation_map.join("; ")}`]
+          : []),
         `    technical improvements: ${s.technical_improvements.join("; ")}`,
-        `    differentiation: ${s.differentiation_from_traditional}`,
+        `    differentiation: ${s.differentiation_from_siblings || s.differentiation_from_traditional || ""}`,
       ].join("\n"),
     )
     .join("\n\n");
@@ -467,6 +506,74 @@ export async function runKeyConceptAppender(
     schema: AppendedConceptOutput,
     temperature: 0.3,
     subject: `${input.aspect}: ${input.genus.genus_name}`,
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Section polisher — the on-demand "Draft / Revise with AI" in the editor.
+ * Composes already-established material into cleaner prose for ONE narrative
+ * section; never invents. "revise" preserves the inventor's version and only
+ * improves it; "draft" rebuilds from the established material. Both preserve
+ * every substantive point (the prompt's PRESERVATION_FIRST law).
+ * ------------------------------------------------------------------ */
+
+export type SectionPolishMode = "draft" | "revise";
+
+export const SectionPolishOutput = z.object({
+  body: z.string().default(""),
+  change_summary: z.string().default(""),
+  preserved_points: z.array(z.string()).default([]),
+});
+export type SectionPolishResult = z.infer<typeof SectionPolishOutput>;
+
+export async function runSectionPolisher(
+  runAgent: AgentRunner,
+  input: {
+    sectionLabel: string;
+    mode: SectionPolishMode;
+    currentBody: string;
+    genus: Genus | null;
+    species: Species[];
+    keyConcepts: { title: string; statement: string; broadened?: string }[];
+    /** The other draft sections, for voice/consistency (label + body). */
+    otherSections: { label: string; body: string }[];
+  },
+): Promise<SectionPolishResult> {
+  const system = await loadAgentPrompt("section-polisher");
+  const others = input.otherSections
+    .filter((s) => s.body.trim())
+    .map((s) => `### ${s.label}\n${s.body}`)
+    .join("\n\n");
+  const prompt = [
+    `MODE: ${input.mode}`,
+    `SECTION TO ${input.mode === "draft" ? "DRAFT" : "REVISE"}: ${input.sectionLabel}`,
+    "",
+    "CURRENT TEXT OF THIS SECTION (preserve every substantive point it makes):",
+    input.currentBody.trim() || "(empty — there is no current text; compose it from the established material)",
+    "",
+    "THE KEY CONCEPTS (the inventor's owned anchors; 'broadened' is the widened wording when present):",
+    input.keyConcepts.length
+      ? input.keyConcepts
+          .map((k, i) => `(${i + 1}) ${k.title}: ${k.broadened || k.statement}`)
+          .join("\n")
+      : "(none)",
+    "",
+    "THE PARADIGM-NEUTRAL GENUS:",
+    input.genus ? renderGenus(input.genus) : "(none)",
+    "",
+    "THE APPROVED ALTERNATIVE IMPLEMENTATIONS (species):",
+    renderSpecies(input.species),
+    "",
+    "THE OTHER DRAFT SECTIONS (match their voice and tense; do not repeat their content):",
+    others || "(none)",
+  ].join("\n");
+  return runAgent({
+    agent: "section-polisher",
+    system,
+    prompt,
+    schema: SectionPolishOutput,
+    temperature: 0.3,
+    subject: input.sectionLabel,
   });
 }
 

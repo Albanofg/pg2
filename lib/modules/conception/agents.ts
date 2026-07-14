@@ -225,6 +225,8 @@ export async function runHelper(
     conversation: { role: string; text: string }[];
     inventorMaterial: string;
     consciousness?: string;
+    /** What's literally on the inventor's screen now (rendered open cards). */
+    onScreen?: string;
   },
 ): Promise<HelperResult> {
   const system = await loadAgentPrompt("helper");
@@ -253,6 +255,13 @@ export async function runHelper(
     input.concepts.length
       ? input.concepts.map((c, i) => `[${i + 1}] ${c.title}: ${c.statement}`).join("\n")
       : "(none yet)",
+    ...(input.onScreen
+      ? [
+          "",
+          "THE INVENTOR'S SCREEN RIGHT NOW (the cards they are looking at / deciding on):",
+          input.onScreen,
+        ]
+      : []),
     "",
     "RECENT CONVERSATION (oldest first):",
     input.conversation.length

@@ -44,6 +44,17 @@ export type Genus = {
   output_pattern: string;
   /** V1's explicit rule-engine-AND-agent implementability statement. */
   paradigm_neutrality_check?: string;
+  /* --- V2 §101/§112 scaffolding (absent on genera extracted by V1). --- */
+  /** The mandatory input-structure→output-structure mapping under constraints C. */
+  formal_mapping_statement?: string;
+  /** Machine-checkable technical conditions the transformation enforces (2–5). */
+  computational_constraints?: string[];
+  /** Properties holding across every valid execution (2–4). */
+  logical_invariants?: string[];
+  /** The specific deficiency in prior computational approaches. */
+  technical_problem?: string;
+  /** The change in computing-system behaviour the mechanism produces. */
+  technical_effect?: string;
 };
 
 export type SpeciesType = "ai_assisted" | "ai_native" | "agentic";
@@ -55,7 +66,18 @@ export type Species = {
   data_flow: string;
   key_components: string[];
   technical_improvements: string[];
-  differentiation_from_traditional: string;
+  /** V2: architecture-level distinctness from the OTHER TWO species. Replaces
+   *  V1's `differentiation_from_traditional`. */
+  differentiation_from_siblings: string;
+  /** V1 field — retained so species stored before V2 still read back. */
+  differentiation_from_traditional?: string;
+  /* --- V2 §112 algorithmic disclosure (absent on species drafted by V1). --- */
+  /** The ordered, component-bound algorithm (the §112(f) corresponding structure). */
+  sequence_of_operations?: string[];
+  /** One entry per genus constraint: which component enforces it, at which step. */
+  constraint_enforcement_map?: string[];
+  /** One entry per genus invariant: which component verifies it, at which step. */
+  invariant_preservation_map?: string[];
   /** Inventor's Gate-1 decision. undefined until decided. */
   kept?: boolean;
 };
@@ -358,7 +380,9 @@ export type AgentName =
   | "abstract-rewriter"
   | "key-concept-appender"
   // Plans the figure set + numeral ledger + grounded descriptions (plan-mode drawings).
-  | "figure-planner";
+  | "figure-planner"
+  // On-demand drafter/reviser for the narrative disclosure sections (in the editor).
+  | "section-polisher";
 
 export type ShowcaseDeps = {
   runAgent: AgentRunner;

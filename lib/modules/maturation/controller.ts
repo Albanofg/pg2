@@ -2,6 +2,7 @@ import "server-only";
 import { applyGrade, EvidenceLedger, SharedConsciousness } from "@/lib/modules/shared";
 import { hasCheckpoint, sealCheckpoint } from "@/lib/modules/shared/checkpoint";
 import type { ConceptObject, HelperTurn } from "@/lib/modules/shared";
+import { renderScreenCards } from "@/lib/modules/shared/helper-agent";
 import { runDeepener, runHelper, runVerifier } from "./agents";
 import { MATURATION_HUMAN_SOURCE_TYPES } from "./types";
 import type {
@@ -201,7 +202,8 @@ export class MaturationModule {
             .map((c, i) => `[${i + 1}] ${c.title}: ${c.deepened_statement || c.formalized_statement}`)
             .join("\n")}`
         : "No active concepts yet.",
-      this.openCards.size ? `${this.openCards.size} card(s) open for the inventor's decision.` : "",
+      "THE INVENTOR'S SCREEN RIGHT NOW (the cards they are looking at / deciding on):",
+      renderScreenCards([...this.openCards.values()]),
     ]
       .filter(Boolean)
       .join("\n");

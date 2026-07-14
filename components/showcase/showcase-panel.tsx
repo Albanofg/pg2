@@ -85,6 +85,7 @@ export default function ShowcasePanel({
     decide,
     tell,
     editSection,
+    polishSection,
     expand,
     restart,
     exportDisclosure,
@@ -98,6 +99,11 @@ export default function ShowcasePanel({
   const [draftText, setDraftText] = useState("");
   const [query, setQuery] = useState("");
   const [note, setNote] = useState<string | null>(null);
+  // The on-demand section drafter/reviser (narrative sections only): its own busy
+  // flag + the agent's change summary, shown under the editor. The proposal lands
+  // in the same editable box — nothing is saved until the inventor hits Save.
+  const [polishing, setPolishing] = useState<null | "draft" | "revise">(null);
+  const [polishNote, setPolishNote] = useState<string | null>(null);
 
   // Diagrams generation modal — its own busy/error so the slow (planning + render)
   // run never hijacks the panel's module spinner. The finished figures live in the
@@ -105,6 +111,14 @@ export default function ShowcasePanel({
   const [diagramsOpen, setDiagramsOpen] = useState(false);
   const [diagramsBusy, setDiagramsBusy] = useState(false);
   const [diagramsError, setDiagramsError] = useState<string | null>(null);
+
+  // Re-running the Genus & Species Expansion overwrites the one already woven into
+  // the draft, so once it's been applied we confirm before letting it run again.
+  const [confirmReexpand, setConfirmReexpand] = useState(false);
+  const onExpandClick = () => {
+    if (view.broadened) setConfirmReexpand(true);
+    else void expand();
+  };
 
   const sections = view.disclosure;
   const drawings = view.drawings;
@@ -133,6 +147,7 @@ export default function ShowcasePanel({
   const select = (key: string) => {
     setActiveKey(key);
     setEditing(false);
+    setPolishNote(null);
   };
 
   const onSearch = (q: string) => {
@@ -145,15 +160,35 @@ export default function ShowcasePanel({
     if (hit) select(hit.key);
   };
 
+  // The narrative sections that offer the on-demand AI drafter/reviser.
+  const NARRATIVE_KEYS = new Set(["background", "summary", "abstract"]);
+  const canPolish = !!activeSection && NARRATIVE_KEYS.has(activeSection.key);
+
   const startEdit = () => {
     if (!activeSection) return;
     setDraftText(activeSection.body);
+    setPolishNote(null);
     setEditing(true);
   };
   const saveEdit = async () => {
     if (!activeSection) return;
     await editSection(activeSection.key, draftText);
+    setPolishNote(null);
     setEditing(false);
+  };
+
+  // Draft (rebuild) or revise (preserve + improve) the active section with AI.
+  // The result fills the editable box; the inventor reviews and Saves to accept.
+  const runPolish = async (mode: "draft" | "revise") => {
+    if (!activeSection || polishing) return;
+    setPolishing(mode);
+    setPolishNote(null);
+    const r = await polishSection(activeSection.key, mode);
+    setPolishing(null);
+    if (r?.proposed) {
+      setDraftText(r.proposed);
+      setPolishNote(r.changeSummary || "Draft ready — review it below, then Save to keep it.");
+    }
   };
 
   const doExport = async (which: "icb" | "proof") => {
@@ -237,11 +272,16 @@ export default function ShowcasePanel({
           {/* Four top actions */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <ActionButton
-              onClick={() => void expand()}
+              onClick={onExpandClick}
               disabled={busy}
               primary
               label="Genus & Species Expansion"
               icon="✦"
+              tooltip={
+                view.broadened
+                  ? "You've already run this expansion — running it again will replace the current one in your draft."
+                  : undefined
+              }
             />
             <ActionButton
               onClick={() => void doGenerateDiagrams()}
@@ -407,22 +447,70 @@ export default function ShowcasePanel({
                       </div>
                       {editing ? (
                         <>
+                          {/* On-demand AI drafter/reviser — narrative sections only.
+                              "Revise" preserves your text and only improves it;
+                              "Draft fresh" rebuilds from your established material.
+                              Both fill the box below — nothing saves until you Save. */}
+                          {canPolish && (
+                            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-dashed border-accent/40 bg-accent/[0.04] p-2">
+                              <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-accent">
+                                Let AI help
+                              </span>
+                              <button
+                                onClick={() => void runPolish("revise")}
+                                disabled={!!polishing || busy}
+                                className="rounded-md bg-accent px-2.5 py-1 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+                              >
+                                {polishing === "revise" ? "Revising…" : "✨ Revise current"}
+                              </button>
+                              <button
+                                onClick={() => void runPolish("draft")}
+                                disabled={!!polishing || busy}
+                                className="rounded-md border border-accent/50 px-2.5 py-1 font-sans text-xs font-medium text-accent hover:bg-accent/10 disabled:opacity-50"
+                              >
+                                {polishing === "draft" ? "Drafting…" : "✨ Draft fresh"}
+                              </button>
+                              <span className="font-mono text-[10px] italic text-ink-muted">
+                                Revise keeps your wording; both preserve every point — review before saving.
+                              </span>
+                            </div>
+                          )}
                           <textarea
                             value={draftText}
                             onChange={(e) => setDraftText(e.target.value)}
                             rows={16}
                             className="w-full resize-y rounded-md border border-border bg-bg p-3 font-sans text-[13px] leading-relaxed text-ink focus:border-accent focus:outline-none"
                           />
+                          {polishNote && (
+                            <div className="mt-2 flex items-start justify-between gap-2 rounded-md border border-accent/30 bg-accent/[0.06] p-2">
+                              <p className="font-sans text-[12px] leading-relaxed text-ink-muted">
+                                <span className="font-semibold text-accent">AI draft applied — </span>
+                                {polishNote}
+                              </p>
+                              <button
+                                onClick={() => {
+                                  setDraftText(activeSection.body);
+                                  setPolishNote(null);
+                                }}
+                                className="shrink-0 rounded-md border border-border px-2 py-0.5 font-sans text-[11px] text-ink-muted hover:text-ink"
+                              >
+                                Restore original
+                              </button>
+                            </div>
+                          )}
                           <div className="mt-2 flex gap-2">
                             <button
                               onClick={() => void saveEdit()}
-                              disabled={busy || !draftText.trim()}
+                              disabled={busy || !!polishing || !draftText.trim()}
                               className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
                             >
                               Save
                             </button>
                             <button
-                              onClick={() => setEditing(false)}
+                              onClick={() => {
+                                setEditing(false);
+                                setPolishNote(null);
+                              }}
                               className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
                             >
                               Cancel
@@ -483,6 +571,95 @@ export default function ShowcasePanel({
           onClose={() => setDiagramsOpen(false)}
         />
       )}
+
+      {confirmReexpand && (
+        <ConfirmModal
+          title="Re-run the expansion?"
+          body="You've already run the Genus & Species Expansion — running it again will replace the current expansion in your draft. Continue?"
+          confirmLabel="Re-run expansion"
+          onConfirm={() => {
+            setConfirmReexpand(false);
+            void expand();
+          }}
+          onClose={() => setConfirmReexpand(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** A small confirm/cancel modal, styled like DiagramsProgressModal — used to guard
+ *  destructive re-runs (e.g. re-running an expansion already woven into the draft).
+ *  Closes on the backdrop, the ✕, Cancel, or Escape. */
+function ConfirmModal({
+  title,
+  body,
+  confirmLabel,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
+      <div
+        className="w-full max-w-md rounded-lg border border-border bg-panel shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
+              Genus &amp; Species
+            </div>
+            <div className="mt-0.5 font-sans text-sm font-semibold text-ink">{title}</div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-2 py-1 font-mono text-xs text-ink-muted hover:text-ink"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="p-6">
+          <p className="font-sans text-[13px] leading-relaxed text-ink-muted">{body}</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90"
+            >
+              {confirmLabel}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -759,6 +936,7 @@ function ActionButton({
   disabled,
   primary,
   hint,
+  tooltip,
 }: {
   label: string;
   icon: string;
@@ -766,11 +944,13 @@ function ActionButton({
   disabled?: boolean;
   primary?: boolean;
   hint?: string;
+  // Hover-only tooltip (no inline "(…)" text). Falls back to `hint` when unset.
+  tooltip?: string;
 }) {
   return (
     // Wrapper span carries the tooltip: a disabled <button> doesn't fire hover in
     // most browsers, so the title must live on a non-disabled element.
-    <span title={hint} className="flex w-full">
+    <span title={tooltip ?? hint} className="flex w-full">
       <button
         onClick={onClick}
         disabled={disabled}

@@ -35,6 +35,7 @@ type Body =
   | { op: "act"; projectId: string; cardId: string; input: CardActionInput }
   | { op: "message"; projectId: string; text: string }
   | { op: "edit_section"; projectId: string; key: string; body: string }
+  | { op: "polish_section"; projectId: string; key: string; mode: "draft" | "revise" }
   | { op: "expand"; projectId: string }
   | { op: "reset"; projectId: string };
 
@@ -119,6 +120,17 @@ export async function POST(req: Request) {
         const view = engine.editSection(body.key, body.body ?? "");
         await saveShowcase(body.projectId, engine);
         return NextResponse.json(view);
+      }
+      case "polish_section": {
+        // Returns a PROPOSAL only — no state change, so nothing is saved. The
+        // inventor reviews it in the editor and Saves via edit_section to accept.
+        const engine = await loadShowcase(body.projectId);
+        if (!engine) return NextResponse.json({ error: "no_session" }, { status: 409 });
+        const result = await engine.polishSection(body.key, body.mode);
+        if (!result) {
+          return NextResponse.json({ error: "not_a_narrative_section" }, { status: 400 });
+        }
+        return NextResponse.json(result);
       }
       case "expand": {
         const engine = await loadShowcase(body.projectId);

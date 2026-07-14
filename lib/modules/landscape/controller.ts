@@ -137,22 +137,39 @@ export class LandscapeModule {
     this.conversation.push({ ...turn, timestamp: this.now() });
   }
 
-  /** A compact description of the live Landscape state for the Helper. */
+  /**
+   * The live Landscape state for the Helper — this IS what's on the inventor's
+   * screen: each searched idea with its prior-art results (title, identifier,
+   * closeness, snippet). Rendered in full (bounded) so the Helper can answer
+   * questions about any specific result, not just the closest one.
+   */
   private helperContext(): string {
+    if (!this.ideas.length) return `Phase: ${this.phase}.\nNo concepts to search.`;
+    const cap = (s: string | undefined, n: number) =>
+      s && s.length > n ? `${s.slice(0, n)}…` : (s ?? "");
+    const ideas = this.ideas
+      .map((idea, ii) => {
+        const head = `[${ii + 1}] ${idea.title} — area looks ${idea.territory}; ${idea.sources.length} result(s); search ${idea.status}${idea.error ? ` (${idea.error})` : ""}`;
+        const sources = idea.sources.length
+          ? idea.sources
+              .slice(0, 8)
+              .map((s, si) => {
+                const close =
+                  typeof s.closeness === "number" ? `, closeness ${s.closeness.toFixed(2)}` : "";
+                const id = s.identifier ? ` (${s.identifier})` : "";
+                const snip = s.snippet ? `\n        ${cap(s.snippet, 300)}` : "";
+                return `    ${si + 1}. [${s.kind}] ${s.title}${id}${close}${snip}`;
+              })
+              .join("\n") + (idea.sources.length > 8 ? `\n    …(+${idea.sources.length - 8} more)` : "")
+          : "    (no results)";
+        return `${head}\n${sources}`;
+      })
+      .join("\n\n");
     return [
       `Phase: ${this.phase}.`,
-      this.ideas.length
-        ? `Concepts searched, with their closest prior art and how crowded the area is:\n${this.ideas
-            .map(
-              (i) =>
-                `- ${i.title} [${i.territory}] — ${i.sources.length} result(s)` +
-                (i.sources[0]?.title ? `; closest: "${i.sources[0].title}"` : ""),
-            )
-            .join("\n")}`
-        : "No concepts to search.",
-    ]
-      .filter(Boolean)
-      .join("\n");
+      "THE INVENTOR'S SCREEN RIGHT NOW — each idea with its prior-art results:",
+      ideas,
+    ].join("\n");
   }
 
   /** Everything the inventor has stated in their own words (the verbatim trail). */

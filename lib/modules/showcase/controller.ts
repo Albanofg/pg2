@@ -1,5 +1,6 @@
 import "server-only";
 import { EvidenceLedger, SharedConsciousness } from "@/lib/modules/shared";
+import { renderScreenCards } from "@/lib/modules/shared/helper-agent";
 import { hasCheckpoint, sealCheckpoint } from "@/lib/modules/shared/checkpoint";
 import {
   runAbstractRewriter,
@@ -10,10 +11,12 @@ import {
   runHelper,
   runKeyConceptAppender,
   runKeyConceptBroadener,
+  runSectionPolisher,
   runSpeciesSynthesizer,
   runSummaryExtender,
   runVerifier,
   type ConceptAspect,
+  type SectionPolishMode,
 } from "./agents";
 import { SHOWCASE_HUMAN_SOURCE_TYPES } from "./types";
 import type {
@@ -191,18 +194,56 @@ export class ShowcaseModule {
     this.conversation.push({ ...turn, timestamp: this.now() });
   }
 
-  /** A compact description of the live Showcase state for the Helper. */
+  /**
+   * The live Showcase state for the Helper. Includes the ACTUAL draft (the
+   * Invention Concept Blueprint sections) and the full Key Concept text, so
+   * "check my draft / what would you polish?" can be answered against the real
+   * words — not a status summary. Without the draft here, the Helper has nothing
+   * to review and can only guess.
+   */
   private helperContext(): string {
     const kept = this.species.filter((s) => s.kept).map((s) => s.species_type);
-    return [
+    const concepts = [...this.keyConcepts.values()];
+    const status = [
       `Phase: ${this.phase}. Broadening ${this.broadened ? "applied" : "not yet applied"}.`,
-      `Key Concepts: ${[...this.keyConcepts.values()].map((k) => k.title).join("; ") || "(none)"}.`,
       this.genus ? `Paradigm-neutral genus: ${this.genus.genus_name}.` : "",
       kept.length ? `Kept implementations: ${kept.join(", ")}.` : "",
       this.openCards.size ? `${this.openCards.size} card(s) open for the inventor's decision.` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    ].filter(Boolean);
+
+    const conceptBlock = concepts.length
+      ? [
+          "KEY CONCEPTS (the anchors; 'broadened' is the widened wording when present):",
+          ...concepts.map((k, i) =>
+            [
+              `(${i + 1}) ${k.title}`,
+              `    original: ${k.statement}`,
+              ...(k.broadened ? [`    broadened: ${k.broadened}`] : []),
+            ].join("\n"),
+          ),
+        ]
+      : ["KEY CONCEPTS: (none)"];
+
+    const draftBlock =
+      this.disclosure && this.disclosure.length
+        ? [
+            "THE CURRENT DRAFT — the Invention Concept Blueprint, section by section",
+            "(this IS the draft; quote from it when asked to review or polish it):",
+            ...this.disclosure.map((s) => `### ${s.label}\n${s.body || "(empty)"}`),
+          ]
+        : ["THE CURRENT DRAFT: not compiled yet — there is no draft text to review."];
+
+    const screenBlock = [
+      "THE INVENTOR'S SCREEN RIGHT NOW (the cards they are looking at / deciding on):",
+      renderScreenCards([...this.openCards.values()]),
+    ];
+
+    return [
+      status.join("\n"),
+      screenBlock.join("\n"),
+      conceptBlock.join("\n"),
+      draftBlock.join("\n\n"),
+    ].join("\n\n");
   }
 
   /** Everything the inventor has stated in their own words (the verbatim trail). */
@@ -243,6 +284,51 @@ export class ShowcaseModule {
       this.ledger.recordInventorSource("inventor_edit", next, ["showcase", "section-edit", key]);
     }
     return this.view();
+  }
+
+  /** The narrative sections the on-demand AI drafter/reviser is offered on. */
+  private static readonly NARRATIVE_SECTIONS = new Set(["background", "summary", "abstract"]);
+
+  static isNarrativeSection(key: string): boolean {
+    return ShowcaseModule.NARRATIVE_SECTIONS.has(key);
+  }
+
+  /**
+   * Draft or revise ONE narrative section with AI, on demand from the editor.
+   * Returns a PROPOSAL only — it does NOT mutate the draft. The inventor reviews
+   * it in the editor and Saves (via editSection) if they want it, so authorship
+   * still attaches to their acceptance. "revise" keeps their current text and
+   * only improves it; "draft" rebuilds from the established material. Both modes
+   * preserve every substantive point (enforced in the prompt), so a revise can't
+   * silently delete content. Null if the section isn't a narrative one.
+   */
+  async polishSection(
+    key: string,
+    mode: SectionPolishMode,
+  ): Promise<{ proposed: string; changeSummary: string; preserved: string[] } | null> {
+    const section = this.disclosure?.find((s) => s.key === key);
+    if (!section || !ShowcaseModule.isNarrativeSection(key)) return null;
+    const keptSpecies = this.species.filter((s) => s.kept);
+    const result = await runSectionPolisher(this.runAgent, {
+      sectionLabel: section.label,
+      mode,
+      currentBody: section.body,
+      genus: this.genus,
+      species: keptSpecies.length ? keptSpecies : this.species,
+      keyConcepts: [...this.keyConcepts.values()].map((k) => ({
+        title: k.title,
+        statement: k.statement,
+        ...(k.broadened ? { broadened: k.broadened } : {}),
+      })),
+      otherSections: (this.disclosure ?? [])
+        .filter((s) => s.key !== key)
+        .map((s) => ({ label: s.label, body: s.body })),
+    });
+    return {
+      proposed: result.body.trim(),
+      changeSummary: result.change_summary.trim(),
+      preserved: result.preserved_points,
+    };
   }
 
   /**

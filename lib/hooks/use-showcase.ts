@@ -191,6 +191,39 @@ export function useShowcase(projectId: string | null) {
   );
   const expand = useCallback(() => post({ op: "expand" }), [post]);
 
+  /**
+   * Draft or revise ONE narrative section (Background / Summary / Abstract) with
+   * AI, on demand from the editor. Returns a PROPOSAL — it does NOT change the
+   * saved draft; the caller drops it into the editable box for the inventor to
+   * review and Save. "revise" preserves their text and only improves it; "draft"
+   * rebuilds from the established material. Null on failure.
+   */
+  const polishSection = useCallback(
+    async (
+      key: string,
+      mode: "draft" | "revise",
+    ): Promise<{ proposed: string; changeSummary: string; preserved: string[] } | null> => {
+      if (!projectId) return null;
+      try {
+        const res = await fetch("/api/showcase", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ op: "polish_section", key, mode, projectId }),
+        });
+        if (!res.ok) {
+          const d = (await res.json().catch(() => null)) as { detail?: string } | null;
+          throw new Error(d?.detail || `polish request failed (${res.status})`);
+        }
+        return (await res.json()) as { proposed: string; changeSummary: string; preserved: string[] };
+      } catch (e) {
+        setError("Couldn't draft that section just now. Please try again in a moment.");
+        console.error(e);
+        return null;
+      }
+    },
+    [projectId],
+  );
+
   /** Export the finished disclosure + RFC-3161-sealed proof package. */
   const exportDisclosure = useCallback(async (): Promise<{
     disclosure: string;
@@ -261,6 +294,7 @@ export function useShowcase(projectId: string | null) {
     decide,
     tell,
     editSection,
+    polishSection,
     expand,
     restart,
     exportDisclosure,

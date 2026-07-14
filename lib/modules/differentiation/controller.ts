@@ -2,6 +2,7 @@ import "server-only";
 import { EvidenceLedger, SharedConsciousness } from "@/lib/modules/shared";
 import { hasCheckpoint, sealCheckpoint } from "@/lib/modules/shared/checkpoint";
 import type { ConceptObject, HelperTurn } from "@/lib/modules/shared";
+import { renderScreenCards } from "@/lib/modules/shared/helper-agent";
 import {
   runDifferentiationFormalizer,
   runDifferentiationTeacher,
@@ -266,6 +267,8 @@ export class DifferentiationModule {
         "Phase: anchoring — the inventor is choosing which of these Key Concepts to ANCHOR (keep as a protected Key Concept) vs DROP.",
         "If they ask which to keep/anchor: recommend anchoring the ones that are genuinely distinct against the prior art, and dropping or merging any that merely restate another concept on the slate. Name specific concepts by their title, say which to keep and which look like duplicates of each other, and give a one-line reason each. Never invent a new mechanism — judge only what's written.",
         slate ? `The Key Concepts up for anchoring:\n${slate}` : "No differentiated concepts on the slate yet.",
+        "THE INVENTOR'S SCREEN RIGHT NOW (the cards they are looking at / deciding on):",
+        renderScreenCards([...this.openCards.values()]),
       ]
         .filter(Boolean)
         .join("\n");
@@ -282,7 +285,8 @@ export class DifferentiationModule {
             )
             .join("\n")}`
         : "No active concepts yet.",
-      this.openCards.size ? `${this.openCards.size} card(s) open for the inventor's decision.` : "",
+      "THE INVENTOR'S SCREEN RIGHT NOW (the cards they are looking at / deciding on):",
+      renderScreenCards([...this.openCards.values()]),
     ]
       .filter(Boolean)
       .join("\n");
