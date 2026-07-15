@@ -42,22 +42,119 @@ export type Genus = {
   input_pattern: string;
   transformation_pattern: string;
   output_pattern: string;
-  /** V1's explicit rule-engine-AND-agent implementability statement. */
+  /** The rule-engine / language-model / agent implementability narrative. */
   paradigm_neutrality_check?: string;
-  /* --- V2 §101/§112 scaffolding (absent on genera extracted by V1). --- */
-  /** The mandatory input-structure→output-structure mapping under constraints C. */
-  formal_mapping_statement?: string;
-  /** Machine-checkable technical conditions the transformation enforces (2–5). */
+  /* --- Formalized ONLY from the inventor's inputs (empty when absent); the
+   * Extractor never authors these. Where the genus needs one the inputs don't
+   * supply, a Gap of class missing_constraint / missing_invariant is opened. --- */
+  /** Machine-checkable technical conditions the transformation enforces. */
   computational_constraints?: string[];
-  /** Properties holding across every valid execution (2–4). */
+  /** Properties holding across every valid execution. */
   logical_invariants?: string[];
-  /** The specific deficiency in prior computational approaches. */
-  technical_problem?: string;
-  /** The change in computing-system behaviour the mechanism produces. */
-  technical_effect?: string;
+};
+
+/* ------------------------------------------------------------------ *
+ * The pipeline-wide gap object
+ *
+ * Where a layer needs substance the inventor's inputs do not supply, it OPENS a
+ * gap instead of authoring the substance (that is the structural POHC lock). The
+ * agent that hits the gap declares it in its structured output; the controller
+ * records it here and writes a `gap_opened` machine event to the Ledger. A gap's
+ * `description` states the ABSENCE only — never the missing content itself.
+ * Lives in the Showcase engine state (persisted in module_state), not a DB table.
+ * ------------------------------------------------------------------ */
+
+export type GapClass =
+  | "missing_constraint" // genus needs a constraint no input supplies (Layer 2)
+  | "missing_invariant" // genus needs an invariant no input supplies (Layer 2)
+  | "missing_mechanism" // a candidate/section needs a mechanism's "how" (Layers 4/5)
+  | "missing_step" // the formalizer needs a step no input supplies (Layer 5)
+  | "missing_criterion_source"; // no upstream inventor material to lift a criterion from (Layer 4)
+
+export type GapOrigin =
+  | "genus_extractor"
+  | "enumerator"
+  | "formalizer"
+  | "section_polisher";
+
+/** What artifact/field the gap attaches to. */
+export type GapLocus =
+  | { kind: "genus_field"; ref: string } // e.g. "computational_constraints"
+  | { kind: "species"; ref: string } // species candidate id
+  | { kind: "section"; ref: string }; // disclosure section key
+
+export type GapStatus = "open" | "resolved" | "dismissed";
+
+/** One opened gap, as stored on the engine and surfaced on the view. */
+export type Gap = {
+  id: string;
+  gapClass: GapClass;
+  origin: GapOrigin;
+  locus: GapLocus;
+  /** States what is absent and why the step needed it — never the missing content. */
+  description: string;
+  /** Ledger ids of the inventor material consulted (may be empty). */
+  sourceLedgerIds: string[];
+  status: GapStatus;
+  createdAt: string;
+};
+
+/**
+ * What an agent DECLARES when it hits a gap (a subset of Gap). The controller
+ * fills in id / origin / status / createdAt / sourceLedgerIds. `field` names the
+ * artifact/field it attaches to; the controller maps it onto the right GapLocus.
+ */
+export type DeclaredGap = {
+  gap_class: GapClass;
+  field: string;
+  note: string;
 };
 
 export type SpeciesType = "ai_assisted" | "ai_native" | "agentic";
+
+/* ------------------------------------------------------------------ *
+ * Layer 4 (redesign): enumerated candidates + skeptic grades
+ *
+ * The Enumerator surfaces established patterns mapped onto the genus; the Grader
+ * scores each. Candidates are retrieval, never authored mechanism. These feed the
+ * Layer 5 sweep: survive and demote are both SHOWN (no hidden pool), while reject
+ * deletes duplicates and failures so the inventor never sees one idea twice.
+ * ------------------------------------------------------------------ */
+
+export type CandidateVerdict = "survive" | "demote" | "reject";
+
+/** One enumerated candidate: an existing approach mapped onto the invention. */
+export type Candidate = {
+  id: string;
+  /** Emergent plain grouping label (e.g. "keeping a memory of what happened"). */
+  family: string;
+  /** Short plain handle. */
+  label: string;
+  /** The familiar approach it draws from, in plain words. */
+  source: string;
+  /** What it would do for this invention, in the inventor's words. */
+  mapping: string;
+  /** The honest give-and-take, one plain sentence. */
+  tradeoff: string;
+};
+
+/** The skeptic Grader's scorecard for one candidate. */
+export type CandidateGrade = {
+  traceability: number;
+  fidelity: number;
+  specificity: number;
+  distinctness: number;
+  verdict: CandidateVerdict;
+  reason: string;
+};
+
+export type GradedCandidate = Candidate & { grade: CandidateGrade };
+
+/** A tap-able criterion fragment lifted verbatim from the inventor's own words. */
+export type CriterionFragment = { text: string; sourceId: string };
+
+/** The inventor's Layer 4 criterion answer (a tapped fragment or free text). */
+export type Criterion = { text: string; sourceId?: string };
 
 export type Species = {
   species_type: SpeciesType;
@@ -202,11 +299,25 @@ export type LedgerEntryType =
   | "agent_appended_concept" // a genus/species/hardware Key Concept was appended
   | "disclosure_extended" // the disclosure prose was enriched across implementations
   | "broadening_withheld" // a piece failed the Boundary and was not surfaced
+  | "gap_opened" // a layer flagged missing substance instead of authoring it
+  | "gap_resolved" // an opened gap was later satisfied
+  | "gap_dismissed" // an opened gap was superseded (e.g. on regeneration)
+  // Layer 4/5 (redesign)
+  | "criterion_set" // the inventor's Layer 4 criterion (verbatim; provenance in tags)
+  | "candidate_kept" // the inventor confirmed an enumerated candidate fits their criterion
+  | "agent_criterion_fragments" // the fragmenter surfaced tap-able criterion options
+  | "agent_breadth" // the breadth assessor sized the invention (narrow/moderate/broad)
+  | "agent_enumerated" // the enumerator surfaced candidates for a species type
+  | "agent_graded" // the grader scored a species type's candidates
+  | "agent_formalized" // the formalizer wrote a kept candidate into the disclosure
   | "module_completed";
 
 export const SHOWCASE_HUMAN_SOURCE_TYPES: ReadonlySet<string> = new Set<LedgerEntryType>([
   "inventor_note",
   "inventor_edit",
+  // The Layer 4 criterion is the inventor's own words (a lifted fragment or free
+  // text); it is recorded verbatim, with the provenance path carried in its tags.
+  "criterion_set",
 ]);
 
 /* ------------------------------------------------------------------ *
@@ -245,26 +356,8 @@ export type WidenedReviewCard = {
 };
 
 /* ------------------------------------------------------------------ *
- * The V1 two-gate expansion review
+ * The V1 second-gate expansion review (Gate 2 only; Gate 1 retired)
  * ------------------------------------------------------------------ */
-
-/** One species inside Gate 1's single review screen. */
-export type SpeciesReviewItem = {
-  speciesType: SpeciesType;
-  /** Display name, e.g. "AI-Assisted" / "AI-Native" / "Agentic". */
-  label: string;
-  /** The species' architectural description (editable by the inventor). */
-  description: string;
-  status: "pending" | "approved" | "rejected";
-};
-
-/** GATE 1 — "Review AI implementations": all species on ONE screen, each
- *  Approve / Edit / Reject, then Confirm & Continue. */
-export type SpeciesReviewCard = {
-  id: string;
-  type: "species_review";
-  items: SpeciesReviewItem[];
-};
 
 export type ExpansionArtifactKind =
   | "broadened_kc"
@@ -296,12 +389,54 @@ export type ExpansionReviewCard = {
   artifacts: ExpansionArtifact[];
 };
 
+/* ------------------------------------------------------------------ *
+ * Layer 4/5 (redesign) cards
+ * ------------------------------------------------------------------ */
+
+/** One tap-able criterion fragment (verbatim from the inventor's own words). */
+export type CriterionFragmentOption = { id: string; text: string; sourceId: string };
+
+/** Layer 4 criterion question — tap a fragment, or "none of these → type your own". */
+export type CriterionCard = {
+  id: string;
+  type: "criterion";
+  question: string;
+  fragments: CriterionFragmentOption[];
+};
+
+/** One candidate on the sweep. */
+export type SweepItem = {
+  candidateId: string;
+  family: string;
+  label: string;
+  source: string;
+  mapping: string;
+  tradeoff: string;
+  /** "kept" = picked; "pending" = not picked. */
+  status: "pending" | "kept";
+};
+
+/** One emergent family of approaches — keep as many as fit; duplicates already deleted. */
+export type SweepGroup = {
+  /** The emergent grouping label (also the on-screen header). */
+  family: string;
+  items: SweepItem[];
+};
+
+/** Layer 5 surface — grouped by emergent family; keep as many as fit. */
+export type SweepCard = {
+  id: string;
+  type: "candidate_sweep";
+  groups: SweepGroup[];
+};
+
 export type Module5Card =
   | ChoiceCard
   | VariationCard
   | WidenedReviewCard
-  | SpeciesReviewCard
-  | ExpansionReviewCard;
+  | ExpansionReviewCard
+  | CriterionCard
+  | SweepCard;
 
 /* ------------------------------------------------------------------ *
  * Inventor action inputs
@@ -314,13 +449,6 @@ export type WidenedActionInput =
   | { action: "discard" }
   | { action: "request_edit"; correction: string };
 
-/** Gate 1 actions: decide each species, then confirm the set. */
-export type SpeciesReviewInput =
-  | { action: "approve"; speciesType: SpeciesType }
-  | { action: "reject"; speciesType: SpeciesType }
-  | { action: "edit"; speciesType: SpeciesType; text: string }
-  | { action: "confirm" };
-
 /** Gate 2 actions: per-artifact review, then finalize the expansion. */
 export type ExpansionReviewInput =
   | { action: "keep"; artifactId: string }
@@ -329,12 +457,22 @@ export type ExpansionReviewInput =
   | { action: "regenerate"; artifactId: string }
   | { action: "finalize" };
 
+/** Layer 4 criterion answer: tap-only. Every option shown is one the inventor
+ *  can confirm — there is no free-text / compose path anywhere in this flow. */
+export type CriterionInput = { action: "choose"; fragmentId: string };
+
+/** Layer 5 sweep actions — tap-only, keep-many. */
+export type SweepInput =
+  | { action: "keep"; candidateId: string } // toggle-keep this one
+  | { action: "finalize" }; // kept candidates → formalizer
+
 export type CardActionInput =
   | ChoiceInput
   | VariationInput
   | WidenedActionInput
-  | SpeciesReviewInput
-  | ExpansionReviewInput;
+  | ExpansionReviewInput
+  | CriterionInput
+  | SweepInput;
 
 /* ------------------------------------------------------------------ *
  * View + deps
@@ -344,8 +482,9 @@ export type Module5Phase =
   | "choosing" // broaden or skip
   | "selecting_variations" // (legacy) keep which species
   | "approving_widened" // (legacy) approve each broadened Key Concept
-  | "reviewing_species" // GATE 1: approve/edit/reject each AI implementation
-  | "reviewing_artifacts" // GATE 2: review every expansion artifact, then finalize
+  | "reviewing_artifacts" // (legacy GATE 2) review every expansion artifact, then finalize
+  | "awaiting_criterion" // Layer 4: inventor answers "what must any implementation get right?"
+  | "sweeping" // Layer 5: keep/dismiss enumerated candidates
   | "ready";
 
 export type Module5View = {
@@ -364,13 +503,14 @@ export type Module5View = {
   complete: boolean;
   /** The finished figures + their descriptions — the ICB's Drawings part. */
   drawings: ShowcaseDrawing[];
+  /** Gaps opened across the pipeline (missing substance a layer refused to author). */
+  gaps: Gap[];
 };
 
 /** The sub-agents Module 5 calls. Never user-facing. */
 export type AgentName =
   | "helper"
   | "genus-extractor"
-  | "species-synthesizer"
   | "key-concept-broadener"
   | "verifier"
   // The 5c "extender" second pass — enriches the disclosure with multi-paradigm depth.
@@ -382,7 +522,14 @@ export type AgentName =
   // Plans the figure set + numeral ledger + grounded descriptions (plan-mode drawings).
   | "figure-planner"
   // On-demand drafter/reviser for the narrative disclosure sections (in the editor).
-  | "section-polisher";
+  | "section-polisher"
+  // Layer 4/5 (redesign): breadth → enumerate → grade → formalize.
+  | "criterion-fragmenter"
+  | "breadth-assessor"
+  | "baseline-builder"
+  | "enumerator"
+  | "grader"
+  | "formalizer";
 
 export type ShowcaseDeps = {
   runAgent: AgentRunner;

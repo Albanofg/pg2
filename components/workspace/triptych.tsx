@@ -115,7 +115,9 @@ export default function Triptych() {
         ) : stage === "brainstorm" ? (
           <BrainstormPanel maxW={maxW} />
         ) : stage === "showcase" ? (
-          <ShowcasePanel projectId={projectId} maxW={maxW} />
+          <ShowcasePanel projectId={projectId} maxW={maxW} mode="draft" />
+        ) : stage === "genus_species" ? (
+          <ShowcasePanel projectId={projectId} maxW={maxW} mode="expansion" />
         ) : stage === "differentiation" ? (
           <DifferentiationPanel projectId={projectId} maxW={maxW} />
         ) : stage === "landscape" ? (

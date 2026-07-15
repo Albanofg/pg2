@@ -32,14 +32,17 @@ export async function POST(req: Request) {
     // key present is the furthest stage reached. Falls back to Conception (the
     // first working stage) when nothing has been persisted yet.
     const ms = (project.moduleState ?? {}) as Record<string, unknown>;
-    const STAGE_ORDER = [
-      "showcase",
-      "differentiation",
-      "landscape",
-      "maturation",
-      "conception",
-    ] as const;
-    const stage = STAGE_ORDER.find((k) => ms[k] != null) ?? "conception";
+    // Module 5 is one engine split across two mandatory steps: the Genus & Species
+    // expansion, then the final draft. Resume ON the expansion until it's applied
+    // (`broadened`), then on the draft — so the mandatory step can't be skipped.
+    let stage: string;
+    if (ms.showcase != null) {
+      const sc = ms.showcase as { broadened?: boolean } | null;
+      stage = sc?.broadened ? "showcase" : "genus_species";
+    } else {
+      const STAGE_ORDER = ["differentiation", "landscape", "maturation", "conception"] as const;
+      stage = STAGE_ORDER.find((k) => ms[k] != null) ?? "conception";
+    }
 
     return NextResponse.json({
       project: {

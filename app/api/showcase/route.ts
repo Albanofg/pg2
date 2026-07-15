@@ -27,6 +27,7 @@ const EMPTY_VIEW: Module5View = {
   ledger: [],
   complete: false,
   drawings: [],
+  gaps: [],
 };
 
 type Body =

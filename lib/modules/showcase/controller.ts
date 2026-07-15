@@ -10,21 +10,31 @@ import {
   runGenusExtractor,
   runHelper,
   runKeyConceptAppender,
+  runBaselineBuilder,
+  runBreadthAssessor,
+  runCriterionFragmenter,
+  runEnumerator,
+  runFormalizer,
+  runGrader,
   runKeyConceptBroadener,
   runSectionPolisher,
-  runSpeciesSynthesizer,
   runSummaryExtender,
   runVerifier,
   type ConceptAspect,
   type SectionPolishMode,
 } from "./agents";
+import { SHOWCASE_CONFIG } from "./config";
 import { SHOWCASE_HUMAN_SOURCE_TYPES } from "./types";
 import type {
   ChoiceInput,
+  DeclaredGap,
   DisclosureSection,
   ExpansionArtifact,
   ExpansionReviewInput,
   FigureRenderer,
+  Gap,
+  GapLocus,
+  GapOrigin,
   Genus,
   HelperTurn,
   Module5Card,
@@ -34,10 +44,18 @@ import type {
   ShowcaseDrawing,
   ShowcaseKeyConcept,
   Species,
-  SpeciesReviewInput,
   SpeciesType,
   VariationInput,
   WidenedActionInput,
+  CandidateGrade,
+  Criterion,
+  CriterionFragmentOption,
+  CriterionInput,
+  GradedCandidate,
+  SweepCard,
+  SweepGroup,
+  SweepInput,
+  SweepItem,
 } from "./types";
 
 /**
@@ -56,8 +74,69 @@ type Intent =
   | { kind: "choice" }
   | { kind: "variation"; speciesType: SpeciesType }
   | { kind: "widened"; conceptId: string }
-  | { kind: "species_review" }
-  | { kind: "expansion_review" };
+  | { kind: "expansion_review" }
+  | { kind: "criterion" }
+  | { kind: "sweep" };
+
+/** A graded candidate plus its sweep bookkeeping (controller-internal). */
+type StoredCandidate = GradedCandidate & {
+  // "shown" = surfaced on the sweep; "rejected" = a duplicate or failure, deleted.
+  bucket: "shown" | "rejected";
+  surfaced: boolean;
+  decision?: "kept" | "dismissed";
+  /** A mandatory standard build-style — always present, never graded or dropped. */
+  mandatory?: boolean;
+  /** The build-style tag for a mandatory card (provenance only; never shown). */
+  speciesType?: SpeciesType;
+};
+
+/**
+ * The three mandatory build-styles, in the order they're always shown first. Each
+ * carries its OWN family so they sit among the emergent ways as equals — never
+ * clustered under a "standard ways" umbrella. The text here is only a fallback for
+ * when the Baseline Builder omits a style or fails — the agent's plain,
+ * invention-specific card overrides it whenever present.
+ */
+const BASELINE_STYLES: {
+  type: SpeciesType;
+  family: string;
+  label: string;
+  source: string;
+  mapping: string;
+  tradeoff: string;
+}[] = [
+  {
+    type: "ai_assisted",
+    family: "a person with an AI helping",
+    label: "An AI that helps a person do it",
+    source: "A person does the work while an AI suggests, drafts, or checks alongside them.",
+    mapping: "Your invention runs with a person in charge and an AI helping at each step.",
+    tradeoff: "Quickest to get going and easy to trust, but a person has to stay involved.",
+  },
+  {
+    type: "ai_native",
+    family: "an AI doing it directly",
+    label: "An AI that does it directly",
+    source: "An AI takes the input and produces the result itself, without a person doing each step.",
+    mapping: "Your invention's core work is done by an AI directly, from input to result.",
+    tradeoff: "Hands-off once it works, but it takes more care to get it reliable.",
+  },
+  {
+    type: "agentic",
+    family: "a self-running helper",
+    label: "An autonomous helper that works in steps",
+    source: "A self-directed helper breaks the job into steps, decides what to do next, and carries them out.",
+    mapping: "Your invention is carried out by a self-directed helper that works through it step by step.",
+    tradeoff: "Can handle messier jobs on its own, but is the most involved to build and oversee.",
+  },
+];
+
+/** Deterministic, position-independent hash for stable KC-derived statement ids. */
+function stableHash(text: string): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
 
 export type ShowcaseSnapshot = {
   phase: Module5Phase;
@@ -72,6 +151,12 @@ export type ShowcaseSnapshot = {
   conversation: HelperTurn[];
   ledger: import("@/lib/modules/shared").LedgerEntry[];
   drawings: ShowcaseDrawing[];
+  // Gaps are NOT stored here — the Ledger (above) is their system of record; the
+  // engine derives them from its gap events on read.
+  // Layer 4/5 (redesign) state.
+  criterion?: Criterion | null;
+  criterionEntryId?: string | null;
+  candidates?: StoredCandidate[];
 };
 
 export class ShowcaseModule {
@@ -92,6 +177,10 @@ export class ShowcaseModule {
   private intents = new Map<string, Intent>();
   private conversation: HelperTurn[] = [];
   private drawings: ShowcaseDrawing[] = [];
+  // Layer 4/5 (redesign) state — populated only on the flag-on path.
+  private criterion: Criterion | null = null;
+  private criterionEntryId: string | null = null;
+  private candidates: StoredCandidate[] = [];
 
   constructor(deps: ShowcaseDeps) {
     this.runAgent = deps.runAgent;
@@ -124,7 +213,7 @@ export class ShowcaseModule {
       id,
       type: "choice",
       question:
-        "Want to broaden the disclosure across alternative implementations, so the mechanism is covered however it's built? You can also skip straight to the finished draft.",
+        "Next, we'll explore the different ways your invention could be built, so it's protected no matter how someone makes it. Tap below to start.",
     });
     this.intents.set(id, { kind: "choice" });
     return this.view();
@@ -136,8 +225,9 @@ export class ShowcaseModule {
       | ChoiceInput
       | VariationInput
       | WidenedActionInput
-      | SpeciesReviewInput
-      | ExpansionReviewInput,
+      | ExpansionReviewInput
+      | CriterionInput
+      | SweepInput,
   ): Promise<Module5View> {
     const card = this.openCards.get(cardId);
     const intent = this.intents.get(cardId);
@@ -153,11 +243,14 @@ export class ShowcaseModule {
       case "widened_review":
         await this.handleWidened(cardId, intent, input as WidenedActionInput);
         break;
-      case "species_review":
-        await this.handleSpeciesReview(cardId, input as SpeciesReviewInput);
-        break;
       case "expansion_review":
         await this.handleExpansionReview(cardId, input as ExpansionReviewInput);
+        break;
+      case "criterion":
+        await this.handleCriterion(cardId, input as CriterionInput);
+        break;
+      case "candidate_sweep":
+        await this.handleSweep(cardId, input as SweepInput);
         break;
     }
     this.maybeCheckpoint();
@@ -268,6 +361,7 @@ export class ShowcaseModule {
       ledger: this.ledger.serialize(),
       complete: this.isComplete(),
       drawings: this.drawings.map((d) => ({ ...d, numerals: [...d.numerals] })),
+      gaps: this.deriveGaps(),
     };
   }
 
@@ -324,11 +418,100 @@ export class ShowcaseModule {
         .filter((s) => s.key !== key)
         .map((s) => ({ label: s.label, body: s.body })),
     });
+    // Gap parity with the extractor: substance the section needs but the inputs
+    // don't supply is flagged, not filled. polishSection is on-demand and may run
+    // repeatedly on one section, so supersede this section's prior open polisher
+    // gaps before recording the fresh set (append-only: dismiss, don't delete).
+    for (const g of this.openGapsFrom("section_polisher")) {
+      if (g.locus.kind === "section" && g.locus.ref === section.label) {
+        this.closeGap(g, "dismissed");
+      }
+    }
+    // Force the locus to this section (don't trust the model to echo the label).
+    this.recordGaps(
+      "section_polisher",
+      result.gaps.map((g) => ({ ...g, field: section.label })),
+    );
     return {
       proposed: result.body.trim(),
       changeSummary: result.change_summary.trim(),
       preserved: result.preserved_points,
     };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * The pipeline gap object — a layer flags missing substance instead of
+   * authoring it. The shared Ledger is the SYSTEM OF RECORD: a gap is a
+   * `gap_opened` event carrying the full gap in `meta.gap`; status changes are
+   * `gap_resolved` / `gap_dismissed` events (append-only, never a mutation).
+   * Current gap state is DERIVED by folding those events (see `deriveGaps`).
+   * ------------------------------------------------------------------ */
+
+  private static gapLocus(origin: GapOrigin, field: string): GapLocus {
+    if (origin === "formalizer" || origin === "section_polisher") {
+      return { kind: "section", ref: field };
+    }
+    if (origin === "enumerator") return { kind: "species", ref: field };
+    return { kind: "genus_field", ref: field };
+  }
+
+  /** Record an agent's declared gaps as `gap_opened` Ledger events (source of record). */
+  private recordGaps(
+    origin: GapOrigin,
+    declared: DeclaredGap[],
+    sourceLedgerIds: string[] = [],
+  ): void {
+    for (const d of declared) {
+      const note = d.note?.trim();
+      if (!note) continue; // a gap with no stated absence is not a gap
+      const gap: Gap = {
+        id: this.genId(),
+        gapClass: d.gap_class,
+        origin,
+        locus: ShowcaseModule.gapLocus(origin, d.field),
+        description: note,
+        sourceLedgerIds,
+        status: "open",
+        createdAt: this.now(),
+      };
+      this.ledger.recordMachineEvent("gap_opened", ["showcase", origin, gap.gapClass], {
+        gap,
+        field: d.field,
+      });
+    }
+  }
+
+  /** Emit a status-change event for a gap (append-only; state is re-derived). */
+  private closeGap(gap: Gap, status: "resolved" | "dismissed"): void {
+    this.ledger.recordMachineEvent(
+      status === "resolved" ? "gap_resolved" : "gap_dismissed",
+      ["showcase", gap.origin],
+      { gapId: gap.id },
+    );
+  }
+
+  /** Current gaps, folded from the Ledger's gap events. */
+  private deriveGaps(): Gap[] {
+    const byId = new Map<string, Gap>();
+    for (const e of this.ledger.all()) {
+      if (e.type === "gap_opened") {
+        const g = e.meta?.gap as Gap | undefined;
+        if (g?.id) {
+          byId.set(g.id, { ...g, sourceLedgerIds: [...(g.sourceLedgerIds ?? [])] });
+        }
+      } else if (e.type === "gap_resolved" || e.type === "gap_dismissed") {
+        const id = e.meta?.gapId as string | undefined;
+        const g = id ? byId.get(id) : undefined;
+        if (g) g.status = e.type === "gap_resolved" ? "resolved" : "dismissed";
+      }
+    }
+    return [...byId.values()];
+  }
+
+  /** Open gaps of the given origins (for supersede-on-regeneration). */
+  private openGapsFrom(...origins: GapOrigin[]): Gap[] {
+    const set = new Set(origins);
+    return this.deriveGaps().filter((g) => g.status === "open" && set.has(g.origin));
   }
 
   /**
@@ -342,13 +525,24 @@ export class ShowcaseModule {
         c.type === "choice" ||
         c.type === "variation" ||
         c.type === "widened_review" ||
-        c.type === "species_review" ||
-        c.type === "expansion_review"
+        c.type === "expansion_review" ||
+        c.type === "criterion" ||
+        c.type === "candidate_sweep"
       ) {
         this.resolveCard(id);
       }
     }
     this.species = [];
+    // Reset Layer 4/5 working state so a re-run starts the criterion/sweep clean.
+    this.criterion = null;
+    this.criterionEntryId = null;
+    this.candidates = [];
+    // Re-expansion regenerates the genus and species, so supersede the gaps those
+    // stages opened (append-only: emit a dismissal, don't delete). Later-stage
+    // gaps (e.g. the formalizer) survive.
+    for (const g of this.openGapsFrom("genus_extractor", "enumerator")) {
+      this.closeGap(g, "dismissed");
+    }
     await this.generateVariations();
     return this.view();
   }
@@ -456,120 +650,497 @@ export class ShowcaseModule {
   }
 
   private async generateVariations(): Promise<void> {
+    // A (re-)run means the broadening has NOT been applied yet, so reset the flag.
+    // Without this, restarting the stage after a prior completion left `broadened`
+    // true, and the client auto-advanced to the draft the moment the sweep resolved —
+    // jumping past the broadening review (part 2) and stranding it on this page.
+    this.broadened = false;
     // Genus — the paradigm-neutral mechanism beneath the Key Concepts.
     const kcs = [...this.keyConcepts.values()];
     try {
-      this.genus = await runGenusExtractor(this.runAgent, {
+      const { gaps: genusGaps, ...genus } = await runGenusExtractor(this.runAgent, {
         keyConcepts: kcs.map((k) => ({ title: k.title, statement: k.statement })),
         verbatim: kcs.flatMap((k) => k.verbatim),
       });
+      this.genus = genus;
       this.ledger.recordMachineEvent("agent_genus", ["showcase"], {});
+      // Constraints/invariants the inputs didn't supply are simply left empty — a
+      // thin genus still yields the forest. We do NOT surface these as gaps: they
+      // concern an internal distillation step the inventor never sees, so a card
+      // about them is noise. (Genus stays POHC-safe by never AUTHORING the missing
+      // substance — see the extractor prompt.) `genusGaps` is intentionally dropped.
+      void genusGaps;
     } catch (err) {
       console.error("[showcase] genus extraction failed", err);
-      this.complete(); // can't broaden without a genus
+      this.complete(); // can't go on without a genus
       return;
     }
 
-    // Synthesize one species per type. NO verifier gate here: a species is BY
-    // DESIGN an alternative implementation naming components the inventor never
-    // stated (that is its whole purpose), so checking it against the inventor's
-    // verbatim rejects every good species — which blanked the screen. V1's gate
-    // is the HUMAN one: Gate 1 approve/edit/reject, right below. The synthesis
-    // prompt itself enforces no-capability-invention against the genus.
-    for (const t of SPECIES_TYPES) {
-      try {
-        const sp = await runSpeciesSynthesizer(this.runAgent, { genus: this.genus, speciesType: t });
-        this.ledger.recordMachineEvent("agent_species", ["showcase", t], {});
-        this.species.push(sp);
-      } catch (err) {
-        console.error("[showcase] species synthesis failed for", t, err);
-      }
-    }
-
-    if (!this.species.length) {
-      // Synthesis itself failed — say so instead of finishing silently.
-      this.pushTurn({
-        role: "helper",
-        text: "The expansion couldn't draft the alternative implementations this time — hit Genus & Species Expansion to try again.",
+    // Size the invention: how many genuinely distinct build-directions ("trees")
+    // does this genus ("forest") warrant? Narrow → a few; broad → many. The count
+    // is assessed per ICB case, not fixed at three.
+    let band: "narrow" | "moderate" | "broad" = "moderate";
+    try {
+      const b = await runBreadthAssessor(this.runAgent, {
+        genus: this.genus,
+        keyConcepts: [...this.keyConcepts.values()].map((k) => ({
+          title: k.title,
+          statement: k.statement,
+        })),
       });
-      this.broadened = false;
-      this.complete();
-      return;
+      band = b.band;
+      this.ledger.recordMachineEvent("agent_breadth", ["showcase", band], { reason: b.reason });
+    } catch (err) {
+      console.error("[showcase] breadth assessor failed (defaulting to moderate)", err);
     }
-    // GATE 1 (V1): all species on ONE review screen — approve/edit/reject each,
-    // then Confirm & Continue. Nothing is applied yet.
-    this.emitSpeciesReview();
-    this.phase = "reviewing_species";
+
+    // The flow: genus → enumerate → grade → sweep → formalize. No opening
+    // question — candidates come first, and keep/dismiss IS the signal.
+    await this.generateCandidates(band);
   }
 
   /* ------------------------------------------------------------------ *
-   * The V1 two-gate expansion review
+   * Layer 4/5 (redesign) flow — criterion → enumerate → grade → sweep →
+   * formalize. Runs only when SHOWCASE_CONFIG.layer4.live is true.
    * ------------------------------------------------------------------ */
 
-  private speciesLabel(t: SpeciesType): string {
-    return t === "ai_assisted" ? "AI-Assisted" : t === "ai_native" ? "AI-Native" : "Agentic";
-  }
-
-  private emitSpeciesReview(): void {
-    const id = this.genId();
-    this.openCards.set(id, {
-      id,
-      type: "species_review",
-      items: this.species.map((sp) => ({
-        speciesType: sp.species_type,
-        label: this.speciesLabel(sp.species_type),
-        description: sp.architectural_description,
-        status: "pending" as const,
-      })),
-    });
-    this.intents.set(id, { kind: "species_review" });
-  }
-
-  /** GATE 1 actions: decide each species; Confirm generates the artifacts. */
-  private async handleSpeciesReview(cardId: string, input: SpeciesReviewInput): Promise<void> {
-    const card = this.openCards.get(cardId);
-    if (!card || card.type !== "species_review") return;
-
-    if (input.action === "approve" || input.action === "reject") {
-      const item = card.items.find((i) => i.speciesType === input.speciesType);
-      if (item) item.status = input.action === "approve" ? "approved" : "rejected";
-      this.ledger.recordDecision("variation_action", ["showcase", input.action], {
-        speciesType: input.speciesType,
-      });
-      return;
-    }
-    if (input.action === "edit") {
-      const item = card.items.find((i) => i.speciesType === input.speciesType);
-      const sp = this.species.find((s) => s.species_type === input.speciesType);
-      const text = input.text.trim();
-      if (item && sp && text) {
-        item.description = text;
-        sp.architectural_description = text;
-        this.ledger.recordInventorSource("inventor_edit", text, ["showcase", "species-edit"]);
+  /** The inventor's upstream statements, with deterministic KC-derived ids. */
+  private criterionStatements(): { id: string; text: string }[] {
+    const out: { id: string; text: string }[] = [];
+    for (const kc of this.keyConcepts.values()) {
+      for (const v of kc.verbatim) {
+        const text = v.trim();
+        // Id keyed on stable KC identity + content (NOT array position), so the
+        // pointer survives re-seeds and still resolves after the humanVerbatim fix.
+        if (text) out.push({ id: `kc:${kc.id}:${stableHash(text)}`, text });
       }
-      return;
     }
-    // confirm — every species must be decided; only approved ones continue.
-    if (card.items.some((i) => i.status === "pending")) return;
-    for (const sp of this.species) {
-      const item = card.items.find((i) => i.speciesType === sp.species_type);
-      sp.kept = item?.status === "approved";
-    }
-    this.resolveCard(cardId);
-    const kept = this.species.filter((s) => s.kept);
-    if (!kept.length || !this.genus) {
+    return out;
+  }
+
+  /**
+   * Lift tap-able criterion options from the inventor's OWN words, then ask.
+   * Tap-only cascade — never a compose surface:
+   *   1. fragments from the Key Concept verbatim;
+   *   2. empty → widen to all upstream inventor verbatim, re-run once;
+   *   3. still empty → offer the whole statements themselves as taps;
+   *   4. no upstream material at all → open a gap and block.
+   */
+  private async beginCriterion(): Promise<void> {
+    const kcStatements = this.criterionStatements();
+    if (!kcStatements.length) {
+      this.recordGaps("genus_extractor", [
+        {
+          gap_class: "missing_criterion_source",
+          field: "criterion",
+          note: "there is no earlier inventor material to lift a criterion from; the earlier stages must be completed first",
+        },
+      ]);
+      this.pushTurn({
+        role: "helper",
+        text: "There's nothing from the earlier steps to build on yet — finish those first, then come back to add more ways to build it.",
+      });
       this.broadened = false;
       this.complete();
       return;
     }
-    await this.generateArtifacts(kept);
+
+    let statements = kcStatements;
+    let fragments = await this.fragmentCriterion(statements);
+    if (!fragments.length) {
+      const widened = this.widenedCriterionStatements();
+      if (widened.length > kcStatements.length) {
+        statements = widened;
+        fragments = await this.fragmentCriterion(widened);
+      }
+    }
+    if (!fragments.length) {
+      // Offer the whole statements as taps — still the inventor's own words.
+      const seen = new Set<string>();
+      for (const s of statements) {
+        const text = s.text.trim();
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        fragments.push({ id: this.genId(), text, sourceId: s.id });
+      }
+    }
+
+    const id = this.genId();
+    this.openCards.set(id, {
+      id,
+      type: "criterion",
+      question:
+        "What's the one thing your invention has to get right, no matter how it's built? Tap the one that's true.",
+      fragments,
+    });
+    this.intents.set(id, { kind: "criterion" });
+    this.phase = "awaiting_criterion";
+  }
+
+  /** Run the fragmenter; keep only verbatim-lifted phrases (source derived by match). */
+  private async fragmentCriterion(
+    statements: { id: string; text: string }[],
+  ): Promise<CriterionFragmentOption[]> {
+    if (!statements.length) return [];
+    const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+    const out: CriterionFragmentOption[] = [];
+    try {
+      const r = await runCriterionFragmenter(this.runAgent, { statements });
+      this.ledger.recordMachineEvent("agent_criterion_fragments", ["showcase"], {
+        count: r.fragments.length,
+      });
+      const seen = new Set<string>();
+      for (const f of r.fragments) {
+        const text = f.text.trim();
+        if (!text || seen.has(text)) continue;
+        // Verbatim guard: must be a real substring of some statement. Derive the
+        // source from the match — do NOT trust the model's echoed id.
+        const match = statements.find((s) => norm(s.text).includes(norm(text)));
+        if (!match) continue;
+        seen.add(text);
+        out.push({ id: this.genId(), text, sourceId: match.id });
+      }
+    } catch (err) {
+      console.error("[showcase] criterion fragmenter failed", err);
+    }
+    return out;
+  }
+
+  /** All upstream inventor verbatim: KC verbatim + any human-origin ledger entries. */
+  private widenedCriterionStatements(): { id: string; text: string }[] {
+    const out = [...this.criterionStatements()];
+    const seen = new Set(out.map((s) => s.text.trim()));
+    for (const e of this.ledger.all()) {
+      if (e.origin === "human" && typeof e.verbatim_text === "string") {
+        const text = e.verbatim_text.trim();
+        if (text && !seen.has(text)) {
+          seen.add(text);
+          out.push({ id: `led:${e.id}`, text });
+        }
+      }
+    }
+    return out;
+  }
+
+  private async handleCriterion(cardId: string, input: CriterionInput): Promise<void> {
+    const card = this.openCards.get(cardId);
+    if (!card || card.type !== "criterion") return;
+    const frag = card.fragments.find((f) => f.id === input.fragmentId);
+    if (!frag) return;
+    // Tap-only, single provenance: the inventor CONFIRMED their own lifted words as
+    // the criterion — inventor_confirmed, with a pointer to the source statement.
+    const entry = this.ledger.recordInventorSource(
+      "criterion_set",
+      frag.text,
+      ["showcase", "inventor_confirmed"],
+      { kind: "tapped", sourceStatementId: frag.sourceId },
+    );
+    this.criterion = { text: frag.text, sourceId: frag.sourceId };
+    this.criterionEntryId = entry.id;
+    this.resolveCard(cardId);
+    await this.generateCandidates("moderate");
   }
 
   /**
+   * The ways to build the invention: the THREE mandatory standard build-styles
+   * (always present, shown first) PLUS a breadth-sized emergent forest of genuinely
+   * distinct techniques (graded, deduped, floored at one). The inventor always lands
+   * on all three standard ways and at least one more. Emergent groups come from the
+   * enumerator's own "family" tags — however many the invention warrants.
+   */
+  private async generateCandidates(band: "narrow" | "moderate" | "broad"): Promise<void> {
+    const genus = this.genus;
+    if (!genus) {
+      this.broadened = false;
+      this.complete();
+      return;
+    }
+    const { generationCap, targetByBreadth } = SHOWCASE_CONFIG.layer4;
+    const target = targetByBreadth[band]; // EMERGENT extras beyond the three standard ways
+    const confirmedConstraints: string[] = []; // Layer 1 (constraint discovery) is Phase 2.
+
+    // (1) The three MANDATORY build-styles — always present, shown first, never graded.
+    const mandatory = await this.buildMandatoryCards(genus, confirmedConstraints);
+
+    // (2) The EMERGENT forest — enumerate genuinely distinct techniques, grade, dedup.
+    let graded: GradedCandidate[] = [];
+    try {
+      const enr = await runEnumerator(this.runAgent, { genus, confirmedConstraints, target });
+      this.ledger.recordMachineEvent("agent_enumerated", ["showcase"], {
+        count: enr.candidates.length,
+      });
+      // A dropped candidate has no consequence for the inventor, so we do NOT
+      // surface enumerator gaps — they'd be noise on screen. `enr.gaps` dropped.
+      void enr.gaps;
+      const capped = enr.candidates.filter((c) => c.label.trim()).slice(0, generationCap);
+      if (capped.length) {
+        const grd = await runGrader(this.runAgent, { candidates: capped, genus, confirmedConstraints });
+        this.ledger.recordMachineEvent("agent_graded", ["showcase"], { count: grd.grades.length });
+        const gradeByLabel = new Map(grd.grades.map((g) => [g.label, g]));
+        graded = capped.map((c) => {
+          const g = gradeByLabel.get(c.label);
+          const grade: CandidateGrade = g
+            ? {
+                traceability: g.traceability,
+                fidelity: g.fidelity,
+                specificity: g.specificity,
+                distinctness: g.distinctness,
+                verdict: g.verdict,
+                reason: g.reason,
+              }
+            : {
+                traceability: 0,
+                fidelity: 0,
+                specificity: 0,
+                distinctness: 0,
+                verdict: "reject",
+                reason: "ungraded",
+              };
+          return {
+            id: this.genId(),
+            family: c.family.trim() || "Other ways to build it",
+            label: c.label,
+            source: c.source,
+            mapping: c.mapping,
+            tradeoff: c.tradeoff,
+            grade,
+          };
+        });
+      }
+    } catch (err) {
+      console.error("[showcase] enumerate/grade failed", err);
+    }
+
+    // The grader deletes duplicates and failures (reject); everything else is SHOWN —
+    // no hidden reserve, no count cap. If there's more, the inventor sees all of it.
+    const emergent: StoredCandidate[] = graded.map((c) => ({
+      ...c,
+      bucket: c.grade.verdict === "reject" ? "rejected" : "shown",
+      surfaced: c.grade.verdict !== "reject",
+    }));
+
+    // Floor: the inventor must always land on the three standard ways PLUS at least one
+    // more. If grading rejected every emergent candidate, keep the best-ranked one
+    // anyway (highest total score) so there's always at least one extra.
+    if (!emergent.some((c) => c.bucket === "shown") && emergent.length) {
+      const gradeTotal = (c: StoredCandidate) =>
+        c.grade.traceability + c.grade.fidelity + c.grade.specificity + c.grade.distinctness;
+      const best = [...emergent].sort((a, b) => gradeTotal(b) - gradeTotal(a))[0];
+      best.bucket = "shown";
+      best.surfaced = true;
+    }
+
+    // Merge: the three mandatory build-styles first (shown first), then the emergent forest.
+    this.candidates = [...mandatory, ...emergent];
+    const id = this.genId();
+    this.openCards.set(id, this.buildSweepCard(id));
+    this.intents.set(id, { kind: "sweep" });
+    this.phase = "sweeping";
+  }
+
+  /**
+   * The three mandatory build-styles (AI-assisted / AI-native / agentic), mapped
+   * onto the invention by the Baseline Builder and always returned in fixed order.
+   * Every slot is guaranteed filled: if the agent omits a style or fails outright,
+   * a plain fallback card takes the slot. These are never graded and never dropped —
+   * they always survive and surface, and sit first in their own group.
+   */
+  private async buildMandatoryCards(
+    genus: Genus,
+    confirmedConstraints: string[],
+  ): Promise<StoredCandidate[]> {
+    const byType = new Map<SpeciesType, { label: string; source: string; mapping: string; tradeoff: string }>();
+    try {
+      const res = await runBaselineBuilder(this.runAgent, { genus, confirmedConstraints });
+      this.ledger.recordMachineEvent("agent_baseline", ["showcase"], { count: res.builds.length });
+      for (const b of res.builds) {
+        byType.set(b.species_type, {
+          label: b.label,
+          source: b.source,
+          mapping: b.mapping,
+          tradeoff: b.tradeoff,
+        });
+      }
+    } catch (err) {
+      console.error("[showcase] baseline builder failed", err);
+    }
+    // A standard build always fits (the genus was distilled to guarantee it), so it
+    // is scored full marks and never routed through the skeptic Grader.
+    const grade: CandidateGrade = {
+      traceability: 3,
+      fidelity: 3,
+      specificity: 3,
+      distinctness: 3,
+      verdict: "survive",
+      reason: "standard build — always included",
+    };
+    return BASELINE_STYLES.map((style) => {
+      const got = byType.get(style.type);
+      return {
+        id: this.genId(),
+        family: style.family,
+        label: (got?.label ?? "").trim() || style.label,
+        source: (got?.source ?? "").trim() || style.source,
+        mapping: (got?.mapping ?? "").trim() || style.mapping,
+        tradeoff: (got?.tradeoff ?? "").trim() || style.tradeoff,
+        grade,
+        bucket: "shown" as const,
+        surfaced: true,
+        mandatory: true,
+        speciesType: style.type,
+      };
+    });
+  }
+
+  /** Build the sweep card grouped by the emergent families (in ranked order). */
+  private buildSweepCard(id: string): SweepCard {
+    const order: string[] = [];
+    const byFamily = new Map<string, StoredCandidate[]>();
+    for (const c of this.candidates) {
+      if (!byFamily.has(c.family)) {
+        byFamily.set(c.family, []);
+        order.push(c.family);
+      }
+      byFamily.get(c.family)!.push(c);
+    }
+    const groups: SweepGroup[] = [];
+    for (const family of order) {
+      const items: SweepItem[] = byFamily
+        .get(family)!
+        .filter((c) => c.surfaced)
+        .map((c) => ({
+          candidateId: c.id,
+          family,
+          label: c.label,
+          source: c.source,
+          mapping: c.mapping,
+          tradeoff: c.tradeoff,
+          status: c.decision === "kept" ? ("kept" as const) : ("pending" as const),
+        }));
+      if (items.length > 0) groups.push({ family, items });
+    }
+    return { id, type: "candidate_sweep", groups };
+  }
+
+  private refreshSweep(cardId: string): void {
+    this.openCards.set(cardId, this.buildSweepCard(cardId));
+  }
+
+  private async handleSweep(cardId: string, input: SweepInput): Promise<void> {
+    const card = this.openCards.get(cardId);
+    if (!card || card.type !== "candidate_sweep") return;
+
+    if (input.action === "keep") {
+      const cand = this.candidates.find((c) => c.id === input.candidateId);
+      if (!cand) return;
+      if (cand.decision === "kept") {
+        cand.decision = undefined; // toggle off
+      } else {
+        // Keep-many: a broad invention wants lots of trees, so the inventor keeps
+        // as many as fit (duplicates are already deleted by the grader). The keep
+        // confirms the candidate FITS the invention — it does NOT claim the inventor
+        // conceived it (it was retrieved). Spelled out for the provenance walk.
+        cand.decision = "kept";
+        this.ledger.recordDecision("candidate_kept", ["showcase", "inventor_confirmed"], {
+          candidateId: cand.id,
+          meaning:
+            "inventor confirmed this enumerated candidate fits their invention; the candidate was retrieved, not conceived by the inventor",
+        });
+      }
+      this.refreshSweep(cardId);
+      return;
+    }
+    // finalize — write up the one picked per group.
+    this.resolveCard(cardId);
+    await this.formalizeKept(this.candidates.filter((c) => c.decision === "kept"));
+  }
+
+  /** Write each kept candidate into the "Across Implementations" section. */
+  private async formalizeKept(kept: StoredCandidate[]): Promise<void> {
+    if (!kept.length) {
+      this.broadened = true;
+      this.complete();
+      return;
+    }
+    const inventorMaterial = [...this.keyConcepts.values()]
+      .flatMap((k) => k.verbatim)
+      .join("\n");
+    const confirmedConstraints: string[] = [];
+    const subsections: { title: string; body: string }[] = [];
+    for (const c of kept) {
+      try {
+        const r = await runFormalizer(this.runAgent, {
+          card: { label: c.label, source: c.source, mapping: c.mapping, tradeoff: c.tradeoff },
+          inventorMaterial,
+          confirmedConstraints,
+        });
+        // Missing substance is a gap the inventor must fill, never authored prose.
+        this.recordGaps(
+          "formalizer",
+          r.gaps.map((g) => ({ ...g, field: c.label })),
+        );
+        this.ledger.recordMachineEvent("agent_formalized", ["showcase"], { candidateId: c.id });
+        if (r.body.trim()) subsections.push({ title: r.title.trim() || c.label, body: r.body.trim() });
+      } catch (err) {
+        console.error("[showcase] formalizer failed for", c.id, err);
+      }
+    }
+    if (subsections.length) this.appendAcrossImplementations(subsections);
+    // The expansion's real work: flow the genus + the chosen ways into every existing
+    // artifact — broaden each Key Concept, add the new genus-level Key Concepts, and
+    // extend the Abstract / Summary / Background — surfaced on one review screen.
+    // (`broadened` stays false until that review is applied, so the stage doesn't
+    // auto-advance past it.)
+    await this.generateArtifacts(this.keptWaysAsSpecies());
+  }
+
+  /** The kept "ways to build it" as implementation context for the broadening pass. */
+  private keptWaysAsSpecies(): Species[] {
+    return this.candidates
+      .filter((c) => c.decision === "kept")
+      .map((c) => ({
+        species_type: c.speciesType ?? "ai_native",
+        species_name: c.label,
+        architectural_description: c.mapping,
+        data_flow: "",
+        key_components: [],
+        technical_improvements: [],
+        differentiation_from_siblings: "",
+        kept: true,
+      }));
+  }
+
+  /** Append formalized passages into the Across-Implementations (detail_across) section. */
+  private appendAcrossImplementations(subs: { title: string; body: string }[]): void {
+    const sections = this.disclosure;
+    if (!sections) return;
+    const body = subs.map((s) => `${s.title}\n\n${s.body}`).join("\n\n");
+    const prior = sections.findIndex((s) => s.key === "detail_across");
+    if (prior >= 0) {
+      sections[prior] = { ...sections[prior], body: `${sections[prior].body}\n\n${body}`.trim() };
+    } else {
+      const sec: DisclosureSection = { key: "detail_across", label: DETAIL_ACROSS_LABEL, body };
+      const opsIdx = sections.findIndex((s) => s.key === "operations");
+      if (opsIdx >= 0) sections.splice(opsIdx + 1, 0, sec);
+      else sections.push(sec);
+    }
+    this.ledger.recordMachineEvent("disclosure_extended", ["showcase", "formalizer"], {
+      subsections: subs.length,
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * The broadening pass — the heart of Genus & Species. The genus + the chosen
+   * ways flow into every existing artifact so the draft is widened to the genus,
+   * not locked to the specific implementation. Runs after the sweep.
+   * ------------------------------------------------------------------ */
+
+  /**
    * Generate EVERY expansion artifact (nothing applied yet): a broadened rewrite
-   * per Key Concept, the three new Key Concepts, the Background + Summary
-   * extensions, the "Across Implementations" body, and the Abstract rewrite —
-   * all surfaced on ONE Gate-2 review screen with Regenerate/Keep/Edit/Remove.
+   * per Key Concept, the three new Key Concepts, and the Background + Summary +
+   * Abstract rewrites — all surfaced on ONE review screen with Regenerate/Keep/
+   * Edit/Remove. (The "Across Implementations" detail body is written separately by
+   * formalizeKept, so it is not regenerated here.)
    */
   private async generateArtifacts(kept: Species[]): Promise<void> {
     const genus = this.genus;
@@ -678,38 +1249,6 @@ export class ShowcaseModule {
       }
     }
 
-    // The "Across Implementations" detailed body.
-    try {
-      const existingDetail = ["architecture", "data_structures", "operations"]
-        .map((k) => find(k)?.body ?? "")
-        .filter(Boolean)
-        .join("\n\n");
-      const dd = await runDetailDescriptionExtender(this.runAgent, {
-        genus,
-        species: kept,
-        existing: existingDetail,
-      });
-      const body = dd.subsections
-        .filter((s) => s.subsection_content.trim())
-        .map((s) =>
-          s.subsection_title.trim()
-            ? `${s.subsection_title.trim()}\n\n${s.subsection_content.trim()}`
-            : s.subsection_content.trim(),
-        )
-        .join("\n\n");
-      if (body.trim()) {
-        artifacts.push({
-          id: this.genId(),
-          kind: "detail_ext",
-          label: "Detailed Description Extension",
-          text: body.trim(),
-          kept: true,
-        });
-      }
-    } catch (err) {
-      console.error("[showcase] detail-description-extender failed", err);
-    }
-
     // The Abstract rewrite (word-counted).
     const abs = find("abstract");
     if (abs) {
@@ -732,7 +1271,9 @@ export class ShowcaseModule {
     }
 
     if (!artifacts.length) {
-      this.broadened = false;
+      // Nothing to broaden, but the Across-Implementations write already happened —
+      // the stage did its work, so mark it done rather than looping.
+      this.broadened = true;
       this.complete();
       return;
     }
@@ -776,7 +1317,7 @@ export class ShowcaseModule {
   /** Re-run the one generator behind an artifact; keep the old text on failure. */
   private async regenerateArtifact(a: ExpansionArtifact): Promise<void> {
     const genus = this.genus;
-    const kept = this.species.filter((s) => s.kept);
+    const kept = this.keptWaysAsSpecies();
     if (!genus || !kept.length) return;
     const sections = this.disclosure;
     const find = (key: string) => sections?.find((s) => s.key === key);
@@ -895,7 +1436,9 @@ export class ShowcaseModule {
       }
     }
 
-    this.broadened = kept.length > 0;
+    // The stage is done regardless of how many broadenings the inventor kept — the
+    // Across-Implementations write already happened in formalizeKept.
+    this.broadened = true;
     this.ledger.recordMachineEvent("disclosure_extended", ["showcase"], {
       applied: kept.length,
       sections: sections?.length ?? 0,
@@ -1233,6 +1776,10 @@ export class ShowcaseModule {
       conversation: this.conversation.map((t) => ({ ...t })),
       ledger: this.ledger.serialize(),
       drawings: this.drawings.map((d) => ({ ...d, numerals: [...d.numerals] })),
+      // Gaps live in the Ledger (serialized above), not as a separate array.
+      criterion: this.criterion ? { ...this.criterion } : null,
+      criterionEntryId: this.criterionEntryId,
+      candidates: this.candidates.map((c) => ({ ...c, grade: { ...c.grade } })),
     };
   }
 
@@ -1252,6 +1799,10 @@ export class ShowcaseModule {
     m.intents = new Map(snap.intents);
     m.conversation = (snap.conversation ?? []).map((t) => ({ ...t }));
     m.drawings = (snap.drawings ?? []).map((d) => ({ ...d, numerals: [...d.numerals] }));
+    // Gaps are re-derived from the restored Ledger; nothing to assign here.
+    m.criterion = snap.criterion ?? null;
+    m.criterionEntryId = snap.criterionEntryId ?? null;
+    m.candidates = (snap.candidates ?? []).map((c) => ({ ...c, grade: { ...c.grade } }));
     return m;
   }
 }

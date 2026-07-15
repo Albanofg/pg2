@@ -19,21 +19,6 @@ function patchDecision(
     ...view,
     cards: view.cards.map((c) => {
       if (c.id !== cardId) return c;
-      if (c.type === "species_review" && "speciesType" in input) {
-        const status =
-          input.action === "approve"
-            ? ("approved" as const)
-            : input.action === "reject"
-              ? ("rejected" as const)
-              : null;
-        if (!status) return c;
-        return {
-          ...c,
-          items: c.items.map((it) =>
-            it.speciesType === input.speciesType ? { ...it, status } : it,
-          ),
-        };
-      }
       if (c.type === "expansion_review" && "artifactId" in input) {
         const kept =
           input.action === "keep" ? true : input.action === "remove" ? false : null;
@@ -61,6 +46,7 @@ const EMPTY: Module5View = {
   ledger: [],
   complete: false,
   drawings: [],
+  gaps: [],
 };
 
 /**

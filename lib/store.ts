@@ -60,6 +60,7 @@ export type ModuleStage =
   | "maturation"
   | "landscape"
   | "differentiation"
+  | "genus_species" // the "more ways to build it" expansion — its own step before the draft
   | "showcase";
 
 type WorkspaceState = {

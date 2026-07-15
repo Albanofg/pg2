@@ -10,7 +10,6 @@ import type { AgentName } from "./types";
 const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   helper: MODELS.drafter,
   "genus-extractor": MODELS.drafter,
-  "species-synthesizer": MODELS.drafter,
   "key-concept-broadener": MODELS.drafter,
   // Independent Boundary guard at the broadening gates, on a different model.
   verifier: MODELS.verifier,
@@ -22,6 +21,14 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   "key-concept-appender": MODELS.drafter,
   "figure-planner": MODELS.drafter,
   "section-polisher": MODELS.drafter,
+  // Layer 4: enumerate on the drafter; GRADE on the other model (fresh-context
+  // skeptic, per the spec) — the verifier model is the pair's second model.
+  "criterion-fragmenter": MODELS.drafter,
+  "breadth-assessor": MODELS.drafter,
+  "baseline-builder": MODELS.drafter,
+  enumerator: MODELS.drafter,
+  grader: MODELS.verifier,
+  formalizer: MODELS.drafter,
 };
 
 export const openaiAgentRunner: AgentRunner = async (req) =>

@@ -15,7 +15,11 @@ export type Provenance =
    *  no new substance. */
   | "system_formalized"
   /** The system proposed an addition and the inventor explicitly accepted it. */
-  | "system_suggested_accepted";
+  | "system_suggested_accepted"
+  /** The inventor CONFIRMED a machine-surfaced item as binding/relevant — e.g. a
+   *  researched domain constraint (Layer 1) or a retrieved candidate (Layer 5).
+   *  Confirmation of retrieved material, not composition; the tap is the act. */
+  | "inventor_confirmed";
 
 /** Lifecycle of a concept. Serialize merged status as `merged_into:<id>`. */
 export type ConceptStatus =

@@ -274,10 +274,10 @@ export default function DifferentiationPanel({
                 certified, and the Invention Disclosure drafted.
               </p>
               <button
-                onClick={() => setStage("showcase")}
+                onClick={() => setStage("genus_species")}
                 className="mt-3 rounded-md bg-accent px-5 py-2.5 font-sans text-sm font-medium text-brand transition-colors hover:bg-accent/90"
               >
-                Continue to Showcase →
+                Continue to Genus &amp; Species →
               </button>
             </div>
           )}

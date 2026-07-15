@@ -10,6 +10,7 @@ const STAGES: ModuleStage[] = [
   "maturation",
   "landscape",
   "differentiation",
+  "genus_species",
   "showcase",
 ];
 

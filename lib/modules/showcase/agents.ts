@@ -20,7 +20,6 @@ const PROMPT_FILES: Record<AgentName, string> = {
   helper: `${MODULE_5_DIR}/00-helper.md`,
   // Genus & Species Expansion agents live in their own subfolder.
   "genus-extractor": `${MODULE_5_DIR}/genus-species/01-genus-extractor.md`,
-  "species-synthesizer": `${MODULE_5_DIR}/genus-species/02-species-synthesizer.md`,
   "key-concept-broadener": `${MODULE_5_DIR}/03-key-concept-broadener.md`,
   verifier: `${MODULE_5_DIR}/04-verifier.md`,
   // The 5c extender second pass.
@@ -31,12 +30,18 @@ const PROMPT_FILES: Record<AgentName, string> = {
   "key-concept-appender": `${MODULE_5_DIR}/09-key-concept-appender.md`,
   "figure-planner": `${MODULE_5_DIR}/10-figure-planner.md`,
   "section-polisher": `${MODULE_5_DIR}/11-section-polisher.md`,
+  // Layer 4/5 (redesign) — genus-species subfolder.
+  "criterion-fragmenter": `${MODULE_5_DIR}/genus-species/05-criterion-fragmenter.md`,
+  "breadth-assessor": `${MODULE_5_DIR}/genus-species/07-breadth-assessor.md`,
+  "baseline-builder": `${MODULE_5_DIR}/genus-species/08-baseline-builder.md`,
+  enumerator: `${MODULE_5_DIR}/genus-species/03-enumerator.md`,
+  grader: `${MODULE_5_DIR}/genus-species/04-grader.md`,
+  formalizer: `${MODULE_5_DIR}/genus-species/06-formalizer.md`,
 };
 
 const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
   helper: ["helper_doctrine"],
   "genus-extractor": ["broadening"],
-  "species-synthesizer": ["broadening"],
   "key-concept-broadener": ["broadening"],
   verifier: [],
   "background-extender": ["broadening"],
@@ -49,6 +54,15 @@ const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
   // The section polisher composes established material into prose; broadening
   // gives it the vocabulary discipline, abstract_rules the Abstract constraints.
   "section-polisher": ["broadening", "abstract_rules"],
+  // Layer 4 agents are retrieval/grading only — CORE vocabulary discipline suffices.
+  "criterion-fragmenter": [],
+  "breadth-assessor": [],
+  "baseline-builder": [],
+  enumerator: [],
+  grader: [],
+  // The formalizer restates a kept card into disclosure prose — broadening gives
+  // it the vocabulary discipline; it never enriches (strict restate-only prompt).
+  formalizer: ["broadening"],
 };
 
 const promptCache = new Map<AgentName, string>();
@@ -67,22 +81,34 @@ export async function loadAgentPrompt(agent: AgentName): Promise<string> {
  * Schemas
  * ------------------------------------------------------------------ */
 
+/** A gap an agent declares in its output when substance is absent (see DeclaredGap). */
+export const DeclaredGapOutput = z.object({
+  gap_class: z.enum([
+    "missing_constraint",
+    "missing_invariant",
+    "missing_mechanism",
+    "missing_step",
+    "missing_criterion_source",
+  ]),
+  field: z.string().default(""),
+  note: z.string().default(""),
+});
+
 export const GenusOutput = z.object({
   genus_name: z.string(),
   genus_description: z.string(),
   input_pattern: z.string().default(""),
   transformation_pattern: z.string().default(""),
   output_pattern: z.string().default(""),
-  // V2 §101/§112 scaffolding — the formal mapping and the constraints/invariants
-  // that define the genus boundary. Empty on genera extracted by V1.
-  formal_mapping_statement: z.string().default(""),
+  // Constraints and invariants FORMALIZED FROM THE INPUTS only — empty when the
+  // inputs supply none. The Extractor never authors these (genus_extractor_v2.1).
   computational_constraints: z.array(z.string()).default([]),
   logical_invariants: z.array(z.string()).default([]),
-  technical_problem: z.string().default(""),
-  technical_effect: z.string().default(""),
-  // V1's explicit rule-engine-AND-agent implementability statement — part of the
-  // genus artifact, cited by downstream drafting.
+  // The rule-engine / language-model / agent implementability narrative.
   paradigm_neutrality_check: z.string().default(""),
+  // Gaps the Extractor opened instead of authoring missing substance. Recorded to
+  // the pipeline gap object by the controller (gap_opened Ledger event).
+  gaps: z.array(DeclaredGapOutput).default([]),
 });
 export type GenusResult = z.infer<typeof GenusOutput>;
 
@@ -191,17 +217,12 @@ function renderGenus(g: Genus): string {
     `input_pattern: ${g.input_pattern}`,
     `transformation_pattern: ${g.transformation_pattern}`,
     `output_pattern: ${g.output_pattern}`,
-    ...(g.formal_mapping_statement
-      ? [`formal_mapping_statement: ${g.formal_mapping_statement}`]
-      : []),
     ...(g.computational_constraints?.length
       ? ["computational_constraints:", ...g.computational_constraints.map((c) => `  - ${c}`)]
       : []),
     ...(g.logical_invariants?.length
       ? ["logical_invariants:", ...g.logical_invariants.map((v) => `  - ${v}`)]
       : []),
-    ...(g.technical_problem ? [`technical_problem: ${g.technical_problem}`] : []),
-    ...(g.technical_effect ? [`technical_effect: ${g.technical_effect}`] : []),
     ...(g.paradigm_neutrality_check
       ? [`paradigm_neutrality_check: ${g.paradigm_neutrality_check}`]
       : []),
@@ -227,27 +248,6 @@ export async function runGenusExtractor(
     schema: GenusOutput,
     temperature: 0.2,
     subject: input.keyConcepts.map((k) => k.title).join("; "),
-  });
-}
-
-export async function runSpeciesSynthesizer(
-  runAgent: AgentRunner,
-  input: { genus: Genus; speciesType: SpeciesType },
-): Promise<SpeciesResult> {
-  const system = await loadAgentPrompt("species-synthesizer");
-  const prompt = [
-    "THE GENUS:",
-    renderGenus(input.genus),
-    "",
-    `THE ASSIGNED SPECIES TYPE: ${input.speciesType}`,
-  ].join("\n");
-  return runAgent({
-    agent: "species-synthesizer",
-    system,
-    prompt,
-    schema: SpeciesOutput,
-    temperature: 0.3,
-    subject: `${input.genus.genus_name} — ${input.speciesType}`,
   });
 }
 
@@ -315,17 +315,8 @@ function renderSpecies(species: Species[]): string {
       [
         `(${i + 1}) [${s.species_type}] ${s.species_name}`,
         `    architecture: ${s.architectural_description}`,
-        ...(s.sequence_of_operations?.length
-          ? ["    sequence of operations:", ...s.sequence_of_operations.map((o) => `      - ${o}`)]
-          : []),
         `    data flow: ${s.data_flow}`,
         `    key components: ${s.key_components.join("; ")}`,
-        ...(s.constraint_enforcement_map?.length
-          ? [`    constraint enforcement: ${s.constraint_enforcement_map.join("; ")}`]
-          : []),
-        ...(s.invariant_preservation_map?.length
-          ? [`    invariant preservation: ${s.invariant_preservation_map.join("; ")}`]
-          : []),
         `    technical improvements: ${s.technical_improvements.join("; ")}`,
         `    differentiation: ${s.differentiation_from_siblings || s.differentiation_from_traditional || ""}`,
       ].join("\n"),
@@ -523,6 +514,8 @@ export const SectionPolishOutput = z.object({
   body: z.string().default(""),
   change_summary: z.string().default(""),
   preserved_points: z.array(z.string()).default([]),
+  // Substance the section needs but the inputs don't supply — flagged, not filled.
+  gaps: z.array(DeclaredGapOutput).default([]),
 });
 export type SectionPolishResult = z.infer<typeof SectionPolishOutput>;
 
@@ -574,6 +567,258 @@ export async function runSectionPolisher(
     schema: SectionPolishOutput,
     temperature: 0.3,
     subject: input.sectionLabel,
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Layer 4 (redesign) — criterion fragmenter → enumerator → skeptic grader.
+ * Retrieval + grading only; these never author a mechanism. Not yet wired into
+ * the live expansion flow (that cutover needs Layer 5 to consume survivors).
+ * ------------------------------------------------------------------ */
+
+export const CriterionFragmentOutput = z.object({
+  fragments: z
+    .array(
+      z.object({
+        text: z.string().default(""),
+        source_id: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
+export type CriterionFragmentResult = z.infer<typeof CriterionFragmentOutput>;
+
+/** Lift verbatim criterion fragments from the inventor's own upstream statements. */
+export async function runCriterionFragmenter(
+  runAgent: AgentRunner,
+  input: { statements: { id: string; text: string }[] },
+): Promise<CriterionFragmentResult> {
+  const system = await loadAgentPrompt("criterion-fragmenter");
+  const prompt = [
+    "THE INVENTOR'S STATEMENTS (lift criterion fragments verbatim from these; cite the id):",
+    ...input.statements.map((s) => `[${s.id}] ${s.text}`),
+  ].join("\n");
+  return runAgent({
+    agent: "criterion-fragmenter",
+    system,
+    prompt,
+    schema: CriterionFragmentOutput,
+    temperature: 0.1,
+  });
+}
+
+export const BreadthOutput = z.object({
+  band: z.enum(["narrow", "moderate", "broad"]).default("moderate"),
+  reason: z.string().default(""),
+});
+export type BreadthResult = z.infer<typeof BreadthOutput>;
+
+/** Size how many genuinely distinct implementations the genus supports (narrow/moderate/broad). */
+export async function runBreadthAssessor(
+  runAgent: AgentRunner,
+  input: { genus: Genus; keyConcepts: { title: string; statement: string }[] },
+): Promise<BreadthResult> {
+  const system = await loadAgentPrompt("breadth-assessor");
+  const prompt = [
+    "THE GENUS:",
+    renderGenus(input.genus),
+    "",
+    "THE KEY CONCEPTS (context only):",
+    input.keyConcepts.length
+      ? input.keyConcepts.map((k, i) => `(${i + 1}) ${k.title}: ${k.statement}`).join("\n")
+      : "(none)",
+  ].join("\n");
+  return runAgent({
+    agent: "breadth-assessor",
+    system,
+    prompt,
+    schema: BreadthOutput,
+    temperature: 0.1,
+    subject: input.genus.genus_name,
+  });
+}
+
+/**
+ * The three MANDATORY build-styles, always present, mapped onto the invention.
+ * Runs alongside the Enumerator; the inventor sees these three first, then the
+ * emergent forest. species_type is the internal tag; the rest is plain-language.
+ */
+export const BaselineOutput = z.object({
+  builds: z
+    .array(
+      z.object({
+        species_type: z.enum(["ai_assisted", "ai_native", "agentic"]),
+        label: z.string().default(""),
+        source: z.string().default(""),
+        mapping: z.string().default(""),
+        tradeoff: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
+export type BaselineResult = z.infer<typeof BaselineOutput>;
+
+/** Map the invention onto the three standard build-styles (always exactly three). */
+export async function runBaselineBuilder(
+  runAgent: AgentRunner,
+  input: { genus: Genus; confirmedConstraints: string[] },
+): Promise<BaselineResult> {
+  const system = await loadAgentPrompt("baseline-builder");
+  const prompt = [
+    "THE MECHANISM (what the invention does):",
+    renderGenus(input.genus),
+    "",
+    "THE CONFIRMED CONSTRAINTS:",
+    input.confirmedConstraints.length
+      ? input.confirmedConstraints.map((c) => `- ${c}`).join("\n")
+      : "(none provided)",
+  ].join("\n");
+  return runAgent({
+    agent: "baseline-builder",
+    system,
+    prompt,
+    schema: BaselineOutput,
+    temperature: 0.4,
+    subject: input.genus.genus_name,
+  });
+}
+
+export const EnumeratorOutput = z.object({
+  candidates: z
+    .array(
+      z.object({
+        family: z.string().default(""),
+        label: z.string().default(""),
+        source: z.string().default(""),
+        mapping: z.string().default(""),
+        tradeoff: z.string().default(""),
+      }),
+    )
+    .default([]),
+  gaps: z.array(DeclaredGapOutput).default([]),
+});
+export type EnumeratorResult = z.infer<typeof EnumeratorOutput>;
+
+/** Surface genuinely distinct ways to build the invention, sized to a target count. */
+export async function runEnumerator(
+  runAgent: AgentRunner,
+  input: { genus: Genus; confirmedConstraints: string[]; target: number },
+): Promise<EnumeratorResult> {
+  const system = await loadAgentPrompt("enumerator");
+  const prompt = [
+    "THE MECHANISM (what the invention does):",
+    renderGenus(input.genus),
+    "",
+    "THE CONFIRMED CONSTRAINTS:",
+    input.confirmedConstraints.length
+      ? input.confirmedConstraints.map((c) => `- ${c}`).join("\n")
+      : "(none provided)",
+    "",
+    `TARGET COUNT (aim for roughly this many genuinely distinct ways): ${input.target}`,
+  ].join("\n");
+  return runAgent({
+    agent: "enumerator",
+    system,
+    prompt,
+    schema: EnumeratorOutput,
+    temperature: 0.6,
+    subject: input.genus.genus_name,
+  });
+}
+
+export const GraderOutput = z.object({
+  grades: z
+    .array(
+      z.object({
+        label: z.string().default(""),
+        traceability: z.coerce.number().default(0),
+        fidelity: z.coerce.number().default(0),
+        specificity: z.coerce.number().default(0),
+        distinctness: z.coerce.number().default(0),
+        verdict: z.enum(["survive", "demote", "reject"]).default("demote"),
+        reason: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
+export type GraderResult = z.infer<typeof GraderOutput>;
+
+/** Skeptic grading pass — demotes/rejects; never adds. Ideally the other model. */
+export async function runGrader(
+  runAgent: AgentRunner,
+  input: {
+    candidates: { label: string; source: string; mapping: string; tradeoff: string }[];
+    genus: Genus;
+    confirmedConstraints: string[];
+  },
+): Promise<GraderResult> {
+  const system = await loadAgentPrompt("grader");
+  const prompt = [
+    "THE CANDIDATES (grade each; one entry per candidate, same order):",
+    ...input.candidates.map(
+      (c, i) =>
+        `(${i + 1}) [${c.label}]\n    source: ${c.source}\n    mapping: ${c.mapping}\n    tradeoff: ${c.tradeoff}`,
+    ),
+    "",
+    "THE GENUS:",
+    renderGenus(input.genus),
+    "",
+    "THE CONFIRMED CONSTRAINTS:",
+    input.confirmedConstraints.length
+      ? input.confirmedConstraints.map((c) => `- ${c}`).join("\n")
+      : "(none provided)",
+  ].join("\n");
+  return runAgent({
+    agent: "grader",
+    system,
+    prompt,
+    schema: GraderOutput,
+    temperature: 0.2,
+    subject: input.genus.genus_name,
+  });
+}
+
+export const FormalizerOutput = z.object({
+  title: z.string().default(""),
+  body: z.string().default(""),
+  // Substance the disclosure needs but the three inputs don't supply — flagged,
+  // never filled. Both gap classes are accepted (missing_mechanism | missing_step).
+  gaps: z.array(DeclaredGapOutput).default([]),
+});
+export type FormalizerResult = z.infer<typeof FormalizerOutput>;
+
+/** Write disclosure prose for ONE kept candidate — restate only; open gaps; never extend. */
+export async function runFormalizer(
+  runAgent: AgentRunner,
+  input: {
+    card: { label: string; source: string; mapping: string; tradeoff: string };
+    inventorMaterial: string;
+    confirmedConstraints: string[];
+  },
+): Promise<FormalizerResult> {
+  const system = await loadAgentPrompt("formalizer");
+  const prompt = [
+    "THE KEPT CARD:",
+    `  label: ${input.card.label}`,
+    `  source: ${input.card.source}`,
+    `  mapping: ${input.card.mapping}`,
+    `  tradeoff: ${input.card.tradeoff}`,
+    "",
+    "THE INVENTOR'S UPSTREAM MATERIAL (their own words — one of your only three sources):",
+    input.inventorMaterial || "(none)",
+    "",
+    "THE CONFIRMED CONSTRAINTS:",
+    input.confirmedConstraints.length
+      ? input.confirmedConstraints.map((c) => `- ${c}`).join("\n")
+      : "(none provided)",
+  ].join("\n");
+  return runAgent({
+    agent: "formalizer",
+    system,
+    prompt,
+    schema: FormalizerOutput,
+    temperature: 0.2,
+    subject: input.card.label,
   });
 }
 

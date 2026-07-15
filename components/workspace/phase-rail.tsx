@@ -9,6 +9,7 @@ const STAGES: { key: ModuleStage; label: string }[] = [
   { key: "maturation", label: "Maturation" },
   { key: "landscape", label: "Landscape" },
   { key: "differentiation", label: "Differentiation" },
+  { key: "genus_species", label: "Genus & Species" },
   { key: "showcase", label: "Showcase" },
 ];
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useShowcase } from "@/lib/hooks/use-showcase";
 import { useWorkspace } from "@/lib/store";
 import HelperComposer from "@/components/workspace/helper-composer";
@@ -8,10 +8,11 @@ import HelperThread from "@/components/workspace/helper-thread";
 import RestartPart from "@/components/workspace/restart-part";
 import type {
   ChoiceCard,
+  CriterionCard,
   ExpansionReviewCard,
   Module5Card,
   ShowcaseDrawing,
-  SpeciesReviewCard,
+  SweepCard,
   VariationCard,
   WidenedReviewCard,
 } from "@/lib/modules/showcase/types";
@@ -72,9 +73,12 @@ const DRAWINGS_TAB = "__drawings";
 export default function ShowcasePanel({
   projectId,
   maxW = "max-w-5xl",
+  mode = "draft",
 }: {
   projectId: string | null;
   maxW?: string;
+  /** "expansion" = the Genus & Species step (its own page); "draft" = the final Showcase. */
+  mode?: "expansion" | "draft";
 }) {
   const {
     view,
@@ -119,6 +123,43 @@ export default function ShowcasePanel({
     if (view.broadened) setConfirmReexpand(true);
     else void expand();
   };
+
+  // The Genus & Species step runs on its own — no button. On landing (and after
+  // "Start this part over"), if the engine is SEEDED, not yet applied, and there's
+  // nothing to review yet (no sweep on screen), kick it off. The `seeded` guard is
+  // essential: during a reset the view is momentarily empty (engine cleared) —
+  // firing then no-ops and would wrongly consume the once-guard, so we re-arm.
+  const seeded = view.keyConcepts.length > 0 || view.disclosure.length > 0;
+  const hasSweep = view.cards.some((c) => c.type === "candidate_sweep");
+  const [attempted, setAttempted] = useState(false);
+  const autoRanRef = useRef(false);
+  useEffect(() => {
+    if (mode !== "expansion") return;
+    if (!seeded) {
+      autoRanRef.current = false; // empty/resetting — re-arm for the fresh start
+      setAttempted(false);
+      return;
+    }
+    if (autoRanRef.current || !ready || busy || view.broadened || hasSweep) return;
+    autoRanRef.current = true;
+    setAttempted(true);
+    void expand();
+  }, [mode, seeded, ready, busy, view.broadened, hasSweep, expand]);
+
+  // When the inventor goes THROUGH the sweep and finalizes, move straight to the
+  // draft — no "continue" button. Keyed on "saw a sweep, then it's applied and the
+  // sweep is gone", so it fires for the first run AND a restart re-run, but never
+  // bounces someone who just navigated back to a finished step (no sweep seen).
+  const sawSweepRef = useRef(false);
+  const advancedRef = useRef(false);
+  useEffect(() => {
+    if (mode !== "expansion") return;
+    if (hasSweep) sawSweepRef.current = true;
+    if (sawSweepRef.current && view.broadened && !busy && !hasSweep && !advancedRef.current) {
+      advancedRef.current = true;
+      setStage("showcase");
+    }
+  }, [mode, hasSweep, view.broadened, busy, setStage]);
 
   const sections = view.disclosure;
   const drawings = view.drawings;
@@ -253,60 +294,68 @@ export default function ShowcasePanel({
               </svg>
             </div>
             <h2 className="mt-3 font-sans text-xl font-semibold text-ink">
-              Invention Concept Blueprint — Final Steps
+              {mode === "expansion"
+                ? "Genus & Species — more ways to build it"
+                : "Invention Concept Blueprint — Final Steps"}
             </h2>
             <p className="mt-1 font-sans text-sm text-ink-muted">
-              Complete the last part of the process and download your Invention Concept Blueprint.
+              {mode === "expansion"
+                ? "Explore the ways your invention could be built and keep the ones that fit — we'll write them into your draft."
+                : "Complete the last part of the process and download your Invention Concept Blueprint."}
             </p>
             <div className="mt-2 flex items-center gap-3">
               <button
-                onClick={() => setStage("differentiation")}
+                onClick={() => setStage(mode === "expansion" ? "differentiation" : "genus_species")}
                 className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
               >
-                ← Differentiation
+                {mode === "expansion" ? "← Differentiation" : "← Genus & Species"}
               </button>
-              <RestartPart stage="showcase" onRestartThis={restart} />
+              {mode === "expansion" ? (
+                // Same action as arriving here from Differentiation: just re-run the
+                // step (regenerate the ways) — NOT a destructive stage reset.
+                <button
+                  type="button"
+                  onClick={onExpandClick}
+                  disabled={busy}
+                  className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent disabled:opacity-50"
+                >
+                  ↻ Start this part over
+                </button>
+              ) : (
+                <RestartPart stage="showcase" onRestartThis={restart} />
+              )}
             </div>
           </header>
 
-          {/* Four top actions */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <ActionButton
-              onClick={onExpandClick}
-              disabled={busy}
-              primary
-              label="Genus & Species Expansion"
-              icon="✦"
-              tooltip={
-                view.broadened
-                  ? "You've already run this expansion — running it again will replace the current one in your draft."
-                  : undefined
-              }
-            />
-            <ActionButton
-              onClick={() => void doGenerateDiagrams()}
-              disabled={busy || diagramsBusy || sections.length === 0 || !view.broadened}
-              label={drawings.length > 0 ? "Re-Generate Diagrams" : "Generate Diagrams"}
-              icon="▤"
-              hint={!view.broadened ? "Do the expansion first" : undefined}
-            />
-            <ActionButton
-              onClick={() => void doExport("icb")}
-              disabled={busy || sections.length === 0 || drawings.length === 0}
-              primary
-              label="Download the Invention Concept Blueprint"
-              icon="⭳"
-              hint={drawings.length === 0 ? "Generate diagrams first" : undefined}
-            />
-            <ActionButton
-              onClick={() => void doExport("proof")}
-              disabled={busy || drawings.length === 0}
-              label="Download Proof of Human Conception"
-              icon="⭳"
-              hint={drawings.length === 0 ? "Generate diagrams first" : undefined}
-            />
-          </div>
-          {gateHint && (
+          {/* The final draft's actions. The Genus & Species step has no top actions —
+              it runs on its own and moves to the draft when it's done. */}
+          {mode === "draft" && (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <ActionButton
+                onClick={() => void doGenerateDiagrams()}
+                disabled={busy || diagramsBusy || sections.length === 0 || !view.broadened}
+                label={drawings.length > 0 ? "Re-Generate Diagrams" : "Generate Diagrams"}
+                icon="▤"
+                hint={!view.broadened ? "Do the Genus & Species step first" : undefined}
+              />
+              <ActionButton
+                onClick={() => void doExport("icb")}
+                disabled={busy || sections.length === 0 || drawings.length === 0}
+                primary
+                label="Download the Invention Concept Blueprint"
+                icon="⭳"
+                hint={drawings.length === 0 ? "Generate diagrams first" : undefined}
+              />
+              <ActionButton
+                onClick={() => void doExport("proof")}
+                disabled={busy || drawings.length === 0}
+                label="Download Proof of Human Conception"
+                icon="⭳"
+                hint={drawings.length === 0 ? "Generate diagrams first" : undefined}
+              />
+            </div>
+          )}
+          {gateHint && mode === "draft" && (
             <p className="flex items-center justify-center gap-1.5 text-center font-mono text-[11px] text-ink-muted">
               <span aria-hidden>🔒</span> {gateHint}
             </p>
@@ -325,32 +374,47 @@ export default function ShowcasePanel({
               <span className="font-mono text-xs text-ink-muted">
                 {sections.length === 0
                   ? "Loading your draft…"
-                  : view.phase === "reviewing_species"
-                    ? "Drafting the full expansion for your review — broadened concepts, new concepts, and section extensions… this takes a few minutes."
+                  : view.phase === "sweeping" || view.phase === "awaiting_criterion"
+                    ? "Finding more ways your invention could be built… this takes a minute or two."
                     : view.phase === "reviewing_artifacts"
-                      ? "Working…"
-                      : view.phase === "selecting_variations" || view.phase === "approving_widened"
-                        ? "Working through the expansion…"
-                        : "Working — extracting the underlying mechanism and drafting the alternative implementations… this takes a minute or two."}
+                      ? "Writing up the ways you kept…"
+                      : "Working through your invention… this takes a minute or two."}
               </span>
             </div>
           )}
 
-          {view.broadened && (
+          {/* Ran, but nothing came back — never leave a silent blank. */}
+          {mode === "expansion" &&
+            attempted &&
+            ready &&
+            !working &&
+            !view.broadened &&
+            !hasSweep &&
+            broadeningCards.length === 0 && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-center">
+                <p className="font-sans text-sm font-medium text-ink">
+                  We couldn&apos;t find strong ways to build it this time.
+                </p>
+                <p className="mt-1 font-mono text-xs text-ink-muted">
+                  Tap &ldquo;↻ Start this part over&rdquo; above to try again.
+                </p>
+              </div>
+            )}
+
+          {mode === "expansion" && view.broadened && (
             <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/[0.06] px-3 py-2">
               <span className="text-emerald-400">✓</span>
-              <span className="font-sans text-[13px] text-ink">Expansion applied to your draft.</span>
-              <span className="ml-1 rounded-full border border-border px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted">
-                Applied
+              <span className="font-sans text-[13px] text-ink">
+                Added to your draft — continue when you&apos;re ready.
               </span>
             </div>
           )}
 
           {/* Broadening decisions, when the expansion surfaced any */}
-          {broadeningCards.length > 0 && (
+          {mode === "expansion" && broadeningCards.length > 0 && (
             <div className="flex flex-col gap-3">
               <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
-                Genus &amp; Species Expansion · your decisions
+                Genus &amp; Species · your decisions
               </div>
               {broadeningCards.map((card) => (
                 <CardView key={card.id} card={card} busy={busy} onAct={act} onDecide={decide} />
@@ -359,7 +423,7 @@ export default function ShowcasePanel({
           )}
 
           {/* The ICB Draft — tabbed + editable */}
-          {sections.length > 0 && (
+          {mode === "draft" && sections.length > 0 && (
             <div className="rounded-lg border border-border bg-panel">
               <div className="flex items-center justify-between gap-2 border-b border-border p-4">
                 <div>
@@ -553,15 +617,19 @@ export default function ShowcasePanel({
             </div>
           )}
 
-          <HelperThread turns={view.conversation} onQuickReply={tell} busy={busy} />
+          {mode === "draft" && (
+            <HelperThread turns={view.conversation} onQuickReply={tell} busy={busy} />
+          )}
         </div>
       </div>
 
-      <div className="border-t border-border bg-panel p-4">
-        <div className={`mx-auto w-full ${maxW}`}>
-          <HelperComposer placeholder="Ask the Helper to polish a section…" busy={busy} onSend={tell} />
+      {mode === "draft" && (
+        <div className="border-t border-border bg-panel p-4">
+          <div className={`mx-auto w-full ${maxW}`}>
+            <HelperComposer placeholder="Ask the Helper to polish a section…" busy={busy} onSend={tell} />
+          </div>
         </div>
-      </div>
+      )}
 
       {diagramsOpen && (
         <DiagramsProgressModal
@@ -954,18 +1022,18 @@ function ActionButton({
       <button
         onClick={onClick}
         disabled={disabled}
-        className={`flex w-full items-center justify-center gap-2 rounded-md border px-4 py-3 font-sans text-sm font-medium transition-colors disabled:opacity-50 ${
+        className={`flex min-h-[4.5rem] w-full flex-col items-center justify-center gap-1 rounded-md border px-4 py-3 text-center font-sans text-sm font-semibold leading-snug transition-colors disabled:cursor-not-allowed disabled:opacity-80 ${
           primary
-            ? "border-accent/40 bg-accent/15 text-accent hover:bg-accent/25"
-            : "border-border bg-panel text-ink-muted hover:text-ink"
+            ? "border-accent/50 bg-accent/20 text-accent hover:bg-accent/30"
+            : "border-border bg-panel text-ink hover:border-accent/50 hover:bg-bg"
         }`}
       >
-        <span aria-hidden>{icon}</span>
-        {label}
+        <span className="flex items-center gap-2">
+          <span aria-hidden>{icon}</span>
+          {label}
+        </span>
         {hint && (
-          <span className="ml-1 font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted">
-            ({hint})
-          </span>
+          <span className="font-sans text-[11px] font-medium text-ink-muted">{hint}</span>
         )}
       </button>
     </span>
@@ -990,148 +1058,142 @@ function CardView({
       return <VariationView card={card} busy={busy} onAct={onAct} />;
     case "widened_review":
       return <WidenedReviewView card={card} busy={busy} onAct={onAct} />;
-    case "species_review":
-      return <SpeciesReviewView card={card} busy={busy} onAct={onAct} onDecide={onDecide} />;
     case "expansion_review":
       return <ExpansionReviewView card={card} busy={busy} onAct={onAct} onDecide={onDecide} />;
+    case "criterion":
+      return <CriterionView card={card} busy={busy} onAct={onAct} />;
+    case "candidate_sweep":
+      return <SweepView card={card} busy={busy} onAct={onAct} />;
     default:
       return null;
   }
 }
 
-/** GATE 1 (V1): all species on one screen — Approve / Edit / Reject each, then
- *  Confirm & Continue. Only approved implementations continue. */
-function SpeciesReviewView({
+/** Layer 4 criterion — tap-only. Every option is the inventor's own words; no compose surface. */
+function CriterionView({
   card,
   busy,
   onAct,
-  onDecide,
 }: {
-  card: SpeciesReviewCard;
+  card: CriterionCard;
   busy: boolean;
   onAct: (cardId: string, input: never) => void;
-  onDecide: (cardId: string, input: never) => void;
 }) {
-  const [editing, setEditing] = useState<string | null>(null);
-  const [text, setText] = useState("");
-  const allDecided = card.items.every((i) => i.status !== "pending");
+  return (
+    <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4">
+      <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-amber-400">
+        The one thing to get right
+      </div>
+      <div className="font-sans text-sm font-semibold text-ink">{card.question}</div>
+      <div className="mt-3 flex flex-col gap-2">
+        {card.fragments.map((f) => (
+          <button
+            key={f.id}
+            onClick={() => onAct(card.id, { action: "choose", fragmentId: f.id } as never)}
+            disabled={busy}
+            className="rounded-md border border-border bg-bg px-3 py-2 text-left font-sans text-[13px] text-ink transition-colors hover:border-accent disabled:opacity-50"
+          >
+            &ldquo;{f.text}&rdquo;
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Layer 5 sweep — all the ways to build it, shown flat; keep as many as fit. */
+function SweepView({
+  card,
+  busy,
+  onAct,
+}: {
+  card: SweepCard;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  // Defensive: a sweep card saved before grouping has no `groups`.
+  const groups = card.groups ?? [];
+  const keptCount = groups.reduce(
+    (n, g) => n + g.items.filter((i) => i.status === "kept").length,
+    0,
+  );
+  if (!groups.length) {
+    return (
+      <div className="rounded-md border border-border bg-panel p-4">
+        <p className="font-sans text-[13px] text-ink-muted">
+          This list is from an earlier run. Tap <span className="text-ink">Genus &amp; Species
+          Expansion</span> above to refresh it.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="rounded-md border border-border bg-panel p-4">
-      <div className="font-sans text-base font-semibold text-ink">Review AI implementations</div>
-      <p className="mt-0.5 font-sans text-xs text-ink-muted">
-        Approve, edit, or reject each — only approved ones get woven into your draft.
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-action">
+          Genus &amp; Species · keep the ways that fit
+        </div>
+        <span className="font-mono text-[10px] text-ink-muted">{keptCount} kept</span>
+      </div>
+      <p className="mb-3 font-sans text-[12px] text-ink-muted">
+        Ways to build it. Tap any that fit — keep as many as you like — tap again to remove. The
+        more you keep, the more your invention is covered.
       </p>
-      <div className="mt-3 space-y-3">
-        {card.items.map((it) => (
-          <div
-            key={it.speciesType}
-            className={`rounded-md border p-3 ${
-              it.status === "approved"
-                ? "border-emerald-500/40 bg-emerald-500/[0.05]"
-                : it.status === "rejected"
-                  ? "border-border bg-bg/40 opacity-60"
-                  : "border-border bg-bg"
-            }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="font-sans text-sm font-semibold text-ink">
-                {it.label}
-                {it.status !== "pending" && (
-                  <span
-                    className={`ml-2 font-mono text-[9px] uppercase tracking-[0.1em] ${
-                      it.status === "approved" ? "text-emerald-400" : "text-red-300"
+
+      <div className="flex flex-col gap-4">
+        {groups.map((g) => (
+          <div key={g.family}>
+            {/* A header only where several ways share one approach — a single
+                stand-alone way needs none, so no card reads as a special category. */}
+            {g.items.length > 1 && (
+              <div className="mb-1.5 font-sans text-[12px] font-semibold text-ink">{g.family}</div>
+            )}
+            <div className="flex flex-col gap-2">
+              {g.items.map((it) => {
+                const kept = it.status === "kept";
+                return (
+                  <button
+                    key={it.candidateId}
+                    onClick={() =>
+                      onAct(card.id, { action: "keep", candidateId: it.candidateId } as never)
+                    }
+                    disabled={busy}
+                    className={`rounded-md border p-3 text-left transition-colors disabled:opacity-60 ${
+                      kept
+                        ? "border-accent bg-accent/15"
+                        : "border-border bg-bg hover:border-accent/50"
                     }`}
                   >
-                    {it.status}
-                  </span>
-                )}
-              </div>
-              <div className="flex shrink-0 gap-1.5">
-                <button
-                  onClick={() => onDecide(card.id, { action: "approve", speciesType: it.speciesType } as never)}
-                  disabled={busy}
-                  className={`rounded-md px-2.5 py-1 font-sans text-xs font-medium disabled:opacity-50 ${
-                    it.status === "approved"
-                      ? "bg-accent text-brand"
-                      : "border border-border text-ink-muted hover:text-ink"
-                  }`}
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={() => {
-                    setEditing(it.speciesType);
-                    setText(it.description);
-                  }}
-                  disabled={busy}
-                  className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={() => onDecide(card.id, { action: "reject", speciesType: it.speciesType } as never)}
-                  disabled={busy}
-                  className={`rounded-md px-2.5 py-1 font-sans text-xs disabled:opacity-50 ${
-                    it.status === "rejected"
-                      ? "border border-red-500/60 bg-red-500/15 text-red-300"
-                      : "border border-border text-ink-muted hover:border-red-500/40 hover:text-red-300"
-                  }`}
-                >
-                  Reject
-                </button>
-              </div>
+                    <div className="flex items-baseline gap-2">
+                      <span aria-hidden className="text-accent">
+                        {kept ? "✓" : "+"}
+                      </span>
+                      <span className="font-sans text-[13px] font-semibold text-ink">{it.label}</span>
+                    </div>
+                    <p className="mt-1 font-sans text-[12px] text-ink-muted">
+                      <span className="text-ink">Like:</span> {it.source}
+                    </p>
+                    <p className="mt-0.5 font-sans text-[12px] text-ink-muted">
+                      <span className="text-ink">For you:</span> {it.mapping}
+                    </p>
+                    <p className="mt-0.5 font-sans text-[12px] text-ink-muted">
+                      <span className="text-ink">Tradeoff:</span> {it.tradeoff}
+                    </p>
+                  </button>
+                );
+              })}
             </div>
-            {editing === it.speciesType ? (
-              <>
-                <textarea
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  rows={6}
-                  className="mt-2 w-full resize-y rounded-md border border-border bg-panel p-2 font-sans text-xs leading-relaxed text-ink focus:border-accent focus:outline-none"
-                />
-                <div className="mt-2 flex gap-2">
-                  <button
-                    onClick={() => {
-                      onAct(card.id, {
-                        action: "edit",
-                        speciesType: it.speciesType,
-                        text: text.trim(),
-                      } as never);
-                      setEditing(null);
-                    }}
-                    disabled={busy || !text.trim()}
-                    className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
-                  >
-                    Save
-                  </button>
-                  <button
-                    onClick={() => setEditing(null)}
-                    className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p className="mt-2 whitespace-pre-wrap font-sans text-xs leading-relaxed text-ink-muted">
-                {it.description}
-              </p>
-            )}
           </div>
         ))}
       </div>
-      <div className="mt-4 flex items-center justify-between gap-2">
-        <span className="font-mono text-[10px] text-ink-muted">
-          {allDecided
-            ? "All decided — continuing drafts the full expansion for your review (a few minutes)."
-            : "Decide every implementation to continue."}
-        </span>
+
+      <div className="mt-4 flex justify-end">
         <button
-          onClick={() => onAct(card.id, { action: "confirm" } as never)}
-          disabled={busy || !allDecided}
-          className="rounded-md bg-accent px-4 py-2 font-sans text-sm font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+          onClick={() => onAct(card.id, { action: "finalize" } as never)}
+          disabled={busy}
+          className="rounded-md bg-accent px-4 py-2 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
         >
-          Confirm &amp; Continue
+          Done — write these up
         </button>
       </div>
     </div>
@@ -1303,25 +1365,18 @@ function ChoiceView({
   onAct: (cardId: string, input: never) => void;
 }) {
   return (
-    <div className="rounded-md border border-border bg-panel p-4">
-      <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-action">
-        Broaden? · optional
+    <div className="rounded-md border border-accent/40 bg-accent/[0.06] p-4">
+      <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
+        Genus &amp; Species
       </div>
-      <p className="mt-1 font-sans text-xs leading-relaxed text-ink-muted">{card.question}</p>
-      <div className="mt-3 flex flex-wrap gap-2">
+      <p className="mt-1 font-sans text-[13px] leading-relaxed text-ink">{card.question}</p>
+      <div className="mt-3">
         <button
           onClick={() => onAct(card.id, { choice: "broaden" } as never)}
           disabled={busy}
-          className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+          className="rounded-md bg-accent px-4 py-2 font-sans text-sm font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
         >
-          Broaden it
-        </button>
-        <button
-          onClick={() => onAct(card.id, { choice: "skip" } as never)}
-          disabled={busy}
-          className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
-        >
-          Finish as is
+          ✦ Explore how it could be built
         </button>
       </div>
     </div>
