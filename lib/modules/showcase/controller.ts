@@ -17,6 +17,14 @@ import {
   runFormalizer,
   runGrader,
   runKeyConceptBroadener,
+  runKCHygieneVerify,
+  runConstraintMiner,
+  runGenusVerify,
+  runDeltaMiner,
+  runKCIndependent,
+  runKCDependent,
+  runExitEvaluator,
+  runForestExpander,
   runSectionPolisher,
   runSummaryExtender,
   runVerifier,
@@ -24,6 +32,10 @@ import {
   type SectionPolishMode,
 } from "./agents";
 import { SHOWCASE_CONFIG } from "./config";
+import { checkRenderingContract } from "./contract";
+import { runChain, type Finding, type Receipt } from "./chain";
+import { findNearDuplicates, lintKC } from "./hygiene";
+import { REQUIRED_CONSTRAINT_KINDS, type ConstraintKind } from "./coverage";
 import { SHOWCASE_HUMAN_SOURCE_TYPES } from "./types";
 import type {
   ChoiceInput,
@@ -56,6 +68,20 @@ import type {
   SweepGroup,
   SweepInput,
   SweepItem,
+  KCHygieneCard,
+  KCHygieneDuplicate,
+  KCHygieneFlag,
+  KCHygieneInput,
+  MinedConstraintItem,
+  ConstraintReviewInput,
+  GenusReviewInput,
+  DeltaCandidate,
+  DeltaRegion,
+  DeltaReviewInput,
+  ForestCard,
+  ForestTree,
+  ForestInput,
+  TreeOrigin,
 } from "./types";
 
 /**
@@ -76,26 +102,48 @@ type Intent =
   | { kind: "widened"; conceptId: string }
   | { kind: "expansion_review" }
   | { kind: "criterion" }
-  | { kind: "sweep" };
+  | { kind: "sweep" }
+  | { kind: "kc_hygiene" }
+  | { kind: "constraint_review" }
+  | { kind: "genus_review" }
+  | { kind: "delta_review" }
+  | { kind: "forest" };
 
-/** A graded candidate plus its sweep bookkeeping (controller-internal). */
+/** A graded candidate (region) plus its sweep bookkeeping (controller-internal). */
 type StoredCandidate = GradedCandidate & {
   // "shown" = surfaced on the sweep; "rejected" = a duplicate or failure, deleted.
   bucket: "shown" | "rejected";
   surfaced: boolean;
-  decision?: "kept" | "dismissed";
+  /** The Phase-C region decision (spec §5): keep=disclosure, protect=claim grade. */
+  decision?: "kept" | "protected" | "excluded" | "parked";
   /** A mandatory standard build-style — always present, never graded or dropped. */
   mandatory?: boolean;
   /** The build-style tag for a mandatory card (provenance only; never shown). */
   speciesType?: SpeciesType;
+  /** The axis this region sits on (spec §4/§5); "automation" for the mandatory three. */
+  axisId?: string;
+  /** Delta mining (spec §6): mined deltas + the claim-grade outcome for a protected region. */
+  deltas?: DeltaCandidate[];
+  /** The mechanism is unchanged in this setting (invariance path). */
+  sameAsPrimary?: boolean;
+  /** After delta review: does this protected region actually reach claim grade? */
+  claimConfirmed?: boolean;
+  /** Forest: where this tree came onto the map (yours / gap / design_around / future). */
+  origin?: TreeOrigin;
+  /** Forest: the strategic reason a steered tree belongs (gap filled / design-around / future). */
+  note?: string;
+  /** Forest: the inventor's one-line +1 in their own words — the human-conception anchor. */
+  humanDetail?: string;
 };
 
+/** The automation-axis header (spec §5): the three mandatory build-styles group here, first. */
+const AUTOMATION_AXIS_LABEL = "How much the AI does the work";
+
 /**
- * The three mandatory build-styles, in the order they're always shown first. Each
- * carries its OWN family so they sit among the emergent ways as equals — never
- * clustered under a "standard ways" umbrella. The text here is only a fallback for
- * when the Baseline Builder omits a style or fails — the agent's plain,
- * invention-specific card overrides it whenever present.
+ * The three mandatory build-styles, in the order they're always shown first. They
+ * are the positions of the automation axis (spec §4 B1) — grouped under it, first.
+ * The text here is only a fallback for when the Baseline Builder omits a style or
+ * fails — the agent's plain, invention-specific card overrides it whenever present.
  */
 const BASELINE_STYLES: {
   type: SpeciesType;
@@ -157,6 +205,8 @@ export type ShowcaseSnapshot = {
   criterion?: Criterion | null;
   criterionEntryId?: string | null;
   candidates?: StoredCandidate[];
+  /** A3 (rebuild): inventor-confirmed, anchored constraints flowing downstream. */
+  confirmedConstraints?: string[];
 };
 
 export class ShowcaseModule {
@@ -181,6 +231,9 @@ export class ShowcaseModule {
   private criterion: Criterion | null = null;
   private criterionEntryId: string | null = null;
   private candidates: StoredCandidate[] = [];
+  // A3 (rebuild): the inventor-confirmed, anchored, type-classified constraints that
+  // flow through the enumerator / grader / formalizer signatures. Was an empty array.
+  private confirmedConstraints: string[] = [];
 
   constructor(deps: ShowcaseDeps) {
     this.runAgent = deps.runAgent;
@@ -227,13 +280,33 @@ export class ShowcaseModule {
       | WidenedActionInput
       | ExpansionReviewInput
       | CriterionInput
-      | SweepInput,
+      | SweepInput
+      | KCHygieneInput
+      | ConstraintReviewInput
+      | GenusReviewInput
+      | DeltaReviewInput
+      | ForestInput,
   ): Promise<Module5View> {
     const card = this.openCards.get(cardId);
     const intent = this.intents.get(cardId);
     if (!card || !intent) return this.view();
 
     switch (card.type) {
+      case "kc_hygiene":
+        await this.handleKCHygiene(cardId, input as KCHygieneInput);
+        break;
+      case "constraint_review":
+        await this.handleConstraintReview(cardId, input as ConstraintReviewInput);
+        break;
+      case "genus_review":
+        await this.handleGenusReview(cardId, input as GenusReviewInput);
+        break;
+      case "delta_review":
+        await this.handleDeltaReview(cardId, input as DeltaReviewInput);
+        break;
+      case "forest":
+        await this.handleForest(cardId, input as ForestInput);
+        break;
       case "choice":
         await this.handleChoice(cardId, input as ChoiceInput);
         break;
@@ -527,7 +600,12 @@ export class ShowcaseModule {
         c.type === "widened_review" ||
         c.type === "expansion_review" ||
         c.type === "criterion" ||
-        c.type === "candidate_sweep"
+        c.type === "candidate_sweep" ||
+        c.type === "kc_hygiene" ||
+        c.type === "constraint_review" ||
+        c.type === "genus_review" ||
+        c.type === "delta_review" ||
+        c.type === "forest"
       ) {
         this.resolveCard(id);
       }
@@ -537,6 +615,7 @@ export class ShowcaseModule {
     this.criterion = null;
     this.criterionEntryId = null;
     this.candidates = [];
+    this.confirmedConstraints = [];
     // Re-expansion regenerates the genus and species, so supersede the gaps those
     // stages opened (append-only: emit a dismissal, don't delete). Later-stage
     // gaps (e.g. the formalizer) survive.
@@ -649,40 +728,219 @@ export class ShowcaseModule {
     await this.generateVariations();
   }
 
+  /**
+   * A1 — Key Concept overlap SIGNAL (spec §3 A1, revised for this module's purpose).
+   *
+   * This module BROADENS and never removes a Key Concept, so hygiene no longer
+   * surfaces ANY keep-one / delete choice. A broadening step must make narrowing
+   * impossible, not merely discouraged — any button that removes a concept lets an
+   * inventor click their way down to the narrowest idea, which is the exact opposite
+   * of the job. Where two concepts overlap, that shared core is the raw material the
+   * genus lifts UP into the broad position; it flows upward, never deletes sideways.
+   *
+   * So this runs the deterministic checks only to RECORD a signal (for provenance /
+   * the genus), surfaces nothing, and always proceeds. No concept is ever removed.
+   */
+  private async runKCHygiene(): Promise<boolean> {
+    const kcs = [...this.keyConcepts.values()];
+    const lintKCs = kcs.map((k) => ({ id: k.id, title: k.title, statement: k.statement }));
+    // A low bar here just senses where a shared core lives, for the genus to lift up.
+    const overlaps = findNearDuplicates(lintKCs, 0.5);
+    const textFlags = lintKCs.reduce((n, kc) => n + lintKC(kc).length, 0);
+    if (overlaps.length || textFlags) {
+      this.ledger.recordMachineEvent("kc_overlap_signal", ["showcase"], {
+        overlaps: overlaps.map((p) => ({ a: p.a.id, b: p.b.id, similarity: p.similarity })),
+        textFlags,
+      });
+    }
+    this.recordReceipt({ chain: "kc_hygiene", outcome: "verified_clean", findings: [] });
+    return true; // never surface a narrowing choice — straight to the broadening
+  }
+
+  /** Resolve one A1 hygiene decision; when the set is clean, continue to genus. */
+  private async handleKCHygiene(cardId: string, input: KCHygieneInput): Promise<void> {
+    const card = this.openCards.get(cardId);
+    if (!card || card.type !== "kc_hygiene") return;
+
+    if (input.action === "keep_one") {
+      const pair = card.duplicates.find((d) => d.pairId === input.pairId);
+      if (!pair) return;
+      const dropId = input.keepId === pair.aId ? pair.bId : pair.aId;
+      this.keyConcepts.delete(dropId);
+      this.ledger.recordDecision("kc_hygiene", ["showcase", "duplicate_removed"], {
+        removed: dropId,
+        kept: input.keepId,
+      });
+      pair.resolved = true;
+      this.markResolvedFor(card, dropId);
+    } else if (input.action === "keep_both") {
+      const pair = card.duplicates.find((d) => d.pairId === input.pairId);
+      if (pair) pair.resolved = true;
+    } else if (input.action === "keep_flag") {
+      const flag = card.flags.find((f) => f.flagId === input.flagId);
+      if (flag) flag.resolved = true;
+    } else if (input.action === "remove_flag") {
+      const flag = card.flags.find((f) => f.flagId === input.flagId);
+      if (flag) {
+        this.keyConcepts.delete(flag.kcId);
+        this.ledger.recordDecision("kc_hygiene", ["showcase", "flagged_removed"], {
+          removed: flag.kcId,
+        });
+        this.markResolvedFor(card, flag.kcId);
+      }
+    }
+
+    if (card.duplicates.every((d) => d.resolved) && card.flags.every((f) => f.resolved)) {
+      this.resolveCard(cardId);
+      await this.runGenusAndCandidates();
+    }
+  }
+
+  /** Mark every hygiene finding touching a removed Key Concept as resolved. */
+  private markResolvedFor(card: KCHygieneCard, removedKcId: string): void {
+    for (const f of card.flags) if (f.kcId === removedKcId) f.resolved = true;
+    for (const d of card.duplicates) {
+      if (d.aId === removedKcId || d.bId === removedKcId) d.resolved = true;
+    }
+  }
+
   private async generateVariations(): Promise<void> {
     // A (re-)run means the broadening has NOT been applied yet, so reset the flag.
     // Without this, restarting the stage after a prior completion left `broadened`
     // true, and the client auto-advanced to the draft the moment the sweep resolved —
     // jumping past the broadening review (part 2) and stranding it on this page.
     this.broadened = false;
-    // Genus — the paradigm-neutral mechanism beneath the Key Concepts.
+    // A1 hygiene first — the CLEAN Key Concept set gates everything downstream
+    // (spec §3 A1). If it surfaces cards, pause here and resume from the card.
+    const clean = await this.runKCHygiene();
+    if (!clean) return;
+    await this.runGenusAndCandidates();
+  }
+
+  /** Genus detection → confirm → constraints → breadth → sweep. */
+  private async runGenusAndCandidates(): Promise<void> {
+    await this.runGenusChain();
+  }
+
+  /**
+   * A2 — genus detection as a chain (spec §3 A2). Produce: extract the genus with
+   * verbatim anchors. Verify: a deterministic ≥8-char anchor check + a second-model
+   * OVERBREADTH review against the anchors. Repair/fallback: narrow to the anchored
+   * portion (never invent an anchor). Then surface the genus for Keep/Edit. On
+   * genus-extraction failure the stage completes (can't go on without a genus).
+   */
+  private async runGenusChain(): Promise<void> {
     const kcs = [...this.keyConcepts.values()];
-    try {
-      const { gaps: genusGaps, ...genus } = await runGenusExtractor(this.runAgent, {
-        keyConcepts: kcs.map((k) => ({ title: k.title, statement: k.statement })),
-        verbatim: kcs.flatMap((k) => k.verbatim),
-      });
-      this.genus = genus;
-      this.ledger.recordMachineEvent("agent_genus", ["showcase"], {});
-      // Constraints/invariants the inputs didn't supply are simply left empty — a
-      // thin genus still yields the forest. We do NOT surface these as gaps: they
-      // concern an internal distillation step the inventor never sees, so a card
-      // about them is noise. (Genus stays POHC-safe by never AUTHORING the missing
-      // substance — see the extractor prompt.) `genusGaps` is intentionally dropped.
-      void genusGaps;
-    } catch (err) {
-      console.error("[showcase] genus extraction failed", err);
-      this.complete(); // can't go on without a genus
+    const record = kcs.flatMap((k) => k.verbatim).join("\n");
+    const anchored = (q: string) => q.trim().length >= 8 && record.includes(q.trim());
+    const narrow = (g: Genus): Genus => ({ ...g, anchors: (g.anchors ?? []).filter(anchored) });
+
+    let failed = false;
+    const { value: genus, findings } = await runChain<Genus>({
+      name: "genus_detection",
+      produce: async () => {
+        try {
+          const { gaps, ...g } = await runGenusExtractor(this.runAgent, {
+            keyConcepts: kcs.map((k) => ({ title: k.title, statement: k.statement })),
+            verbatim: kcs.flatMap((k) => k.verbatim),
+          });
+          void gaps;
+          return g as Genus;
+        } catch (err) {
+          console.error("[showcase] genus extraction failed", err);
+          failed = true;
+          return {
+            genus_name: "",
+            genus_description: "",
+            input_pattern: "",
+            transformation_pattern: "",
+            output_pattern: "",
+            anchors: [],
+          } as Genus;
+        }
+      },
+      verify: async (g) => {
+        if (failed) return { pass: true, findings: [] };
+        const findings: Finding[] = [];
+        const real = (g.anchors ?? []).filter(anchored);
+        if (!real.length) {
+          findings.push({
+            quote: g.genus_name || "(genus)",
+            citation: "A2.anchor",
+            rule: "genus carries no verbatim anchor ≥8 chars from the inputs",
+          });
+        }
+        try {
+          const v = await runGenusVerify(this.runAgent, { genus: g, anchors: real });
+          for (const o of v.overbroad) {
+            if (o.quote.trim()) {
+              findings.push({
+                quote: o.quote,
+                citation: "MPEP 2161.01",
+                rule: `overbroad: ${o.reason || "claims more than the anchors support"}`,
+              });
+            }
+          }
+        } catch (err) {
+          console.error("[showcase] genus verify failed", err);
+        }
+        return { pass: findings.length === 0, findings };
+      },
+      // Repair/fallback narrow to the anchored portion — a quote is never invented.
+      repair: async (g) => narrow(g),
+      fallback: (g) => narrow(g),
+      onReceipt: (r) => this.recordReceipt(r),
+    });
+
+    if (failed || !genus.genus_name) {
+      this.complete();
       return;
     }
 
+    this.genus = genus;
+    this.ledger.recordMachineEvent("agent_genus", ["showcase"], {});
+
+    // Surface the genus for confirmation / edit (spec §3 A2). Overbreadth findings
+    // that survived to fallback are shown so the inventor can narrow the wording.
+    const overbroad = findings
+      .filter((f) => f.citation.startsWith("MPEP"))
+      .map((f) => ({ quote: f.quote, reason: f.rule.replace(/^overbroad:\s*/, "") }));
+    const id = this.genId();
+    this.openCards.set(id, { id, type: "genus_review", genus, overbroad });
+    this.intents.set(id, { kind: "genus_review" });
+  }
+
+  /** Resolve the A2 genus confirmation; Keep continues to A3, Edit revises the statement. */
+  private async handleGenusReview(cardId: string, input: GenusReviewInput): Promise<void> {
+    const card = this.openCards.get(cardId);
+    if (!card || card.type !== "genus_review" || !this.genus) return;
+
+    if (input.action === "edit") {
+      const desc = input.description.trim();
+      if (desc) {
+        this.genus = { ...this.genus, genus_description: desc };
+        card.genus = this.genus;
+        // Editing the genus statement (a machine abstraction) is the inventor's — R2.
+        this.ledger.recordDecision("genus_edit", ["showcase", "inventor_conceived"], {});
+      }
+      return;
+    }
+
+    // keep — confirm the genus and continue to A3, then breadth + sweep.
+    this.resolveCard(cardId);
+    if (!(await this.runConstraintMining())) return;
+    await this.runBreadthAndSweep();
+  }
+
+  /** Breadth sizing → the ways-to-build-it sweep (post-constraint-confirmation). */
+  private async runBreadthAndSweep(): Promise<void> {
     // Size the invention: how many genuinely distinct build-directions ("trees")
     // does this genus ("forest") warrant? Narrow → a few; broad → many. The count
     // is assessed per ICB case, not fixed at three.
     let band: "narrow" | "moderate" | "broad" = "moderate";
     try {
       const b = await runBreadthAssessor(this.runAgent, {
-        genus: this.genus,
+        genus: this.genus!,
         keyConcepts: [...this.keyConcepts.values()].map((k) => ({
           title: k.title,
           statement: k.statement,
@@ -697,6 +955,133 @@ export class ShowcaseModule {
     // The flow: genus → enumerate → grade → sweep → formalize. No opening
     // question — candidates come first, and keep/dismiss IS the signal.
     await this.generateCandidates(band);
+  }
+
+  /**
+   * A3 — constraint mining (spec §3 A3). Produce: mine the verbatim record for
+   * anchored, classified candidates. Verify: a deterministic anchor check (every
+   * quote must be a verbatim substring of the record). Fallback: drop the
+   * unanchored — never rewrite one into existence. Surfaces a Keep/Remove/Edit
+   * confirmation card; the confirmed set populates confirmedConstraints. Returns
+   * true when there is nothing to confirm (proceed), false when a card was surfaced.
+   */
+  private async runConstraintMining(): Promise<boolean> {
+    const record = [...this.keyConcepts.values()]
+      .flatMap((k) => k.verbatim)
+      .join("\n")
+      .trim();
+    if (!record) {
+      this.confirmedConstraints = [];
+      return true;
+    }
+
+    const anchored = (c: { quote: string }) =>
+      c.quote.trim().length > 0 && record.includes(c.quote.trim());
+
+    const { value: candidates } = await runChain<{ kind: ConstraintKind; quote: string }[]>({
+      name: "constraint_mining",
+      produce: async () => (await runConstraintMiner(this.runAgent, { record })).candidates,
+      verify: async (cands) => {
+        const findings: Finding[] = cands
+          .filter((c) => !anchored(c))
+          .map((c) => ({
+            quote: c.quote || "(empty)",
+            citation: "A3.anchor",
+            rule: "constraint quote is not a verbatim substring of the record",
+          }));
+        return { pass: findings.length === 0, findings };
+      },
+      // No repair — a quote is never rewritten into existence; drop the unanchored.
+      fallback: (cands) => cands.filter(anchored),
+      onReceipt: (r) => this.recordReceipt(r),
+    });
+
+    // Deduplicate by (kind, normalized quote).
+    const seen = new Set<string>();
+    const deduped = candidates.filter((c) => {
+      const key = `${c.kind}:${c.quote.trim().toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    if (!deduped.length) {
+      // Nothing minable — confirmedConstraints stays empty. Missing required classes
+      // are recorded as gaps (routed to Phase C), never asked as questions here.
+      this.confirmedConstraints = [];
+      this.recordMissingConstraintGaps(new Set());
+      return true;
+    }
+
+    const items: MinedConstraintItem[] = deduped.map((c) => ({
+      id: this.genId(),
+      kind: c.kind,
+      quote: c.quote.trim(),
+      kept: true,
+    }));
+    const id = this.genId();
+    this.openCards.set(id, { id, type: "constraint_review", items });
+    this.intents.set(id, { kind: "constraint_review" });
+    return false;
+  }
+
+  /** Resolve the A3 confirmation; populate confirmedConstraints, then continue. */
+  private async handleConstraintReview(
+    cardId: string,
+    input: ConstraintReviewInput,
+  ): Promise<void> {
+    const card = this.openCards.get(cardId);
+    if (!card || card.type !== "constraint_review") return;
+
+    if (input.action === "toggle") {
+      const item = card.items.find((i) => i.id === input.itemId);
+      if (item) item.kept = !item.kept;
+      return;
+    }
+    if (input.action === "edit") {
+      const item = card.items.find((i) => i.id === input.itemId);
+      const q = input.quote.trim();
+      // Edit only ever TRIMS the inventor's own words — the result must still be a
+      // verbatim substring of the record (R2 / R3: never machine-authored content).
+      const record = [...this.keyConcepts.values()].flatMap((k) => k.verbatim).join("\n");
+      if (item && q && record.includes(q)) {
+        item.quote = q;
+        this.ledger.recordDecision("constraint_edit", ["showcase", "inventor_conceived"], {
+          kind: item.kind,
+        });
+      }
+      return;
+    }
+
+    // confirm
+    const kept = card.items.filter((i) => i.kept);
+    this.confirmedConstraints = kept.map((i) => i.quote);
+    for (const i of kept) {
+      this.ledger.recordDecision("constraint_confirmed", ["showcase", "inventor_confirmed"], {
+        kind: i.kind,
+      });
+    }
+    this.recordMissingConstraintGaps(new Set(kept.map((i) => i.kind)));
+    this.resolveCard(cardId);
+    await this.runBreadthAndSweep();
+  }
+
+  /** Open a gap for each required constraint class with no confirmed candidate. */
+  private recordMissingConstraintGaps(present: Set<ConstraintKind>): void {
+    const classFor: Record<ConstraintKind, DeclaredGap["gap_class"]> = {
+      constraint: "missing_constraint",
+      invariant: "missing_invariant",
+      operation_step: "missing_step",
+      data_structure: "missing_data_structure",
+    };
+    const declared: DeclaredGap[] = REQUIRED_CONSTRAINT_KINDS.filter((k) => !present.has(k)).map(
+      (k) => ({
+        gap_class: classFor[k],
+        field: k,
+        note: `the record states no ${k.replace(/_/g, " ")} for the invention yet`,
+      }),
+    );
+    if (declared.length) this.recordGaps("constraint_miner", declared);
   }
 
   /* ------------------------------------------------------------------ *
@@ -857,7 +1242,7 @@ export class ShowcaseModule {
     }
     const { generationCap, targetByBreadth } = SHOWCASE_CONFIG.layer4;
     const target = targetByBreadth[band]; // EMERGENT extras beyond the three standard ways
-    const confirmedConstraints: string[] = []; // Layer 1 (constraint discovery) is Phase 2.
+    const confirmedConstraints = this.confirmedConstraints; // A3: inventor-confirmed, anchored
 
     // (1) The three MANDATORY build-styles — always present, shown first, never graded.
     const mandatory = await this.buildMandatoryCards(genus, confirmedConstraints);
@@ -904,6 +1289,7 @@ export class ShowcaseModule {
             mapping: c.mapping,
             tradeoff: c.tradeoff,
             grade,
+            axisId: "approach", // emergent vehicles sit on the approaches axis
           };
         });
       }
@@ -930,11 +1316,14 @@ export class ShowcaseModule {
       best.surfaced = true;
     }
 
-    // Merge: the three mandatory build-styles first (shown first), then the emergent forest.
+    // Merge: the three mandatory build-styles first, then the emergent forest. These
+    // are the inventor's STARTING trees ("yours"); the forest grows from here as the
+    // inventor steers ("what am I missing?" / "design-arounds" / "the future version").
     this.candidates = [...mandatory, ...emergent];
+    for (const c of this.candidates) if (!c.origin) c.origin = "yours";
     const id = this.genId();
-    this.openCards.set(id, this.buildSweepCard(id));
-    this.intents.set(id, { kind: "sweep" });
+    this.openCards.set(id, this.buildForestCard(id));
+    this.intents.set(id, { kind: "forest" });
     this.phase = "sweeping";
   }
 
@@ -978,7 +1367,8 @@ export class ShowcaseModule {
       const got = byType.get(style.type);
       return {
         id: this.genId(),
-        family: style.family,
+        // The three mandatory build-styles are the automation axis, shown first (§5).
+        family: AUTOMATION_AXIS_LABEL,
         label: (got?.label ?? "").trim() || style.label,
         source: (got?.source ?? "").trim() || style.source,
         mapping: (got?.mapping ?? "").trim() || style.mapping,
@@ -988,11 +1378,12 @@ export class ShowcaseModule {
         surfaced: true,
         mandatory: true,
         speciesType: style.type,
+        axisId: "automation",
       };
     });
   }
 
-  /** Build the sweep card grouped by the emergent families (in ranked order). */
+  /** Build the Phase-C sweep card grouped by axis (automation axis first). */
   private buildSweepCard(id: string): SweepCard {
     const order: string[] = [];
     const byFamily = new Map<string, StoredCandidate[]>();
@@ -1003,6 +1394,8 @@ export class ShowcaseModule {
       }
       byFamily.get(c.family)!.push(c);
     }
+    const statusFor = (d: StoredCandidate["decision"]): SweepItem["status"] =>
+      d === "kept" || d === "protected" || d === "excluded" || d === "parked" ? d : "pending";
     const groups: SweepGroup[] = [];
     for (const family of order) {
       const items: SweepItem[] = byFamily
@@ -1015,7 +1408,13 @@ export class ShowcaseModule {
           source: c.source,
           mapping: c.mapping,
           tradeoff: c.tradeoff,
-          status: c.decision === "kept" ? ("kept" as const) : ("pending" as const),
+          status: statusFor(c.decision),
+          grade:
+            c.decision === "protected"
+              ? ("claim" as const)
+              : c.decision === "kept"
+                ? ("disclosure" as const)
+                : undefined,
         }));
       if (items.length > 0) groups.push({ family, items });
     }
@@ -1026,33 +1425,363 @@ export class ShowcaseModule {
     this.openCards.set(cardId, this.buildSweepCard(cardId));
   }
 
+  /* ------------------------------------------------------------------ *
+   * The conversational FOREST — the inventor steers, the AI fills, the
+   * inventor claims the trees worth owning in their own words.
+   * ------------------------------------------------------------------ */
+
+  /** Build the forest card from the current trees (candidates), genus at the top. */
+  private buildForestCard(id: string): ForestCard {
+    const trees: ForestTree[] = this.candidates
+      .filter((c) => c.bucket !== "rejected")
+      .map((c) => ({
+        id: c.id,
+        label: c.label,
+        source: c.source,
+        mapping: c.mapping,
+        tradeoff: c.tradeoff,
+        origin: c.origin ?? "yours",
+        note: c.note,
+        status:
+          c.decision === "protected"
+            ? ("claimed" as const)
+            : c.decision === "kept"
+              ? ("kept" as const)
+              : c.decision === "excluded"
+                ? ("dropped" as const)
+                : ("pending" as const),
+        detail: c.humanDetail,
+      }));
+    return {
+      id,
+      type: "forest",
+      genusName: this.genus?.genus_name ?? "",
+      genusDescription: this.genus?.genus_description ?? "",
+      trees,
+    };
+  }
+
+  private refreshForest(cardId: string): void {
+    this.openCards.set(cardId, this.buildForestCard(cardId));
+  }
+
+  /** Fill the forest in the direction the inventor steered — appends new trees. */
+  private async expandForest(direction: "missing" | "design_around" | "future"): Promise<void> {
+    const genus = this.genus;
+    if (!genus) return;
+    const existing = this.candidates.filter((c) => c.bucket !== "rejected").map((c) => c.label);
+    const originFor: Record<typeof direction, TreeOrigin> = {
+      missing: "gap",
+      design_around: "design_around",
+      future: "future",
+    };
+    try {
+      const res = await runForestExpander(this.runAgent, { genus, existing, direction, target: 4 });
+      this.ledger.recordMachineEvent("agent_forest_expanded", ["showcase", direction], {
+        count: res.trees.length,
+      });
+      const seen = new Set(existing.map((e) => e.toLowerCase()));
+      for (const t of res.trees) {
+        const label = t.label.trim();
+        if (!label || seen.has(label.toLowerCase())) continue;
+        seen.add(label.toLowerCase());
+        this.candidates.push({
+          id: this.genId(),
+          family: label,
+          label,
+          source: t.source,
+          mapping: t.mapping,
+          tradeoff: t.tradeoff,
+          grade: {
+            traceability: 3,
+            fidelity: 3,
+            specificity: 3,
+            distinctness: 3,
+            verdict: "survive",
+            reason: "forest-expanded",
+          },
+          bucket: "shown",
+          surfaced: true,
+          origin: originFor[direction],
+          note: t.note.trim() || undefined,
+        });
+      }
+    } catch (err) {
+      console.error("[showcase] forest expander failed", err);
+    }
+  }
+
+  /** Steer / keep / claim / drop / finalize the forest. */
+  private async handleForest(cardId: string, input: ForestInput): Promise<void> {
+    const card = this.openCards.get(cardId);
+    if (!card || card.type !== "forest") return;
+
+    if (input.action === "steer") {
+      await this.expandForest(input.direction);
+      this.refreshForest(cardId);
+      return;
+    }
+    if (input.action === "finalize") {
+      this.resolveCard(cardId);
+      await this.formalizeKept(
+        this.candidates.filter((c) => c.decision === "kept" || c.decision === "protected"),
+      );
+      return;
+    }
+
+    const cand = this.candidates.find((c) => c.id === input.treeId);
+    if (!cand) return;
+
+    if (input.action === "keep") {
+      cand.decision = cand.decision === "kept" ? undefined : "kept";
+      if (cand.decision === "kept") {
+        this.ledger.recordDecision("tree_kept", ["showcase", "inventor_confirmed"], {
+          candidateId: cand.id,
+          grade: "disclosure",
+        });
+      }
+    } else if (input.action === "claim") {
+      const detail = input.detail.trim();
+      cand.decision = "protected";
+      cand.claimConfirmed = true;
+      cand.humanDetail = detail;
+      // The +1 in the inventor's OWN WORDS is the human-conception anchor — captured
+      // verbatim as inventor material, tagged inventor_conceived (the Cognitive Delta).
+      if (detail) {
+        this.ledger.recordInventorSource("inventor_note", detail, [
+          "showcase",
+          "tree_claim",
+          "inventor_conceived",
+        ]);
+      }
+      this.ledger.recordDecision("tree_claimed", ["showcase", "inventor_conceived"], {
+        candidateId: cand.id,
+        grade: "claim",
+      });
+    } else if (input.action === "unclaim") {
+      cand.decision = undefined;
+      cand.claimConfirmed = false;
+      cand.humanDetail = undefined;
+    } else if (input.action === "drop") {
+      cand.decision = cand.decision === "excluded" ? undefined : "excluded";
+    }
+    this.refreshForest(cardId);
+  }
+
   private async handleSweep(cardId: string, input: SweepInput): Promise<void> {
     const card = this.openCards.get(cardId);
     if (!card || card.type !== "candidate_sweep") return;
 
-    if (input.action === "keep") {
-      const cand = this.candidates.find((c) => c.id === input.candidateId);
-      if (!cand) return;
-      if (cand.decision === "kept") {
-        cand.decision = undefined; // toggle off
-      } else {
-        // Keep-many: a broad invention wants lots of trees, so the inventor keeps
-        // as many as fit (duplicates are already deleted by the grader). The keep
-        // confirms the candidate FITS the invention — it does NOT claim the inventor
-        // conceived it (it was retrieved). Spelled out for the provenance walk.
-        cand.decision = "kept";
-        this.ledger.recordDecision("candidate_kept", ["showcase", "inventor_confirmed"], {
-          candidateId: cand.id,
-          meaning:
-            "inventor confirmed this enumerated candidate fits their invention; the candidate was retrieved, not conceived by the inventor",
-        });
+    if (input.action === "finalize") {
+      // Parked regions leave a gap; excluded regions are dropped as scope honesty.
+      for (const c of this.candidates) {
+        if (c.decision === "parked") {
+          this.recordGaps("enumerator", [
+            {
+              gap_class: "missing_mechanism",
+              field: c.label,
+              note: "the inventor parked this region; its mechanism is not settled yet",
+            },
+          ]);
+        }
       }
-      this.refreshSweep(cardId);
+      this.resolveCard(cardId);
+      // Protect opens delta mining (spec §6) — harvest the inventor's own statements of
+      // how the mechanism differs in each protected setting, then review. If any
+      // protected regions exist, pause on the delta review; otherwise formalize now.
+      const protectedRegions = this.candidates.filter((c) => c.decision === "protected");
+      if (protectedRegions.length) {
+        await this.mineDeltasForProtected(protectedRegions);
+        return;
+      }
+      await this.formalizeKept(
+        this.candidates.filter((c) => c.decision === "kept" || c.decision === "protected"),
+      );
       return;
     }
-    // finalize — write up the one picked per group.
+
+    const cand = this.candidates.find((c) => c.id === input.candidateId);
+    if (!cand) return;
+
+    // Tap toggles: tapping the current decision clears it back to pending.
+    const target =
+      input.action === "keep"
+        ? "kept"
+        : input.action === "protect"
+          ? "protected"
+          : input.action === "remove"
+            ? "excluded"
+            : "parked";
+    cand.decision = cand.decision === target ? undefined : (target as StoredCandidate["decision"]);
+
+    if (cand.decision === "kept") {
+      // Disclosure grade: the inventor confirmed the retrieved region FITS — it does
+      // NOT claim they conceived it (R3). Spelled out for the provenance walk.
+      this.ledger.recordDecision("region_kept", ["showcase", "inventor_confirmed"], {
+        candidateId: cand.id,
+        grade: "disclosure",
+      });
+    } else if (cand.decision === "protected") {
+      this.ledger.recordDecision("region_protected", ["showcase", "inventor_confirmed"], {
+        candidateId: cand.id,
+        grade: "claim",
+      });
+    } else if (cand.decision === "excluded") {
+      this.ledger.recordDecision("region_excluded", ["showcase"], { candidateId: cand.id });
+    } else if (cand.decision === "parked") {
+      this.ledger.recordDecision("region_parked", ["showcase"], { candidateId: cand.id });
+    }
+    this.refreshSweep(cardId);
+  }
+
+  /**
+   * Delta mining (spec §6). For each protected region, a chain harvests the
+   * inventor's own statements of how the mechanism differs in that setting (produce
+   * → deterministic anchor verify → drop-unanchored). Deltas surface pre-confirmed
+   * on a delta review card; the inventor keeps/removes them or marks a region
+   * same-as-primary / does-not-apply. Never solicits new conception — only harvests.
+   */
+  private async mineDeltasForProtected(regions: StoredCandidate[]): Promise<void> {
+    const record = [...this.keyConcepts.values()].flatMap((k) => k.verbatim).join("\n");
+    const anchored = (q: string) => q.trim().length > 0 && record.includes(q.trim());
+
+    const deltaRegions: DeltaRegion[] = [];
+    for (const region of regions) {
+      const setting = `${region.label}: ${region.mapping}`;
+      const { value: mined } = await runChain<{ quote: string }[]>({
+        name: "delta_mining",
+        produce: async () => (await runDeltaMiner(this.runAgent, { region: setting, record })).deltas,
+        verify: async (ds) => {
+          const findings: Finding[] = ds
+            .filter((d) => !anchored(d.quote))
+            .map((d) => ({
+              quote: d.quote || "(empty)",
+              citation: "DELTA.anchor",
+              rule: "delta quote is not a verbatim substring of the record",
+            }));
+          return { pass: findings.length === 0, findings };
+        },
+        fallback: (ds) => ds.filter((d) => anchored(d.quote)),
+        onReceipt: (r) => this.recordReceipt(r),
+      });
+
+      const seen = new Set<string>();
+      const deltas: DeltaCandidate[] = mined
+        .filter((d) => {
+          const k = d.quote.trim().toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        })
+        .map((d) => ({
+          id: this.genId(),
+          regionId: region.id,
+          quote: d.quote.trim(),
+          decision: "kept" as const, // pre-confirmed; the inventor removes what's wrong
+        }));
+      region.deltas = deltas;
+      deltaRegions.push({ regionId: region.id, regionLabel: region.label, deltas });
+    }
+
+    const id = this.genId();
+    this.openCards.set(id, { id, type: "delta_review", regions: deltaRegions });
+    this.intents.set(id, { kind: "delta_review" });
+  }
+
+  /**
+   * Resolve the delta review. Per-delta Keep/Edit/Remove; per-region same-as-primary
+   * / does-not-apply. On confirm, each protected region reaches CLAIM grade only with
+   * ≥1 kept delta; otherwise it drops to disclosure grade with a gap. Then formalize.
+   */
+  private async handleDeltaReview(cardId: string, input: DeltaReviewInput): Promise<void> {
+    const card = this.openCards.get(cardId);
+    if (!card || card.type !== "delta_review") return;
+
+    const findDelta = (deltaId: string) => {
+      for (const r of card.regions) {
+        const d = r.deltas.find((x) => x.id === deltaId);
+        if (d) return d;
+      }
+      return null;
+    };
+
+    if (input.action === "keep") {
+      const d = findDelta(input.deltaId);
+      if (d) d.decision = "kept";
+      return;
+    }
+    if (input.action === "remove") {
+      const d = findDelta(input.deltaId);
+      if (d) d.decision = "removed";
+      return;
+    }
+    if (input.action === "edit") {
+      const d = findDelta(input.deltaId);
+      const q = input.quote.trim();
+      const record = [...this.keyConcepts.values()].flatMap((k) => k.verbatim).join("\n");
+      if (d && q && record.includes(q)) {
+        d.quote = q;
+        d.decision = "kept";
+        this.ledger.recordDecision("delta_edit", ["showcase", "inventor_conceived"], {});
+      }
+      return;
+    }
+    if (input.action === "same_as_primary") {
+      const r = card.regions.find((x) => x.regionId === input.regionId);
+      if (r) {
+        r.sameAsPrimary = true;
+        r.doesNotApply = false;
+      }
+      return;
+    }
+    if (input.action === "does_not_apply") {
+      const r = card.regions.find((x) => x.regionId === input.regionId);
+      if (r) {
+        r.doesNotApply = true;
+        r.sameAsPrimary = false;
+      }
+      return;
+    }
+
+    // confirm — settle claim vs disclosure grade per protected region.
+    for (const r of card.regions) {
+      const cand = this.candidates.find((c) => c.id === r.regionId);
+      if (!cand) continue;
+      if (r.doesNotApply) {
+        cand.decision = "excluded";
+        this.ledger.recordDecision("region_excluded", ["showcase"], {
+          candidateId: cand.id,
+          via: "delta_does_not_apply",
+        });
+        continue;
+      }
+      const keptDeltas = r.deltas.filter((d) => d.decision === "kept");
+      cand.deltas = keptDeltas;
+      cand.sameAsPrimary = !!r.sameAsPrimary;
+      // Claim grade requires ≥1 kept delta (region-specific-constraint path is Phase-4
+      // depth). Otherwise the protected region rests at disclosure grade + a gap.
+      cand.claimConfirmed = keptDeltas.length > 0;
+      if (cand.claimConfirmed) {
+        this.ledger.recordDecision("region_claim_confirmed", ["showcase"], {
+          candidateId: cand.id,
+          deltas: keptDeltas.length,
+        });
+      } else {
+        cand.decision = "kept"; // demote protected → disclosure grade
+        this.recordGaps("enumerator", [
+          {
+            gap_class: "missing_mechanism",
+            field: cand.label,
+            note: "no confirmed delta for this protected region; it rests at disclosure grade",
+          },
+        ]);
+      }
+    }
+
     this.resolveCard(cardId);
-    await this.formalizeKept(this.candidates.filter((c) => c.decision === "kept"));
+    await this.formalizeKept(
+      this.candidates.filter((c) => c.decision === "kept" || c.decision === "protected"),
+    );
   }
 
   /** Write each kept candidate into the "Across Implementations" section. */
@@ -1065,7 +1794,7 @@ export class ShowcaseModule {
     const inventorMaterial = [...this.keyConcepts.values()]
       .flatMap((k) => k.verbatim)
       .join("\n");
-    const confirmedConstraints: string[] = [];
+    const confirmedConstraints = this.confirmedConstraints; // A3: inventor-confirmed, anchored
     const subsections: { title: string; body: string }[] = [];
     for (const c of kept) {
       try {
@@ -1097,7 +1826,7 @@ export class ShowcaseModule {
   /** The kept "ways to build it" as implementation context for the broadening pass. */
   private keptWaysAsSpecies(): Species[] {
     return this.candidates
-      .filter((c) => c.decision === "kept")
+      .filter((c) => c.decision === "kept" || c.decision === "protected")
       .map((c) => ({
         species_type: c.speciesType ?? "ai_native",
         species_name: c.label,
@@ -1149,67 +1878,76 @@ export class ShowcaseModule {
     const sections = this.disclosure;
     const find = (key: string) => sections?.find((s) => s.key === key);
 
-    // Broadened rewrite per Key Concept (verifier-gated).
-    const kcs = [...this.keyConcepts.values()];
-    for (let i = 0; i < kcs.length; i++) {
-      const kc = kcs[i];
-      try {
-        const b = await runKeyConceptBroadener(this.runAgent, {
-          original: kc.statement,
-          genus,
-          approvedSpecies: kept,
-          consciousness: this.consciousness.renderForAgent({ part: `differentiation:${kc.id}` }),
+    // D-phase Key Concept generation (spec §7). The original embodiment-level Key
+    // Concepts are RETAINED UNCHANGED (deepest retreat positions); broadening only
+    // ADDS above and around them — the independent position and the dependent ladder.
+    // No per-KC rewrite, no template categories (conceptAspects deleted).
+
+    // D1 — the independent Key Concept for the genus, in three framings.
+    try {
+      const ind = await runKCIndependent(this.runAgent, {
+        genus,
+        confirmedConstraints: this.confirmedConstraints,
+      });
+      const text = [
+        ind.method_of_steps.trim() && `As a method of steps:\n${ind.method_of_steps.trim()}`,
+        ind.system_of_parts.trim() && `As a system of parts:\n${ind.system_of_parts.trim()}`,
+        ind.instructions_on_medium.trim() &&
+          `As instructions on a medium:\n${ind.instructions_on_medium.trim()}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      if (text.trim()) {
+        artifacts.push({
+          id: this.genId(),
+          kind: "independent_kc",
+          label: `Independent Key Concept — ${ind.label.trim() || genus.genus_name}`,
+          text,
+          kept: true,
+          meta: { title: ind.label.trim() || genus.genus_name },
         });
-        const verdict = await runVerifier(this.runAgent, {
-          piece: b.broadened_concept_text,
-          inventorMaterial: kc.verbatim.join("\n"),
-          consciousness: this.consciousness.renderForAgent({ part: `differentiation:${kc.id}` }),
-        });
-        this.ledger.recordMachineEvent("agent_broadened", ["showcase"], { conceptId: kc.id });
-        if (verdict.verdict === "pass" && b.broadened_concept_text.trim()) {
-          artifacts.push({
-            id: this.genId(),
-            kind: "broadened_kc",
-            label: `Broadened Key Concept ${i + 1}`,
-            original: kc.statement,
-            text: b.broadened_concept_text.trim(),
-            kept: true,
-            meta: { conceptId: kc.id },
-          });
-        } else {
-          this.ledger.recordMachineEvent("broadening_withheld", ["showcase", "concept"], {
-            conceptId: kc.id,
-            reason: verdict.note,
-          });
-        }
-      } catch (err) {
-        console.error("[showcase] broadening failed for", kc.id, err);
+        this.ledger.recordMachineEvent("agent_kc_independent", ["showcase"], {});
       }
+    } catch (err) {
+      console.error("[showcase] kc-independent failed", err);
     }
 
-    // The three new Key Concepts (genus / species-spectrum / hardware).
-    const aspectLabels: Record<ConceptAspect, string> = {
-      genus_mechanism: "New Key Concept — Core Mechanism",
-      species_spectrum: "New Key Concept — Architectural Spectrum",
-      hardware_optimization: "New Key Concept — Hardware Optimization",
-    };
-    for (const aspect of Object.keys(aspectLabels) as ConceptAspect[]) {
+    // D2 — one dependent Key Concept per CLAIM-GRADE region, ordered as a retreat
+    // ladder (broadest → narrowest). Claim grade = protected with a confirmed delta.
+    const claimRegions = this.candidates.filter(
+      (c) => c.decision === "protected" && c.claimConfirmed,
+    );
+    let ladder = 0;
+    for (const region of claimRegions) {
       try {
-        const existing = kcs.map((k) => ({ title: k.title, statement: k.statement }));
-        const r = await runKeyConceptAppender(this.runAgent, { genus, species: kept, existing, aspect });
-        if (r.key_concept_text.trim()) {
+        // The inventor's own +1 (humanDetail) is the distinguishing limitation of
+        // this claim — it leads the material, ahead of any mined deltas/constraints.
+        const material = [
+          region.humanDetail,
+          ...(region.deltas ?? []).map((d) => d.quote),
+          ...this.confirmedConstraints,
+        ].filter((m): m is string => !!m && m.trim().length > 0);
+        const dep = await runKCDependent(this.runAgent, {
+          genus,
+          regionLabel: region.label,
+          regionMaterial: material,
+        });
+        if (dep.text.trim()) {
           artifacts.push({
             id: this.genId(),
-            kind: "new_kc",
-            label: aspectLabels[aspect],
-            text: r.key_concept_text.trim(),
+            kind: "dependent_kc",
+            label: `Dependent Key Concept — ${dep.label.trim() || region.label}`,
+            text: dep.text.trim(),
             kept: true,
-            meta: { aspect, title: r.title.trim() || aspect.replace(/_/g, " ") },
+            meta: { title: dep.label.trim() || region.label, ladder, regionId: region.id },
           });
-          this.ledger.recordMachineEvent("agent_appended_concept", ["showcase", aspect], {});
+          ladder++;
+          this.ledger.recordMachineEvent("agent_kc_dependent", ["showcase"], {
+            regionId: region.id,
+          });
         }
       } catch (err) {
-        console.error("[showcase] key-concept-appender failed for", aspect, err);
+        console.error("[showcase] kc-dependent failed for", region.id, err);
       }
     }
 
@@ -1277,10 +2015,66 @@ export class ShowcaseModule {
       this.complete();
       return;
     }
+    // Module exit evaluation (spec §8): score the rendered set from four perspectives
+    // and apply one refinement pass BEFORE the final review. Non-blocking — it
+    // refines; the deterministic checks and traceability verifies are what gate.
+    await this.runExitEvaluation(artifacts);
     const id = this.genId();
     this.openCards.set(id, { id, type: "expansion_review", artifacts });
     this.intents.set(id, { kind: "expansion_review" });
     this.phase = "reviewing_artifacts";
+  }
+
+  /**
+   * The four-perspective exit evaluation (spec §8). Scores the rendered artifact set +
+   * Key Concepts (mathematician / engineer / philosopher / artist). Any perspective
+   * below 7 triggers exactly ONE refinement pass — regenerating the Key Concept
+   * artifacts — then a rescore. Scores persist either way. This refines; it never
+   * blocks (blocking belongs to the deterministic checks and traceability verifies).
+   */
+  private async runExitEvaluation(artifacts: ExpansionArtifact[]): Promise<void> {
+    const kcs = [...this.keyConcepts.values()].map((k) => ({
+      title: k.title,
+      statement: k.broadened || k.statement,
+    }));
+    const payload = () => artifacts.map((a) => ({ label: a.label, text: a.text }));
+    try {
+      const first = await runExitEvaluator(this.runAgent, { keyConcepts: kcs, artifacts: payload() });
+      this.ledger.recordMachineEvent("exit_evaluation", ["showcase"], {
+        scores: first.perspectives.map((p) => ({ name: p.name, score: p.score })),
+      });
+      const below7 = first.perspectives.filter((p) => p.score < 7);
+      if (below7.length) {
+        // One targeted refinement: regenerate the Key Concept artifacts, then rescore.
+        for (const a of artifacts) {
+          if (a.kind === "independent_kc" || a.kind === "dependent_kc") {
+            await this.regenerateArtifact(a);
+          }
+        }
+        const second = await runExitEvaluator(this.runAgent, {
+          keyConcepts: kcs,
+          artifacts: payload(),
+        });
+        this.ledger.recordMachineEvent("exit_evaluation_rescore", ["showcase"], {
+          scores: second.perspectives.map((p) => ({ name: p.name, score: p.score })),
+        });
+      }
+      this.recordReceipt({
+        chain: "exit_evaluation",
+        outcome: below7.length ? "repaired" : "verified_clean",
+        findings: first.perspectives.flatMap((p) =>
+          p.findings
+            .filter((f) => f.quote.trim())
+            .map((f) => ({
+              quote: f.quote,
+              citation: `EXIT.${p.name}.${p.score}`,
+              rule: f.note || `${p.name} shortfall`,
+            })),
+        ),
+      });
+    } catch (err) {
+      console.error("[showcase] exit evaluation failed", err);
+    }
   }
 
   /** GATE 2 actions: per-artifact review; Finalize applies the kept ones. */
@@ -1309,7 +2103,16 @@ export class ShowcaseModule {
       return;
     }
     // finalize — weave every kept artifact into the Key Concepts + the draft.
-    await this.finalizeExpansion(card.artifacts.filter((a) => a.kept));
+    const applied = await this.finalizeExpansion(card.artifacts.filter((a) => a.kept));
+    if (!applied) {
+      // The rendering contract blocked the write; nothing was applied. Keep the
+      // review open and surface the block rather than advancing silently.
+      this.pushTurn({
+        role: "helper",
+        text: "The draft couldn't be applied — a rendering check failed (an enumeration or cross-reference didn't hold), so nothing was written. The review is still here to adjust.",
+      });
+      return;
+    }
     this.resolveCard(cardId);
     this.complete();
   }
@@ -1386,6 +2189,40 @@ export class ShowcaseModule {
           a.label = `Abstract Rewrite (${words} words)`;
           a.meta = { ...a.meta, wordCount: words };
         }
+      } else if (a.kind === "independent_kc") {
+        const ind = await runKCIndependent(this.runAgent, {
+          genus,
+          confirmedConstraints: this.confirmedConstraints,
+        });
+        const text = [
+          ind.method_of_steps.trim() && `As a method of steps:\n${ind.method_of_steps.trim()}`,
+          ind.system_of_parts.trim() && `As a system of parts:\n${ind.system_of_parts.trim()}`,
+          ind.instructions_on_medium.trim() &&
+            `As instructions on a medium:\n${ind.instructions_on_medium.trim()}`,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+        if (text.trim()) {
+          a.text = text;
+          a.label = `Independent Key Concept — ${ind.label.trim() || genus.genus_name}`;
+        }
+      } else if (a.kind === "dependent_kc") {
+        const region = this.candidates.find((c) => c.id === a.meta?.regionId);
+        if (region) {
+          const material = [
+            ...(region.deltas ?? []).map((d) => d.quote),
+            ...this.confirmedConstraints,
+          ].filter(Boolean);
+          const dep = await runKCDependent(this.runAgent, {
+            genus,
+            regionLabel: region.label,
+            regionMaterial: material,
+          });
+          if (dep.text.trim()) {
+            a.text = dep.text.trim();
+            a.label = `Dependent Key Concept — ${dep.label.trim() || region.label}`;
+          }
+        }
       }
       a.kept = true;
     } catch (err) {
@@ -1394,9 +2231,61 @@ export class ShowcaseModule {
   }
 
   /** Apply the kept artifacts: broadened + new Key Concepts, section weaves. */
-  private async finalizeExpansion(kept: ExpansionArtifact[]): Promise<void> {
+  /** Write a chain receipt to the quality ledger (R1 — every chain leaves one). */
+  private recordReceipt(r: Receipt): void {
+    this.ledger.recordMachineEvent("quality_receipt", ["showcase", r.chain, r.outcome], {
+      receipt: r,
+    });
+  }
+
+  /**
+   * The Coverage Ledger (spec §8): per genus, per axis, every region with its
+   * status, decision, grade, and anchors. Shows a reviewer in minutes that scope was
+   * walked and where every fallback sits; it is the evidence spine the Proof of Human
+   * Conception certifies against. Recorded to the Ledger at apply.
+   */
+  private recordCoverageLedger(): void {
+    const byAxis = new Map<string, unknown[]>();
+    for (const c of this.candidates) {
+      const axis = c.axisId ?? "approach";
+      if (!byAxis.has(axis)) byAxis.set(axis, []);
+      const grade =
+        c.decision === "protected" && c.claimConfirmed
+          ? "claim"
+          : c.decision === "kept" || c.decision === "protected"
+            ? "disclosure"
+            : undefined;
+      byAxis.get(axis)!.push({
+        region: c.label,
+        status: c.decision ?? "pending",
+        grade,
+        anchors: (c.deltas ?? []).map((d) => d.quote),
+      });
+    }
+    this.ledger.recordMachineEvent("coverage_ledger", ["showcase"], {
+      genus: this.genus?.genus_name ?? "",
+      axes: [...byAxis.entries()].map(([axis, regions]) => ({ axis, regions })),
+    });
+  }
+
+  /**
+   * Apply the kept artifacts. Snapshots the disclosure + Key Concepts BEFORE the
+   * write (the undo point), mutates in place, then runs the deterministic rendering
+   * contract over the assembled result. A contract failure reverts to the snapshot
+   * and returns false so the caller keeps the review open and surfaces the block
+   * (spec §8). Returns true when the write committed.
+   */
+  private async finalizeExpansion(kept: ExpansionArtifact[]): Promise<boolean> {
     const sections = this.disclosure;
     const find = (key: string) => sections?.find((s) => s.key === key);
+
+    // Snapshot before apply (spec §8) — deep-copy sections + Key Concepts so a
+    // contract failure can revert cleanly.
+    const snapDisclosure = sections ? sections.map((s) => ({ ...s })) : null;
+    const snapKCs = [...this.keyConcepts.entries()].map(
+      ([id, kc]) =>
+        [id, { ...kc, verbatim: [...kc.verbatim] }] as [string, ShowcaseKeyConcept],
+    );
 
     for (const a of kept) {
       if (a.kind === "broadened_kc" && a.meta?.conceptId) {
@@ -1410,6 +2299,23 @@ export class ShowcaseModule {
         this.keyConcepts.set(id, {
           id,
           title: a.meta.title || a.label,
+          statement: a.text,
+          verbatim: [],
+        });
+      } else if (a.kind === "independent_kc") {
+        // D1 — the three-framing independent position, added ABOVE the originals
+        // (which are retained unchanged as the deepest retreat positions).
+        this.keyConcepts.set(a.id, {
+          id: a.id,
+          title: a.meta?.title || a.label,
+          statement: a.text,
+          verbatim: [],
+        });
+      } else if (a.kind === "dependent_kc") {
+        // D2 — a dependent position on the retreat ladder.
+        this.keyConcepts.set(a.id, {
+          id: a.id,
+          title: a.meta?.title || a.label,
           statement: a.text,
           verbatim: [],
         });
@@ -1436,6 +2342,21 @@ export class ShowcaseModule {
       }
     }
 
+    // Rendering contract gate (spec §8). Dormant on today's prose; load-bearing
+    // once §112 enumerations render. A failure reverts to the snapshot and blocks.
+    const findings = sections ? checkRenderingContract(sections) : [];
+    if (findings.length) {
+      if (snapDisclosure && this.disclosure) {
+        this.disclosure.splice(0, this.disclosure.length, ...snapDisclosure);
+      }
+      this.keyConcepts = new Map(snapKCs);
+      this.recordReceipt({ chain: "apply", outcome: "fell_back", findings });
+      return false;
+    }
+
+    this.recordReceipt({ chain: "apply", outcome: "verified_clean", findings: [] });
+    // The Coverage Ledger — the evidence spine, recorded at apply (spec §8).
+    this.recordCoverageLedger();
     // The stage is done regardless of how many broadenings the inventor kept — the
     // Across-Implementations write already happened in formalizeKept.
     this.broadened = true;
@@ -1443,6 +2364,7 @@ export class ShowcaseModule {
       applied: kept.length,
       sections: sections?.length ?? 0,
     });
+    return true;
   }
 
   private async handleVariation(cardId: string, intent: Intent, input: VariationInput): Promise<void> {
@@ -1780,6 +2702,7 @@ export class ShowcaseModule {
       criterion: this.criterion ? { ...this.criterion } : null,
       criterionEntryId: this.criterionEntryId,
       candidates: this.candidates.map((c) => ({ ...c, grade: { ...c.grade } })),
+      confirmedConstraints: [...this.confirmedConstraints],
     };
   }
 
@@ -1803,6 +2726,7 @@ export class ShowcaseModule {
     m.criterion = snap.criterion ?? null;
     m.criterionEntryId = snap.criterionEntryId ?? null;
     m.candidates = (snap.candidates ?? []).map((c) => ({ ...c, grade: { ...c.grade } }));
+    m.confirmedConstraints = [...(snap.confirmedConstraints ?? [])];
     return m;
   }
 }

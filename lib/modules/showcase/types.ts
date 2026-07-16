@@ -17,6 +17,7 @@ import type {
   LedgerEntry,
   SharedConsciousness,
 } from "@/lib/modules/shared";
+import type { ConstraintKind } from "./coverage";
 
 export type { LedgerEntry, HelperTurn } from "@/lib/modules/shared";
 
@@ -51,6 +52,12 @@ export type Genus = {
   computational_constraints?: string[];
   /** Properties holding across every valid execution. */
   logical_invariants?: string[];
+  /**
+   * A2 (rebuild): verbatim quotes (≥8 chars) from the inventor's material that show
+   * possession of the breadth this genus claims. A statement with no anchor cannot
+   * be emitted; over-broad statements are narrowed to the anchored portion.
+   */
+  anchors?: string[];
 };
 
 /* ------------------------------------------------------------------ *
@@ -69,13 +76,15 @@ export type GapClass =
   | "missing_invariant" // genus needs an invariant no input supplies (Layer 2)
   | "missing_mechanism" // a candidate/section needs a mechanism's "how" (Layers 4/5)
   | "missing_step" // the formalizer needs a step no input supplies (Layer 5)
+  | "missing_data_structure" // A3: the record states no data structure of a needed kind
   | "missing_criterion_source"; // no upstream inventor material to lift a criterion from (Layer 4)
 
 export type GapOrigin =
   | "genus_extractor"
   | "enumerator"
   | "formalizer"
-  | "section_polisher";
+  | "section_polisher"
+  | "constraint_miner"; // A3 — a required constraint class has no surviving candidate
 
 /** What artifact/field the gap attaches to. */
 export type GapLocus =
@@ -365,7 +374,10 @@ export type ExpansionArtifactKind =
   | "background_ext"
   | "summary_ext"
   | "detail_ext"
-  | "abstract_rewrite";
+  | "abstract_rewrite"
+  // Module 5 rebuild (v2.3) — D-phase Key Concept generation (spec §7).
+  | "independent_kc" // three-framing independent position per genus (D1)
+  | "dependent_kc"; // one limitation from a claim-grade region (D2)
 
 /** One reviewable artifact inside Gate 2 (Regenerate / Keep / Edit / Remove). */
 export type ExpansionArtifact = {
@@ -378,7 +390,16 @@ export type ExpansionArtifact = {
   text: string;
   kept: boolean;
   /** Regeneration / finalize context. */
-  meta?: { conceptId?: string; aspect?: string; wordCount?: number; title?: string };
+  meta?: {
+    conceptId?: string;
+    aspect?: string;
+    wordCount?: number;
+    title?: string;
+    /** D2 retreat-ladder order (0 = broadest) for dependent Key Concepts. */
+    ladder?: number;
+    /** The region id a dependent_kc derives from (D2 regenerate). */
+    regionId?: string;
+  };
 };
 
 /** GATE 2 — "Review expanded content": every artifact individually reviewable;
@@ -404,7 +425,10 @@ export type CriterionCard = {
   fragments: CriterionFragmentOption[];
 };
 
-/** One candidate on the sweep. */
+/**
+ * One region on the rebuilt Phase-C sweep (spec §5). The inventor decides each by
+ * tap: Keep (disclosure grade), Protect (claim grade → deltas), Remove, Park.
+ */
 export type SweepItem = {
   candidateId: string;
   family: string;
@@ -412,22 +436,168 @@ export type SweepItem = {
   source: string;
   mapping: string;
   tradeoff: string;
-  /** "kept" = picked; "pending" = not picked. */
-  status: "pending" | "kept";
+  /** The inventor's region decision (pending until they tap). */
+  status: "pending" | "kept" | "protected" | "excluded" | "parked";
+  /** Grade once decided: kept → disclosure, protected → claim. */
+  grade?: "disclosure" | "claim";
+  /** Whether the inventor's own words already cover this (free species). */
+  freeSpecies?: boolean;
 };
 
-/** One emergent family of approaches — keep as many as fit; duplicates already deleted. */
+/** One axis group of regions (spec §5 — mandatory automation axis first). */
 export type SweepGroup = {
-  /** The emergent grouping label (also the on-screen header). */
+  /** The axis label (on-screen header). */
   family: string;
   items: SweepItem[];
 };
 
-/** Layer 5 surface — grouped by emergent family; keep as many as fit. */
+/** Phase-C surface — regions grouped by axis; Keep/Protect/Remove/Park per region. */
 export type SweepCard = {
   id: string;
   type: "candidate_sweep";
   groups: SweepGroup[];
+};
+
+/* ------------------------------------------------------------------ *
+ * Module 5 rebuild (v2.3) — A1 Key Concept hygiene
+ *
+ * The hygiene chain runs FIRST, before genus detection. When the deterministic
+ * lint or the second-model semantic verify finds anything, the inventor resolves
+ * it by tap; the clean set is the sole input to everything downstream (spec §3 A1).
+ * ------------------------------------------------------------------ */
+
+/** One same-scope duplicate pair to resolve (Keep one / Keep both). */
+export type KCHygieneDuplicate = {
+  pairId: string;
+  aId: string;
+  aTitle: string;
+  /** The full text of concept A, so the inventor can actually read it before choosing. */
+  aStatement: string;
+  bId: string;
+  bTitle: string;
+  bStatement: string;
+  /** 0..1 from the deterministic near-dup lint; 0 for a verify-only semantic pair. */
+  similarity: number;
+  reason: string;
+  resolved?: boolean;
+};
+
+/** One flagged span in a Key Concept (internal vocab / meta-commentary / subjective). */
+export type KCHygieneFlag = {
+  flagId: string;
+  kcId: string;
+  kcTitle: string;
+  quote: string;
+  rule: string;
+  citation: string;
+  resolved?: boolean;
+};
+
+export type KCHygieneCard = {
+  id: string;
+  type: "kc_hygiene";
+  duplicates: KCHygieneDuplicate[];
+  flags: KCHygieneFlag[];
+};
+
+/* ------------------------------------------------------------------ *
+ * Module 5 rebuild (v2.3) — A3 constraint mining
+ *
+ * Mined, anchored, type-classified quotes from the inventor's record. The
+ * confirmed set populates confirmedConstraints (as strings) flowing through the
+ * existing enumerator / grader / formalizer signatures (spec §3 A3).
+ * ------------------------------------------------------------------ */
+
+/** One mined constraint candidate the inventor confirms by tap. */
+export type MinedConstraintItem = {
+  id: string;
+  kind: ConstraintKind;
+  /** The inventor's verbatim quote (Edit only ever trims their own words). */
+  quote: string;
+  kept: boolean;
+};
+
+export type ConstraintReviewCard = {
+  id: string;
+  type: "constraint_review";
+  items: MinedConstraintItem[];
+};
+
+/** A2 — confirm or edit the extracted genus before it drives the rest of the stage. */
+export type GenusReviewCard = {
+  id: string;
+  type: "genus_review";
+  genus: Genus;
+  /** Overbreadth spans the verify flagged (empty when the anchors support it). */
+  overbroad: { quote: string; reason: string }[];
+};
+
+/* ------------------------------------------------------------------ *
+ * Module 5 rebuild (v2.3) — delta mining (§6)
+ *
+ * Each PROTECTED region harvests the inventor's own statements of how the mechanism
+ * differs in that setting. Claim grade requires ≥1 kept delta or a region-specific
+ * constraint; otherwise the region rests at disclosure grade with a gap.
+ * ------------------------------------------------------------------ */
+
+/** One mined delta candidate (the inventor's verbatim) for a protected region. */
+export type DeltaCandidate = {
+  id: string;
+  regionId: string;
+  quote: string;
+  decision?: "kept" | "removed";
+};
+
+/** A protected region's mined deltas, reviewed as a group. */
+export type DeltaRegion = {
+  regionId: string;
+  regionLabel: string;
+  /** Set when the inventor said the mechanism is unchanged here (invariance path). */
+  sameAsPrimary?: boolean;
+  /** Set when the inventor said this region does not apply → excluded. */
+  doesNotApply?: boolean;
+  deltas: DeltaCandidate[];
+};
+
+export type DeltaReviewCard = {
+  id: string;
+  type: "delta_review";
+  regions: DeltaRegion[];
+};
+
+/* ------------------------------------------------------------------ *
+ * The conversational FOREST (the re-aim: build the whole forest, don't tap-approve)
+ *
+ * The genus is the forest; the species are the trees. The inventor STEERS ("what am
+ * I missing?", "how would a competitor design around this?", "the future version?")
+ * and the AI fills the forest in response. The inventor claims the trees worth
+ * owning with one short line in their own words — the human-conception anchor.
+ * ------------------------------------------------------------------ */
+
+/** Where a tree came onto the map. */
+export type TreeOrigin = "yours" | "gap" | "design_around" | "future";
+
+/** One tree in the forest (a way to realize the genus). */
+export type ForestTree = {
+  id: string;
+  label: string;
+  source: string;
+  mapping: string;
+  tradeoff: string;
+  origin: TreeOrigin;
+  /** Strategic reason it belongs (gap filled / design-around blocked / why it's the future). */
+  note?: string;
+  status: "pending" | "kept" | "claimed" | "dropped";
+  /** The inventor's one-line +1 (their own words) — captured when they claim it. */
+  detail?: string;
+};
+
+export type ForestCard = {
+  id: string;
+  type: "forest";
+  genusName: string;
+  genusDescription: string;
+  trees: ForestTree[];
 };
 
 export type Module5Card =
@@ -436,7 +606,12 @@ export type Module5Card =
   | WidenedReviewCard
   | ExpansionReviewCard
   | CriterionCard
-  | SweepCard;
+  | SweepCard
+  | KCHygieneCard
+  | ConstraintReviewCard
+  | GenusReviewCard
+  | DeltaReviewCard
+  | ForestCard;
 
 /* ------------------------------------------------------------------ *
  * Inventor action inputs
@@ -461,10 +636,52 @@ export type ExpansionReviewInput =
  *  can confirm — there is no free-text / compose path anywhere in this flow. */
 export type CriterionInput = { action: "choose"; fragmentId: string };
 
-/** Layer 5 sweep actions — tap-only, keep-many. */
+/** Phase-C sweep actions — tap-only (spec §5). Keep = disclosure grade; Protect =
+ *  claim grade (opens deltas); Remove = excluded; Park = gap held open. */
 export type SweepInput =
-  | { action: "keep"; candidateId: string } // toggle-keep this one
-  | { action: "finalize" }; // kept candidates → formalizer
+  | { action: "keep"; candidateId: string }
+  | { action: "protect"; candidateId: string }
+  | { action: "remove"; candidateId: string }
+  | { action: "park"; candidateId: string }
+  | { action: "finalize" }; // kept + protected regions → formalizer
+
+/** A1 hygiene actions — tap-only; the clean set gates everything downstream. */
+export type KCHygieneInput =
+  | { action: "keep_one"; pairId: string; keepId: string } // remove the other of the pair
+  | { action: "keep_both"; pairId: string } // both are distinct enough; keep them
+  | { action: "keep_flag"; flagId: string } // dismiss the flag, keep the text
+  | { action: "remove_flag"; flagId: string }; // remove the flagged Key Concept
+
+/** A3 constraint-confirmation actions — Keep/Remove/Edit (own words), then Confirm. */
+export type ConstraintReviewInput =
+  | { action: "toggle"; itemId: string } // keep ⇄ remove this candidate
+  | { action: "edit"; itemId: string; quote: string } // trim their own words
+  | { action: "confirm" }; // finalize the confirmed set
+
+/** A2 genus-confirmation actions — Keep, or Edit the genus statement (a machine
+ *  abstraction of the inventor's material; editing it is permitted, R2). */
+export type GenusReviewInput =
+  | { action: "keep" }
+  | { action: "edit"; description: string };
+
+/** Delta-review actions (spec §6) — per-delta Keep/Edit/Remove, per-region
+ *  Same-as-primary / Does-not-apply, then Confirm. Edit trims their own words. */
+export type DeltaReviewInput =
+  | { action: "keep"; deltaId: string }
+  | { action: "edit"; deltaId: string; quote: string }
+  | { action: "remove"; deltaId: string }
+  | { action: "same_as_primary"; regionId: string }
+  | { action: "does_not_apply"; regionId: string }
+  | { action: "confirm" };
+
+/** The conversational forest — steer to fill it, claim the trees worth owning. */
+export type ForestInput =
+  | { action: "steer"; direction: "missing" | "design_around" | "future" }
+  | { action: "keep"; treeId: string } // include at disclosure grade
+  | { action: "claim"; treeId: string; detail: string } // claim grade + the +1 (own words)
+  | { action: "unclaim"; treeId: string }
+  | { action: "drop"; treeId: string }
+  | { action: "finalize" };
 
 export type CardActionInput =
   | ChoiceInput
@@ -472,7 +689,12 @@ export type CardActionInput =
   | WidenedActionInput
   | ExpansionReviewInput
   | CriterionInput
-  | SweepInput;
+  | SweepInput
+  | KCHygieneInput
+  | ConstraintReviewInput
+  | GenusReviewInput
+  | DeltaReviewInput
+  | ForestInput;
 
 /* ------------------------------------------------------------------ *
  * View + deps
@@ -529,7 +751,16 @@ export type AgentName =
   | "baseline-builder"
   | "enumerator"
   | "grader"
-  | "formalizer";
+  | "formalizer"
+  // Module 5 rebuild (v2.3) agents.
+  | "kc-hygiene-verify"
+  | "constraint-miner"
+  | "genus-verify"
+  | "delta-miner"
+  | "kc-independent"
+  | "kc-dependent"
+  | "exit-evaluator"
+  | "forest-expander";
 
 export type ShowcaseDeps = {
   runAgent: AgentRunner;

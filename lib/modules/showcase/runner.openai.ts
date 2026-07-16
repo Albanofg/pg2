@@ -26,6 +26,16 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   "criterion-fragmenter": MODELS.drafter,
   "breadth-assessor": MODELS.drafter,
   "baseline-builder": MODELS.drafter,
+  // Verify chains run on the second model of the pair (spec R1).
+  "kc-hygiene-verify": MODELS.verifier,
+  "constraint-miner": MODELS.drafter,
+  "genus-verify": MODELS.verifier,
+  "delta-miner": MODELS.drafter,
+  "kc-independent": MODELS.drafter,
+  "kc-dependent": MODELS.drafter,
+  // The exit evaluation is a fresh-context judge — run it on the second model.
+  "exit-evaluator": MODELS.verifier,
+  "forest-expander": MODELS.drafter,
   enumerator: MODELS.drafter,
   grader: MODELS.verifier,
   formalizer: MODELS.drafter,

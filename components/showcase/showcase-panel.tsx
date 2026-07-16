@@ -8,11 +8,18 @@ import HelperThread from "@/components/workspace/helper-thread";
 import RestartPart from "@/components/workspace/restart-part";
 import type {
   ChoiceCard,
+  ConstraintReviewCard,
   CriterionCard,
+  DeltaReviewCard,
   ExpansionReviewCard,
+  ForestCard,
+  ForestTree,
+  GenusReviewCard,
+  KCHygieneCard,
   Module5Card,
   ShowcaseDrawing,
   SweepCard,
+  SweepItem,
   VariationCard,
   WidenedReviewCard,
 } from "@/lib/modules/showcase/types";
@@ -1064,9 +1071,770 @@ function CardView({
       return <CriterionView card={card} busy={busy} onAct={onAct} />;
     case "candidate_sweep":
       return <SweepView card={card} busy={busy} onAct={onAct} />;
+    case "kc_hygiene":
+      return <KCHygieneView card={card} busy={busy} onAct={onAct} />;
+    case "constraint_review":
+      return <ConstraintReviewView card={card} busy={busy} onAct={onAct} />;
+    case "genus_review":
+      return <GenusReviewView card={card} busy={busy} onAct={onAct} />;
+    case "delta_review":
+      return <DeltaReviewView card={card} busy={busy} onAct={onAct} />;
+    case "forest":
+      return <ForestView card={card} busy={busy} onAct={onAct} />;
     default:
       return null;
   }
+}
+
+/** The conversational forest — steer to fill it, claim the trees worth owning. */
+function ForestView({
+  card,
+  busy,
+  onAct,
+}: {
+  card: ForestCard;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [detail, setDetail] = useState("");
+  const active = card.trees.filter((t) => t.status !== "dropped");
+  const claimed = active.filter((t) => t.status === "claimed").length;
+  const kept = active.filter((t) => t.status === "kept").length;
+
+  const sections: { origin: string; label: string; hint: string }[] = [
+    { origin: "yours", label: "Your trees", hint: "the ways you started with" },
+    { origin: "gap", label: "Filling the gaps", hint: "distinct ways you were missing" },
+    { origin: "design_around", label: "Blocking design-arounds", hint: "routes a competitor would try" },
+    { origin: "future", label: "Future variants", hint: "where this heads next" },
+  ];
+
+  const steer = (direction: string, label: string, icon: string) => (
+    <button
+      onClick={() => onAct(card.id, { action: "steer", direction } as never)}
+      disabled={busy}
+      className="flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/[0.06] px-3 py-1.5 font-sans text-xs font-medium text-ink transition-colors hover:border-accent hover:bg-accent/15 disabled:opacity-50"
+    >
+      <span aria-hidden>{icon}</span>
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="rounded-md border border-border bg-panel p-4">
+      {/* The genus — the forest these trees live under. */}
+      <div className="rounded-md border border-accent/30 bg-accent/[0.05] p-3">
+        <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-action">
+          Your forest — the category you own
+        </div>
+        <div className="mt-1 font-sans text-base font-semibold text-ink">{card.genusName}</div>
+        {card.genusDescription && (
+          <p className="mt-1 font-sans text-[12px] leading-relaxed text-ink-muted">
+            {card.genusDescription}
+          </p>
+        )}
+        <div className="mt-2 font-mono text-[10px] text-ink-muted">
+          {active.length} trees · {claimed} claimed · {kept} covered
+        </div>
+      </div>
+
+      {/* Steering — the inventor drives what the forest grows into. */}
+      <div className="mt-3">
+        <div className="mb-1.5 font-sans text-[12px] text-ink-muted">
+          Grow your forest — tap to explore, and claim the trees worth owning:
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {steer("missing", "What am I missing?", "🔍")}
+          {steer("design_around", "How would a competitor get around this?", "🛡️")}
+          {steer("future", "What's the future version?", "🚀")}
+        </div>
+      </div>
+
+      {/* The trees, grouped by where they came onto the map. */}
+      <div className="mt-4 flex flex-col gap-4">
+        {sections.map((s) => {
+          const trees = active.filter((t) => t.origin === s.origin);
+          if (!trees.length) return null;
+          return (
+            <div key={s.origin}>
+              <div className="mb-1.5 flex items-baseline gap-2">
+                <span className="font-sans text-[12px] font-semibold text-ink">{s.label}</span>
+                <span className="font-sans text-[11px] text-ink-muted">— {s.hint}</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {trees.map((t) => (
+                  <ForestTreeRow
+                    key={t.id}
+                    cardId={card.id}
+                    t={t}
+                    busy={busy}
+                    claiming={claimingId === t.id}
+                    detail={detail}
+                    onStartClaim={() => {
+                      setClaimingId(t.id);
+                      setDetail(t.detail ?? "");
+                    }}
+                    onCancelClaim={() => setClaimingId(null)}
+                    onDetail={setDetail}
+                    onAct={onAct}
+                    onClaimed={() => setClaimingId(null)}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] text-ink-muted">
+          {claimed + kept} of {active.length} going into your draft
+        </span>
+        <button
+          onClick={() => onAct(card.id, { action: "finalize" } as never)}
+          disabled={busy}
+          className="rounded-md bg-accent px-4 py-2 font-sans text-sm font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+        >
+          Done — write up my forest
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** One tree: the way + Keep (cover) / Claim (own it, with a one-line +1) / Drop. */
+function ForestTreeRow({
+  cardId,
+  t,
+  busy,
+  claiming,
+  detail,
+  onStartClaim,
+  onCancelClaim,
+  onDetail,
+  onAct,
+  onClaimed,
+}: {
+  cardId: string;
+  t: ForestTree;
+  busy: boolean;
+  claiming: boolean;
+  detail: string;
+  onStartClaim: () => void;
+  onCancelClaim: () => void;
+  onDetail: (v: string) => void;
+  onAct: (cardId: string, input: never) => void;
+  onClaimed: () => void;
+}) {
+  const border =
+    t.status === "claimed"
+      ? "border-accent bg-accent/15"
+      : t.status === "kept"
+        ? "border-accent/60 bg-accent/[0.06]"
+        : "border-border bg-bg";
+  return (
+    <div className={`rounded-md border p-3 ${border}`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="font-sans text-[13px] font-semibold text-ink">{t.label}</span>
+        {t.status === "claimed" && (
+          <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-accent">claimed</span>
+        )}
+        {t.status === "kept" && (
+          <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted">covered</span>
+        )}
+      </div>
+      {t.note && (
+        <p className="mt-1 font-sans text-[11px] italic text-accent/90">{t.note}</p>
+      )}
+      <p className="mt-1 font-sans text-[12px] text-ink-muted">
+        <span className="text-ink">Like:</span> {t.source}
+      </p>
+      <p className="mt-0.5 font-sans text-[12px] text-ink-muted">
+        <span className="text-ink">For you:</span> {t.mapping}
+      </p>
+      <p className="mt-0.5 font-sans text-[12px] text-ink-muted">
+        <span className="text-ink">Tradeoff:</span> {t.tradeoff}
+      </p>
+
+      {t.status === "claimed" && t.detail && (
+        <p className="mt-1.5 rounded bg-accent/10 px-2 py-1 font-sans text-[12px] text-ink">
+          <span className="text-ink-muted">Your take:</span> {t.detail}
+        </p>
+      )}
+
+      {claiming ? (
+        <div className="mt-2">
+          <input
+            autoFocus
+            value={detail}
+            onChange={(e) => onDetail(e.target.value)}
+            placeholder="In a few words — why this matters, or how you'd actually build it"
+            className="w-full rounded-md border border-border bg-panel px-2.5 py-1.5 font-sans text-xs text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+          />
+          <div className="mt-1.5 flex gap-2">
+            <button
+              onClick={() => {
+                onAct(cardId, { action: "claim", treeId: t.id, detail: detail.trim() } as never);
+                onClaimed();
+              }}
+              disabled={busy || !detail.trim()}
+              className="rounded-md bg-accent px-2.5 py-1 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+            >
+              Claim it
+            </button>
+            <button
+              onClick={onCancelClaim}
+              className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted hover:text-ink"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <button
+            onClick={onStartClaim}
+            disabled={busy}
+            className={`rounded-md px-2.5 py-1 font-sans text-[11px] font-medium disabled:opacity-50 ${
+              t.status === "claimed" ? "bg-accent text-brand" : "border border-accent/50 text-ink hover:bg-accent/10"
+            }`}
+          >
+            {t.status === "claimed" ? "Edit my take" : "Claim it (worth a patent claim)"}
+          </button>
+          <button
+            onClick={() => onAct(cardId, { action: "keep", treeId: t.id } as never)}
+            disabled={busy}
+            className={`rounded-md px-2.5 py-1 font-sans text-[11px] disabled:opacity-50 ${
+              t.status === "kept" ? "bg-accent/70 text-brand" : "border border-border text-ink-muted hover:text-ink"
+            }`}
+          >
+            Just cover it
+          </button>
+          <button
+            onClick={() => onAct(cardId, { action: "drop", treeId: t.id } as never)}
+            disabled={busy}
+            className="rounded-md border border-border px-2.5 py-1 font-sans text-[11px] text-ink-muted hover:text-red-300 disabled:opacity-50"
+          >
+            Not mine
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** §6 — confirm what makes each Protected way DIFFERENT (from the inventor's own words). */
+function DeltaReviewView({
+  card,
+  busy,
+  onAct,
+}: {
+  card: DeltaReviewCard;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  return (
+    <div className="rounded-md border border-accent/40 bg-accent/[0.05] p-4">
+      <div className="font-sans text-base font-semibold text-ink">
+        What makes these worth protecting?
+      </div>
+      <p className="mt-0.5 font-sans text-xs text-ink-muted">
+        For a claim, each protected way needs something specific that&rsquo;s different. Here&rsquo;s what
+        you already said about each — keep what fits. Nothing was written for you.
+      </p>
+      <div className="mt-3 flex flex-col gap-4">
+        {card.regions.map((r) => {
+          const off = r.doesNotApply;
+          const same = r.sameAsPrimary;
+          return (
+            <div
+              key={r.regionId}
+              className={`rounded-md border p-3 ${
+                off ? "border-red-500/40 bg-red-500/[0.04] opacity-70" : "border-border bg-bg"
+              }`}
+            >
+              <div className="font-sans text-[13px] font-semibold text-ink">{r.regionLabel}</div>
+              {r.deltas.length === 0 && !same && !off && (
+                <p className="mt-1 font-sans text-[12px] text-ink-muted">
+                  Nothing specific found in your words for this one. Is it the same as your main
+                  approach, or not a real option?
+                </p>
+              )}
+              {!off &&
+                r.deltas.map((d) => {
+                  const kept = d.decision === "kept";
+                  return (
+                    <div key={d.id} className="mt-2">
+                      {editingId === d.id ? (
+                        <>
+                          <textarea
+                            value={text}
+                            onChange={(e) => setText(e.target.value)}
+                            rows={2}
+                            className="w-full resize-y rounded-md border border-border bg-panel p-2 font-sans text-xs text-ink focus:border-accent focus:outline-none"
+                          />
+                          <div className="mt-1.5 flex gap-2">
+                            <button
+                              onClick={() => {
+                                onAct(card.id, {
+                                  action: "edit",
+                                  deltaId: d.id,
+                                  quote: text.trim(),
+                                } as never);
+                                setEditingId(null);
+                              }}
+                              disabled={busy || !text.trim()}
+                              className="rounded-md bg-accent px-2.5 py-1 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => setEditingId(null)}
+                              className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted hover:text-ink"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div
+                          className={`rounded-md border p-2 ${
+                            kept ? "border-border bg-panel" : "border-border bg-panel/40 opacity-60"
+                          }`}
+                        >
+                          <p className="font-sans text-[12px] leading-relaxed text-ink">
+                            &ldquo;{d.quote}&rdquo;
+                          </p>
+                          <div className="mt-1.5 flex gap-1.5">
+                            <button
+                              onClick={() => onAct(card.id, { action: "keep", deltaId: d.id } as never)}
+                              disabled={busy}
+                              className={`rounded-md px-2 py-0.5 font-sans text-[11px] font-medium disabled:opacity-50 ${
+                                kept ? "bg-accent text-brand" : "border border-border text-ink-muted hover:text-ink"
+                              }`}
+                            >
+                              Keep
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingId(d.id);
+                                setText(d.quote);
+                              }}
+                              disabled={busy}
+                              className="rounded-md border border-border px-2 py-0.5 font-sans text-[11px] text-ink-muted hover:text-ink disabled:opacity-50"
+                            >
+                              Trim
+                            </button>
+                            <button
+                              onClick={() => onAct(card.id, { action: "remove", deltaId: d.id } as never)}
+                              disabled={busy}
+                              className="rounded-md border border-border px-2 py-0.5 font-sans text-[11px] text-ink-muted hover:text-red-300 disabled:opacity-50"
+                            >
+                              Not this
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <button
+                  onClick={() =>
+                    onAct(card.id, { action: "same_as_primary", regionId: r.regionId } as never)
+                  }
+                  disabled={busy}
+                  className={`rounded-md px-2 py-0.5 font-sans text-[11px] disabled:opacity-50 ${
+                    same ? "bg-accent text-brand" : "border border-border text-ink-muted hover:text-ink"
+                  }`}
+                >
+                  Same as my main way
+                </button>
+                <button
+                  onClick={() =>
+                    onAct(card.id, { action: "does_not_apply", regionId: r.regionId } as never)
+                  }
+                  disabled={busy}
+                  className={`rounded-md px-2 py-0.5 font-sans text-[11px] disabled:opacity-50 ${
+                    off ? "border border-red-500/60 bg-red-500/15 text-red-300" : "border border-border text-ink-muted hover:text-ink"
+                  }`}
+                >
+                  Doesn&rsquo;t apply
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-4 flex justify-end">
+        <button
+          onClick={() => onAct(card.id, { action: "confirm" } as never)}
+          disabled={busy}
+          className="rounded-md bg-accent px-4 py-2 font-sans text-sm font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+        >
+          Confirm &amp; continue
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** A2 — confirm or edit the extracted genus (the category the invention belongs to). */
+function GenusReviewView({
+  card,
+  busy,
+  onAct,
+}: {
+  card: GenusReviewCard;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(card.genus.genus_description);
+  return (
+    <div className="rounded-md border border-border bg-panel p-4">
+      <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-action">
+        The bigger category your invention belongs to
+      </div>
+      <div className="mt-1 font-sans text-base font-semibold text-ink">
+        {card.genus.genus_name}
+      </div>
+      {editing ? (
+        <>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={4}
+            className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-sans text-[13px] leading-relaxed text-ink focus:border-accent focus:outline-none"
+          />
+          <div className="mt-2 flex gap-2">
+            <button
+              onClick={() => {
+                onAct(card.id, { action: "edit", description: text.trim() } as never);
+                setEditing(false);
+              }}
+              disabled={busy || !text.trim()}
+              className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+            >
+              Save
+            </button>
+            <button
+              onClick={() => {
+                setText(card.genus.genus_description);
+                setEditing(false);
+              }}
+              className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="mt-1.5 font-sans text-[13px] leading-relaxed text-ink">
+          {card.genus.genus_description}
+        </p>
+      )}
+
+      {card.overbroad.length > 0 && (
+        <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/[0.05] p-2.5">
+          <div className="font-sans text-[12px] font-semibold text-amber-400">
+            Might reach further than your words support
+          </div>
+          <ul className="mt-1 space-y-1">
+            {card.overbroad.map((o, i) => (
+              <li key={i} className="font-sans text-[12px] text-ink-muted">
+                <span className="rounded bg-amber-500/15 px-1 text-amber-300">{o.quote}</span> —{" "}
+                {o.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {!editing && (
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={() => {
+              setText(card.genus.genus_description);
+              setEditing(true);
+            }}
+            disabled={busy}
+            className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
+          >
+            Edit
+          </button>
+          <button
+            onClick={() => onAct(card.id, { action: "keep" } as never)}
+            disabled={busy}
+            className="rounded-md bg-accent px-4 py-1.5 font-sans text-sm font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+          >
+            Looks right &mdash; continue
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A3 — confirm the mined constraints (the inventor's own words), grouped by kind. */
+function ConstraintReviewView({
+  card,
+  busy,
+  onAct,
+}: {
+  card: ConstraintReviewCard;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const groups: { kind: string; label: string }[] = [
+    { kind: "constraint", label: "Rules it follows" },
+    { kind: "invariant", label: "Things that always hold" },
+    { kind: "operation_step", label: "Steps it takes" },
+    { kind: "data_structure", label: "What it keeps track of" },
+  ];
+  const keptCount = card.items.filter((i) => i.kept).length;
+  return (
+    <div className="rounded-md border border-border bg-panel p-4">
+      <div className="font-sans text-base font-semibold text-ink">
+        Confirm what your invention requires
+      </div>
+      <p className="mt-0.5 font-sans text-xs text-ink-muted">
+        These are pulled straight from your own words. Keep the ones that are real requirements —
+        they sharpen every option we show next. Nothing here was written for you.
+      </p>
+      <div className="mt-3 flex flex-col gap-4">
+        {groups.map((g) => {
+          const items = card.items.filter((i) => i.kind === g.kind);
+          if (!items.length) return null;
+          return (
+            <div key={g.kind}>
+              <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+                {g.label}
+              </div>
+              <div className="flex flex-col gap-2">
+                {items.map((it) => (
+                  <div
+                    key={it.id}
+                    className={`rounded-md border p-2.5 ${
+                      it.kept ? "border-border bg-bg" : "border-border bg-bg/40 opacity-60"
+                    }`}
+                  >
+                    {editingId === it.id ? (
+                      <>
+                        <textarea
+                          value={text}
+                          onChange={(e) => setText(e.target.value)}
+                          rows={2}
+                          className="w-full resize-y rounded-md border border-border bg-panel p-2 font-sans text-xs text-ink focus:border-accent focus:outline-none"
+                        />
+                        <div className="mt-1.5 flex gap-2">
+                          <button
+                            onClick={() => {
+                              onAct(card.id, {
+                                action: "edit",
+                                itemId: it.id,
+                                quote: text.trim(),
+                              } as never);
+                              setEditingId(null);
+                            }}
+                            disabled={busy || !text.trim()}
+                            className="rounded-md bg-accent px-2.5 py-1 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => setEditingId(null)}
+                            className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted hover:text-ink"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="font-sans text-[12px] leading-relaxed text-ink">
+                          &ldquo;{it.quote}&rdquo;
+                        </p>
+                        <div className="flex shrink-0 gap-1.5">
+                          <button
+                            onClick={() => {
+                              setEditingId(it.id);
+                              setText(it.quote);
+                            }}
+                            disabled={busy}
+                            className="rounded-md border border-border px-2 py-0.5 font-sans text-[11px] text-ink-muted hover:text-ink disabled:opacity-50"
+                          >
+                            Trim
+                          </button>
+                          <button
+                            onClick={() =>
+                              onAct(card.id, { action: "toggle", itemId: it.id } as never)
+                            }
+                            disabled={busy}
+                            className={`rounded-md px-2 py-0.5 font-sans text-[11px] font-medium disabled:opacity-50 ${
+                              it.kept
+                                ? "bg-accent text-brand"
+                                : "border border-border text-ink-muted hover:text-ink"
+                            }`}
+                          >
+                            {it.kept ? "Keep" : "Kept off"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-4 flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] text-ink-muted">{keptCount} kept</span>
+        <button
+          onClick={() => onAct(card.id, { action: "confirm" } as never)}
+          disabled={busy}
+          className="rounded-md bg-accent px-4 py-2 font-sans text-sm font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+        >
+          Confirm &amp; continue
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** A1 hygiene — tap-resolve duplicate pairs and flagged spans before the genus runs. */
+function KCHygieneView({
+  card,
+  busy,
+  onAct,
+}: {
+  card: KCHygieneCard;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  const dupes = card.duplicates.filter((d) => !d.resolved);
+  const flags = card.flags.filter((f) => !f.resolved);
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.05] p-4">
+      <div className="font-sans text-base font-semibold text-ink">Tidy your key concepts</div>
+      <p className="mt-0.5 font-sans text-xs text-ink-muted">
+        A couple of quick checks before we go on — nothing is changed until you tap.
+      </p>
+
+      {dupes.length > 0 && (
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+            These two are close — keep both unless one is truly redundant
+          </div>
+          {dupes.map((d) => (
+            <div key={d.pairId} className="rounded-md border border-border bg-bg p-3">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {[
+                  { id: d.aId, title: d.aTitle, statement: d.aStatement },
+                  { id: d.bId, title: d.bTitle, statement: d.bStatement },
+                ].map((c) => (
+                  <div key={c.id} className="rounded-md border border-border bg-panel p-2.5">
+                    <div className="font-sans text-[12px] font-semibold text-ink">{c.title}</div>
+                    <p className="mt-1 font-sans text-[12px] leading-relaxed text-ink-muted">
+                      {c.statement}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              {d.reason && (
+                <p className="mt-2 font-sans text-[11px] italic text-ink-muted">{d.reason}</p>
+              )}
+              <div className="mt-2 flex items-center gap-3">
+                {/* Default, protected action: keep both distinct positions. */}
+                <button
+                  onClick={() => onAct(card.id, { action: "keep_both", pairId: d.pairId } as never)}
+                  disabled={busy}
+                  className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+                >
+                  Keep both
+                </button>
+                {/* Deliberate, secondary: only if one truly restates the other. */}
+                <span className="font-sans text-[11px] text-ink-muted">
+                  or, if one just restates the other, keep only{" "}
+                  <button
+                    onClick={() =>
+                      onAct(card.id, {
+                        action: "keep_one",
+                        pairId: d.pairId,
+                        keepId: d.aId,
+                      } as never)
+                    }
+                    disabled={busy}
+                    className="underline underline-offset-2 hover:text-ink disabled:opacity-50"
+                  >
+                    the first
+                  </button>{" "}
+                  or{" "}
+                  <button
+                    onClick={() =>
+                      onAct(card.id, {
+                        action: "keep_one",
+                        pairId: d.pairId,
+                        keepId: d.bId,
+                      } as never)
+                    }
+                    disabled={busy}
+                    className="underline underline-offset-2 hover:text-ink disabled:opacity-50"
+                  >
+                    the second
+                  </button>
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {flags.length > 0 && (
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+            Worth a look
+          </div>
+          {flags.map((f) => (
+            <div key={f.flagId} className="rounded-md border border-border bg-bg p-3">
+              <p className="font-sans text-[12px] text-ink">
+                <span className="text-ink-muted">In &ldquo;{f.kcTitle}&rdquo;:</span> {f.rule}
+                {f.quote ? (
+                  <>
+                    {" "}
+                    <span className="rounded bg-amber-500/15 px-1 text-amber-300">{f.quote}</span>
+                  </>
+                ) : null}
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => onAct(card.id, { action: "keep_flag", flagId: f.flagId } as never)}
+                  disabled={busy}
+                  className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink hover:border-accent disabled:opacity-50"
+                >
+                  Keep as is
+                </button>
+                <button
+                  onClick={() =>
+                    onAct(card.id, { action: "remove_flag", flagId: f.flagId } as never)
+                  }
+                  disabled={busy}
+                  className="rounded-md border border-red-500/50 px-2.5 py-1 font-sans text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                >
+                  Remove this concept
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Layer 4 criterion — tap-only. Every option is the inventor's own words; no compose surface. */
@@ -1113,8 +1881,8 @@ function SweepView({
 }) {
   // Defensive: a sweep card saved before grouping has no `groups`.
   const groups = card.groups ?? [];
-  const keptCount = groups.reduce(
-    (n, g) => n + g.items.filter((i) => i.status === "kept").length,
+  const decided = groups.reduce(
+    (n, g) => n + g.items.filter((i) => i.status === "kept" || i.status === "protected").length,
     0,
   );
   if (!groups.length) {
@@ -1131,57 +1899,24 @@ function SweepView({
     <div className="rounded-md border border-border bg-panel p-4">
       <div className="mb-1 flex items-center justify-between gap-2">
         <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-action">
-          Genus &amp; Species · keep the ways that fit
+          Genus &amp; Species · decide each way
         </div>
-        <span className="font-mono text-[10px] text-ink-muted">{keptCount} kept</span>
+        <span className="font-mono text-[10px] text-ink-muted">{decided} in</span>
       </div>
       <p className="mb-3 font-sans text-[12px] text-ink-muted">
-        Ways to build it. Tap any that fit — keep as many as you like — tap again to remove. The
-        more you keep, the more your invention is covered.
+        For each way to build it: <span className="text-ink">Keep</span> to cover it in the write-up,{" "}
+        <span className="text-ink">Protect</span> for the ones worth a claim, <span className="text-ink">Remove</span>{" "}
+        if it doesn&rsquo;t fit, or <span className="text-ink">Park</span> to decide later.
       </p>
 
       <div className="flex flex-col gap-4">
         {groups.map((g) => (
           <div key={g.family}>
-            {/* A header only where several ways share one approach — a single
-                stand-alone way needs none, so no card reads as a special category. */}
-            {g.items.length > 1 && (
-              <div className="mb-1.5 font-sans text-[12px] font-semibold text-ink">{g.family}</div>
-            )}
+            <div className="mb-1.5 font-sans text-[12px] font-semibold text-ink">{g.family}</div>
             <div className="flex flex-col gap-2">
-              {g.items.map((it) => {
-                const kept = it.status === "kept";
-                return (
-                  <button
-                    key={it.candidateId}
-                    onClick={() =>
-                      onAct(card.id, { action: "keep", candidateId: it.candidateId } as never)
-                    }
-                    disabled={busy}
-                    className={`rounded-md border p-3 text-left transition-colors disabled:opacity-60 ${
-                      kept
-                        ? "border-accent bg-accent/15"
-                        : "border-border bg-bg hover:border-accent/50"
-                    }`}
-                  >
-                    <div className="flex items-baseline gap-2">
-                      <span aria-hidden className="text-accent">
-                        {kept ? "✓" : "+"}
-                      </span>
-                      <span className="font-sans text-[13px] font-semibold text-ink">{it.label}</span>
-                    </div>
-                    <p className="mt-1 font-sans text-[12px] text-ink-muted">
-                      <span className="text-ink">Like:</span> {it.source}
-                    </p>
-                    <p className="mt-0.5 font-sans text-[12px] text-ink-muted">
-                      <span className="text-ink">For you:</span> {it.mapping}
-                    </p>
-                    <p className="mt-0.5 font-sans text-[12px] text-ink-muted">
-                      <span className="text-ink">Tradeoff:</span> {it.tradeoff}
-                    </p>
-                  </button>
-                );
-              })}
+              {g.items.map((it) => (
+                <RegionRow key={it.candidateId} cardId={card.id} it={it} busy={busy} onAct={onAct} />
+              ))}
             </div>
           </div>
         ))}
@@ -1195,6 +1930,76 @@ function SweepView({
         >
           Done — write these up
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** One region on the Phase-C sweep: the way + four tap decisions. */
+function RegionRow({
+  cardId,
+  it,
+  busy,
+  onAct,
+}: {
+  cardId: string;
+  it: SweepItem;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  const border =
+    it.status === "protected"
+      ? "border-accent bg-accent/15"
+      : it.status === "kept"
+        ? "border-accent/60 bg-accent/[0.06]"
+        : it.status === "excluded"
+          ? "border-red-500/40 bg-red-500/[0.05] opacity-60"
+          : it.status === "parked"
+            ? "border-amber-500/40 bg-amber-500/[0.05]"
+            : "border-border bg-bg";
+  const btn = (action: string, label: string, active: boolean, tone: "accent" | "muted" | "danger") => (
+    <button
+      onClick={() => onAct(cardId, { action, candidateId: it.candidateId } as never)}
+      disabled={busy}
+      className={`rounded-md px-2.5 py-1 font-sans text-[11px] font-medium transition-colors disabled:opacity-50 ${
+        active
+          ? tone === "danger"
+            ? "border border-red-500/60 bg-red-500/15 text-red-300"
+            : "bg-accent text-brand"
+          : "border border-border text-ink-muted hover:text-ink"
+      }`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className={`rounded-md border p-3 ${border}`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="font-sans text-[13px] font-semibold text-ink">{it.label}</span>
+        {it.grade && (
+          <span
+            className={`font-mono text-[9px] uppercase tracking-[0.1em] ${
+              it.grade === "claim" ? "text-accent" : "text-ink-muted"
+            }`}
+          >
+            {it.grade === "claim" ? "claim" : "disclosure"}
+          </span>
+        )}
+      </div>
+      <p className="mt-1 font-sans text-[12px] text-ink-muted">
+        <span className="text-ink">Like:</span> {it.source}
+      </p>
+      <p className="mt-0.5 font-sans text-[12px] text-ink-muted">
+        <span className="text-ink">For you:</span> {it.mapping}
+      </p>
+      <p className="mt-0.5 font-sans text-[12px] text-ink-muted">
+        <span className="text-ink">Tradeoff:</span> {it.tradeoff}
+      </p>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {btn("keep", "Keep", it.status === "kept", "accent")}
+        {btn("protect", "Protect", it.status === "protected", "accent")}
+        {btn("remove", "Remove", it.status === "excluded", "danger")}
+        {btn("park", "Park", it.status === "parked", "muted")}
       </div>
     </div>
   );

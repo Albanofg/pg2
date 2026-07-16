@@ -34,6 +34,14 @@ const PROMPT_FILES: Record<AgentName, string> = {
   "criterion-fragmenter": `${MODULE_5_DIR}/genus-species/05-criterion-fragmenter.md`,
   "breadth-assessor": `${MODULE_5_DIR}/genus-species/07-breadth-assessor.md`,
   "baseline-builder": `${MODULE_5_DIR}/genus-species/08-baseline-builder.md`,
+  "kc-hygiene-verify": `${MODULE_5_DIR}/genus-species/09-kc-hygiene-verify.md`,
+  "constraint-miner": `${MODULE_5_DIR}/genus-species/10-constraint-miner.md`,
+  "genus-verify": `${MODULE_5_DIR}/genus-species/11-genus-verify.md`,
+  "delta-miner": `${MODULE_5_DIR}/genus-species/12-delta-miner.md`,
+  "kc-independent": `${MODULE_5_DIR}/genus-species/13-kc-independent.md`,
+  "kc-dependent": `${MODULE_5_DIR}/genus-species/14-kc-dependent.md`,
+  "exit-evaluator": `${MODULE_5_DIR}/genus-species/15-exit-evaluator.md`,
+  "forest-expander": `${MODULE_5_DIR}/genus-species/16-forest-expander.md`,
   enumerator: `${MODULE_5_DIR}/genus-species/03-enumerator.md`,
   grader: `${MODULE_5_DIR}/genus-species/04-grader.md`,
   formalizer: `${MODULE_5_DIR}/genus-species/06-formalizer.md`,
@@ -58,6 +66,14 @@ const AGENT_SECTIONS: Record<AgentName, BackpackSection[]> = {
   "criterion-fragmenter": [],
   "breadth-assessor": [],
   "baseline-builder": [],
+  "kc-hygiene-verify": [],
+  "constraint-miner": [],
+  "genus-verify": [],
+  "delta-miner": [],
+  "kc-independent": ["broadening"],
+  "kc-dependent": ["broadening"],
+  "exit-evaluator": [],
+  "forest-expander": [],
   enumerator: [],
   grader: [],
   // The formalizer restates a kept card into disclosure prose — broadening gives
@@ -106,6 +122,9 @@ export const GenusOutput = z.object({
   logical_invariants: z.array(z.string()).default([]),
   // The rule-engine / language-model / agent implementability narrative.
   paradigm_neutrality_check: z.string().default(""),
+  // A2 (rebuild): verbatim ≥8-char quotes from the inputs showing possession of the
+  // claimed breadth. A deterministic anchor check drops any that aren't real.
+  anchors: z.array(z.string()).default([]),
   // Gaps the Extractor opened instead of authoring missing substance. Recorded to
   // the pipeline gap object by the controller (gap_opened Ledger event).
   gaps: z.array(DeclaredGapOutput).default([]),
@@ -635,6 +654,287 @@ export async function runBreadthAssessor(
     schema: BreadthOutput,
     temperature: 0.1,
     subject: input.genus.genus_name,
+  });
+}
+
+/** A1 hygiene chain — the semantic-duplicate VERIFY step, on the second model. */
+export const KCHygieneVerifyOutput = z.object({
+  duplicates: z
+    .array(
+      z.object({
+        a_id: z.string().default(""),
+        b_id: z.string().default(""),
+        a_quote: z.string().default(""),
+        b_quote: z.string().default(""),
+        reason: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
+export type KCHygieneVerifyResult = z.infer<typeof KCHygieneVerifyOutput>;
+
+/** Catch same-scope Key Concept pairs the deterministic near-dup lint misses. */
+export async function runKCHygieneVerify(
+  runAgent: AgentRunner,
+  input: { keyConcepts: { id: string; title: string; statement: string }[] },
+): Promise<KCHygieneVerifyResult> {
+  const system = await loadAgentPrompt("kc-hygiene-verify");
+  const prompt = [
+    "THE KEY CONCEPTS:",
+    ...input.keyConcepts.map(
+      (k, i) => `(${i + 1}) id=${k.id} | ${k.title}: ${k.statement}`,
+    ),
+  ].join("\n");
+  return runAgent({
+    agent: "kc-hygiene-verify",
+    system,
+    prompt,
+    schema: KCHygieneVerifyOutput,
+    temperature: 0.1,
+  });
+}
+
+/** A3 constraint mining — verbatim, type-classified candidates from the record. */
+export const ConstraintMinerOutput = z.object({
+  candidates: z
+    .array(
+      z.object({
+        kind: z.enum(["constraint", "invariant", "operation_step", "data_structure"]),
+        quote: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
+export type ConstraintMinerResult = z.infer<typeof ConstraintMinerOutput>;
+
+/** Mine the inventor's verbatim record for anchored, classified constraint candidates. */
+export async function runConstraintMiner(
+  runAgent: AgentRunner,
+  input: { record: string },
+): Promise<ConstraintMinerResult> {
+  const system = await loadAgentPrompt("constraint-miner");
+  const prompt = ["THE VERBATIM RECORD:", input.record].join("\n");
+  return runAgent({
+    agent: "constraint-miner",
+    system,
+    prompt,
+    schema: ConstraintMinerOutput,
+    temperature: 0.2,
+  });
+}
+
+/** A2 genus — the OVERBREADTH verify step, on the second model. */
+export const GenusVerifyOutput = z.object({
+  overbroad: z
+    .array(z.object({ quote: z.string().default(""), reason: z.string().default("") }))
+    .default([]),
+});
+export type GenusVerifyResult = z.infer<typeof GenusVerifyOutput>;
+
+/** Judge whether a genus claims more breadth than its verbatim anchors support. */
+export async function runGenusVerify(
+  runAgent: AgentRunner,
+  input: { genus: Genus; anchors: string[] },
+): Promise<GenusVerifyResult> {
+  const system = await loadAgentPrompt("genus-verify");
+  const prompt = [
+    "THE GENUS STATEMENT:",
+    renderGenus(input.genus),
+    "",
+    "THE ANCHORS (verbatim, the only evidence of possession):",
+    input.anchors.length ? input.anchors.map((a) => `- "${a}"`).join("\n") : "(none)",
+  ].join("\n");
+  return runAgent({
+    agent: "genus-verify",
+    system,
+    prompt,
+    schema: GenusVerifyOutput,
+    temperature: 0.1,
+    subject: input.genus.genus_name,
+  });
+}
+
+/** Delta mining — anchored quotes of how the mechanism differs in a region's setting. */
+export const DeltaMinerOutput = z.object({
+  deltas: z.array(z.object({ quote: z.string().default("") })).default([]),
+});
+export type DeltaMinerResult = z.infer<typeof DeltaMinerOutput>;
+
+/** Harvest the inventor's own statements of how the mechanism changes in one region. */
+export async function runDeltaMiner(
+  runAgent: AgentRunner,
+  input: { region: string; record: string },
+): Promise<DeltaMinerResult> {
+  const system = await loadAgentPrompt("delta-miner");
+  const prompt = [
+    "THE REGION (the setting this way of building targets):",
+    input.region,
+    "",
+    "THE VERBATIM RECORD:",
+    input.record,
+  ].join("\n");
+  return runAgent({
+    agent: "delta-miner",
+    system,
+    prompt,
+    schema: DeltaMinerOutput,
+    temperature: 0.2,
+    subject: input.region,
+  });
+}
+
+/** D1 — the independent Key Concept for a genus, in three framings. */
+export const KCIndependentOutput = z.object({
+  label: z.string().default(""),
+  method_of_steps: z.string().default(""),
+  system_of_parts: z.string().default(""),
+  instructions_on_medium: z.string().default(""),
+});
+export type KCIndependentResult = z.infer<typeof KCIndependentOutput>;
+
+export async function runKCIndependent(
+  runAgent: AgentRunner,
+  input: { genus: Genus; confirmedConstraints: string[] },
+): Promise<KCIndependentResult> {
+  const system = await loadAgentPrompt("kc-independent");
+  const prompt = [
+    "THE GENUS STATEMENT:",
+    renderGenus(input.genus),
+    "",
+    "THE CONFIRMED CONSTRAINTS:",
+    input.confirmedConstraints.length
+      ? input.confirmedConstraints.map((c) => `- "${c}"`).join("\n")
+      : "(none provided)",
+  ].join("\n");
+  return runAgent({
+    agent: "kc-independent",
+    system,
+    prompt,
+    schema: KCIndependentOutput,
+    temperature: 0.2,
+    subject: input.genus.genus_name,
+  });
+}
+
+/** D2 — a dependent Key Concept adding one limitation from a claim-grade region. */
+export const KCDependentOutput = z.object({
+  label: z.string().default(""),
+  text: z.string().default(""),
+});
+export type KCDependentResult = z.infer<typeof KCDependentOutput>;
+
+export async function runKCDependent(
+  runAgent: AgentRunner,
+  input: { genus: Genus; regionLabel: string; regionMaterial: string[] },
+): Promise<KCDependentResult> {
+  const system = await loadAgentPrompt("kc-dependent");
+  const prompt = [
+    "THE INDEPENDENT POSITION:",
+    `${input.genus.genus_name}: ${input.genus.genus_description}`,
+    "",
+    `THE REGION MATERIAL (region: ${input.regionLabel}):`,
+    input.regionMaterial.length
+      ? input.regionMaterial.map((m) => `- "${m}"`).join("\n")
+      : "(none)",
+  ].join("\n");
+  return runAgent({
+    agent: "kc-dependent",
+    system,
+    prompt,
+    schema: KCDependentOutput,
+    temperature: 0.2,
+    subject: input.regionLabel,
+  });
+}
+
+/** Module exit evaluation — four perspectives score the rendered set (spec §8). */
+export const ExitEvalOutput = z.object({
+  perspectives: z
+    .array(
+      z.object({
+        name: z.enum(["mathematician", "engineer", "philosopher", "artist"]),
+        score: z.coerce.number().default(0),
+        findings: z
+          .array(z.object({ quote: z.string().default(""), note: z.string().default("") }))
+          .default([]),
+      }),
+    )
+    .default([]),
+});
+export type ExitEvalResult = z.infer<typeof ExitEvalOutput>;
+
+/** The Forest Expander — fills the forest in the direction the inventor steers. */
+export const ForestExpanderOutput = z.object({
+  trees: z
+    .array(
+      z.object({
+        label: z.string().default(""),
+        source: z.string().default(""),
+        mapping: z.string().default(""),
+        tradeoff: z.string().default(""),
+        note: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
+export type ForestExpanderResult = z.infer<typeof ForestExpanderOutput>;
+
+export async function runForestExpander(
+  runAgent: AgentRunner,
+  input: {
+    genus: Genus;
+    existing: string[];
+    direction: "missing" | "design_around" | "future";
+    target: number;
+  },
+): Promise<ForestExpanderResult> {
+  const system = await loadAgentPrompt("forest-expander");
+  const dirText = {
+    missing: "missing — genuinely distinct ways the current trees do not cover",
+    design_around: "design_around — how a competitor would build the same result outside the current trees",
+    future: "future — forward-looking / emerging variants",
+  }[input.direction];
+  const prompt = [
+    "THE GENUS (the forest):",
+    renderGenus(input.genus),
+    "",
+    "THE TREES ALREADY ON THE MAP (do not repeat these):",
+    input.existing.length ? input.existing.map((t) => `- ${t}`).join("\n") : "(none yet)",
+    "",
+    `DIRECTION: ${dirText}`,
+    `TARGET COUNT (aim for roughly this many genuinely new trees): ${input.target}`,
+  ].join("\n");
+  return runAgent({
+    agent: "forest-expander",
+    system,
+    prompt,
+    schema: ForestExpanderOutput,
+    temperature: 0.6,
+    subject: input.genus.genus_name,
+  });
+}
+
+export async function runExitEvaluator(
+  runAgent: AgentRunner,
+  input: {
+    keyConcepts: { title: string; statement: string }[];
+    artifacts: { label: string; text: string }[];
+  },
+): Promise<ExitEvalResult> {
+  const system = await loadAgentPrompt("exit-evaluator");
+  const prompt = [
+    "THE KEY CONCEPTS:",
+    ...input.keyConcepts.map((k, i) => `(${i + 1}) ${k.title}: ${k.statement}`),
+    "",
+    "THE RENDERED ARTIFACTS:",
+    ...input.artifacts.map((a, i) => `[${i + 1}] ${a.label}\n${a.text}`),
+  ].join("\n");
+  return runAgent({
+    agent: "exit-evaluator",
+    system,
+    prompt,
+    schema: ExitEvalOutput,
+    temperature: 0.2,
   });
 }
 

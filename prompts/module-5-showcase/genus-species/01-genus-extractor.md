@@ -128,6 +128,9 @@ Render the output as a JSON object with exactly this schema, in exactly this key
     "[Zero or more entries. Each a property of the input/output structures that holds across every valid execution, FORMALIZED FROM THE INPUTS. Empty list if the inputs supply none — never authored.]"
   ],
   "paradigm_neutrality_check": "[3–6 sentences. For EACH of the three paradigms — deterministic rule system, structured-prompt language-model system, autonomous agent — states concretely what receives the input, what performs the transformation, what enforces any stated constraints, and what emits the output. All three execute the same transformation.]",
+  "anchors": [
+    "[One or more EXACT verbatim substrings (≥ 8 characters each) copied from the inventor's own words that show possession of the breadth this genus claims. Copy them exactly — do not paraphrase. A downstream check discards any anchor that is not a real substring of the inputs, and narrows the genus to what the surviving anchors support. If the genus is broader than any quote supports, narrow the genus — do not invent an anchor.]"
+  ],
   "gaps": [
     "[Zero or more gap objects. One per constraint/invariant the genus genuinely needed but no input supplied. Shape: {\"gap_class\": \"missing_constraint\" | \"missing_invariant\", \"field\": \"computational_constraints\" | \"logical_invariants\", \"note\": \"what is absent and why the genus needed it — NEVER the missing content itself\"}. Empty array when the inputs supplied everything the genus needed.]"
   ]
