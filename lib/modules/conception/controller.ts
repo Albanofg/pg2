@@ -3,7 +3,6 @@ import {
   runAdvocate,
   runBoundaryClassifier,
   runBrainstorm,
-  runCodeGenerator,
   runDecomposer,
   runDistiller,
   runExaminer,
@@ -31,7 +30,6 @@ import type {
   CandidateConceptCard,
   ClarityAnswerInput,
   ClarityCard,
-  CodeReviewCard,
   HelperTurn,
   LeapCard,
   ConceptObject,
@@ -82,7 +80,6 @@ type SafeConcept = {
 
 type Intent =
   | { kind: "statement" }
-  | { kind: "code" }
   | { kind: "clarity" }
   | { kind: "leap"; inventiveElement: string }
   | { kind: "candidate"; conceptId: string }
@@ -213,9 +210,6 @@ export class ConceptionModule {
     switch (card.type) {
       case "review":
         await this.handleReview(cardId, intent, input as ReviewActionInput);
-        break;
-      case "code_review":
-        this.handleCode(cardId, input as ReviewActionInput);
         break;
       case "clarity":
         await this.handleClarity(cardId, input as ClarityAnswerInput);
@@ -606,35 +600,8 @@ export class ConceptionModule {
   }
 
   /* ------------------------------------------------------------------ *
-   * After approval — representative code + decomposition into concepts
+   * After approval — decomposition into concepts
    * ------------------------------------------------------------------ */
-
-  private async generateCode(): Promise<void> {
-    const result = await runCodeGenerator(this.runAgent, {
-      statement: this.statementText,
-      verbatim: this.material,
-    });
-    this.ledger.recordMachineEvent("agent_code_generated", ["code"], {
-      language: result.language,
-      gaps: result.inventive_gaps.length,
-    });
-    // Any spots needing an inventive choice are left as labeled placeholders in
-    // the code itself — we don't interrupt conception to demand them.
-    if (!result.code.trim()) return;
-    this.representativeCode = { language: result.language, code: result.code };
-    this.codeApproved = false;
-    const id = this.genId();
-    const card: CodeReviewCard = {
-      id,
-      type: "code_review",
-      title: "Representative code — does this illustrate your idea?",
-      language: result.language,
-      code: result.code,
-      actions: ["approve", "discard", "request_edit"],
-    };
-    this.openCards.set(id, card);
-    this.intents.set(id, { kind: "code" });
-  }
 
   /** Decompose the approved idea into distinct concepts. */
   private async buildConcepts(): Promise<void> {
@@ -818,8 +785,9 @@ export class ConceptionModule {
         // Advancing a phase starts the Helper area fresh — the teaching about the
         // reading is done once it's approved (it stays in the Notebook as record).
         this.conversation = [];
-        // Only now: illustrate with code and decompose into distinct concepts.
-        await this.generateCode();
+        // Decompose the approved idea into distinct concepts. (Representative-code
+        // generation was removed — the system never authors code from the inventor's
+        // idea; that was AI-authored substance and a Proof-of-Human-Conception risk.)
         await this.buildConcepts();
         this.phase = "confirming_concepts";
         // Then brainstorm WITH the inventor — surface candidate patentable
@@ -860,25 +828,6 @@ export class ConceptionModule {
       }
       this.resolveCard(cardId);
     }
-  }
-
-  private handleCode(cardId: string, input: ReviewActionInput): void {
-    this.ledger.recordDecision("code_action", ["code", input.action]);
-    if (input.action === "approve") {
-      this.codeApproved = true;
-    } else if (input.action === "discard") {
-      this.representativeCode = null;
-    } else {
-      // request_edit — the inventor's own code/correction, captured verbatim.
-      this.ledger.recordInventorSource("inventor_edit", input.correction, [
-        "code",
-        "correction",
-      ]);
-      this.material.push(input.correction);
-      if (this.representativeCode) this.representativeCode.code = input.correction;
-      this.codeApproved = true;
-    }
-    this.resolveCard(cardId);
   }
 
   // A factual Spark answer — captured verbatim, then re-read into the core.
@@ -1277,7 +1226,6 @@ export class ConceptionModule {
     const hasOpenBlocking = [...this.intents.values()].some(
       (i) =>
         i.kind === "statement" ||
-        i.kind === "code" ||
         i.kind === "candidate" ||
         i.kind === "leap" ||
         i.kind === "confirm_addition",

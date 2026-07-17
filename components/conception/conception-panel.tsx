@@ -15,7 +15,6 @@ import type {
   CandidateConceptCard,
   ConceptObject,
   ClarityCard,
-  CodeReviewCard,
   LeapCard,
   Module1Card,
   Module1Phase,
@@ -27,10 +26,9 @@ import type {
  * The Conception (Module 1) Helper surface — a card-based journey, not a chat.
  *
  * The inventor drops a raw idea in plain words; the Helper hands back a
- * formalized restatement to Approve / Edit / Discard; on approval it shows
- * representative code and the distinct concepts to keep, drop, or merge. New
- * inventive content only ever enters through a Leap card, in the inventor's
- * own words.
+ * formalized restatement to Approve / Edit / Discard; on approval it surfaces
+ * the distinct concepts to keep, drop, or merge. New inventive content only ever
+ * enters through a Leap card, in the inventor's own words.
  */
 export default function ConceptionPanel({
   projectId,
@@ -42,19 +40,6 @@ export default function ConceptionPanel({
 }) {
   const { view, busy, error, act, tell, reset } = useConception(projectId);
   const setStage = useWorkspace((s) => s.setStage);
-  const setBrainstormSeed = useWorkspace((s) => s.setBrainstormSeed);
-  // Entry routing for the empty state: choose a route, THEN reveal its input.
-  const [entryMode, setEntryMode] = useState<"choose" | "idea" | "spark">("choose");
-  // The one idea typed at the entry before brainstorming — the only place the
-  // inventor types until conception. The brainstorm step itself never asks.
-  const [spark, setSpark] = useState("");
-
-  const startBrainstorm = () => {
-    if (!spark.trim()) return;
-    setBrainstormSeed(spark.trim());
-    setStage("brainstorm");
-  };
-  // Inline (non-blocking) confirm for "Start over" — no window.confirm.
 
   const hasStatement = !!view.statement;
   const candidateCards = view.cards.filter(
@@ -119,77 +104,18 @@ export default function ConceptionPanel({
         </div>
       )}
 
-      {/* Onboarding — brainstorm is the hero; "I have one" is the quiet sibling. */}
+      {/* Onboarding — the inventor describes their invention directly. (The AI
+          brainstorm entry is parked for now; the module stays on the side.) */}
       {!hasStatement && (
         <div className="flex flex-col gap-4 py-2">
-          {entryMode === "choose" ? (
-            <>
-              <button
-                onClick={() => setEntryMode("spark")}
-                className="block w-full rounded-md border border-accent/50 bg-accent/10 px-5 py-5 text-left font-sans text-base font-semibold text-ink transition-colors duration-150 ease-util hover:border-accent hover:bg-accent/15"
-              >
-                Brainstorm with AI →
-              </button>
-
-              <button
-                onClick={() => setEntryMode("idea")}
-                className="block w-full rounded-md border border-border bg-panel px-5 py-5 text-left font-sans text-base font-semibold text-ink transition-colors duration-150 ease-util hover:border-action hover:bg-action/5"
-              >
-                I already have an invention →
-              </button>
-            </>
-          ) : entryMode === "spark" ? (
-            <>
-              {/* The ONE input: a single vague line. Then Module 0 takes over —
-                  research + three options — and never asks the user to type again. */}
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="font-sans text-lg font-semibold text-ink">
-                  What do you want to crack?
-                </h3>
-                <button
-                  onClick={() => setEntryMode("choose")}
-                  className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
-                >
-                  ← Back
-                </button>
-              </div>
-              <p className="font-mono text-xs leading-relaxed text-ink-muted">
-                One rough line is plenty — even a vague one. I&apos;ll read the
-                market and hand you three sharper directions to pick from.
-              </p>
-              <VoiceTextarea
-                value={spark}
-                onChange={setSpark}
-                rows={2}
-                placeholder="e.g. an app that tells me the weather…"
-                className="w-full resize-y rounded-md border border-border bg-bg p-3 font-mono text-sm leading-relaxed text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
-              />
-              <div className="flex justify-end">
-                <Button variant="primary" onClick={startBrainstorm} disabled={!spark.trim()}>
-                  Find the invention →
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="font-sans text-lg font-semibold text-ink">
-                  Describe your invention
-                </h3>
-                <button
-                  onClick={() => setEntryMode("choose")}
-                  className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
-                >
-                  ← Back
-                </button>
-              </div>
-              <HelperComposer
-                placeholder={conceptionPlaceholder(view.phase)}
-                busy={busy}
-                onSend={tell}
-              />
-            </>
-          )}
+          <h3 className="font-sans text-lg font-semibold text-ink">
+            Describe your invention
+          </h3>
+          <HelperComposer
+            placeholder={conceptionPlaceholder(view.phase)}
+            busy={busy}
+            onSend={tell}
+          />
         </div>
       )}
 
@@ -200,15 +126,6 @@ export default function ConceptionPanel({
         </ReadOnlyBlock>
       )}
 
-      {/* Approved representative code (read-only once signed off). */}
-      {view.representativeCode?.approved && view.representativeCode.code && (
-        <ReadOnlyBlock
-          label={`Representative code · ${view.representativeCode.language}`}
-          mono
-        >
-          {view.representativeCode.code}
-        </ReadOnlyBlock>
-      )}
 
       {/* Active cards. */}
       <div className="flex flex-col gap-4">
@@ -314,7 +231,6 @@ function strengthOf(
   let pct = view.statement.approved ? 35 : 15;
   let label = view.statement.approved ? "Core locked in" : "Core distilled";
   pct += Math.min(45, kept * 15);
-  if (view.representativeCode?.approved) pct += 10;
   if (kept >= 1) label = "Taking shape";
   if (pct >= 70) label = "Getting strong";
   return { pct: Math.min(99, pct), label };
@@ -359,8 +275,6 @@ function CardView({
   switch (card.type) {
     case "review":
       return <ReviewCardView card={card} busy={busy} onAct={onAct} />;
-    case "code_review":
-      return <CodeCardView card={card} busy={busy} onAct={onAct} />;
     case "clarity":
       return <ClarityCardView card={card} busy={busy} onAct={onAct} />;
     case "leap":
@@ -1035,61 +949,6 @@ function ReviewCardView({
             </p>
           )}
         </>
-      )}
-    </CardShell>
-  );
-}
-
-function CodeCardView({
-  card,
-  busy,
-  onAct,
-}: {
-  card: CodeReviewCard;
-  busy: boolean;
-  onAct: (cardId: string, input: never) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(card.code);
-  return (
-    <CardShell badge={`Representative code · ${card.language}`} title={card.title}>
-      {editing ? (
-        <VoiceTextarea
-          value={text}
-          onChange={setText}
-          rows={10}
-          className="w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-[11px] text-ink focus:border-accent focus:outline-none"
-        />
-      ) : (
-        <pre className="max-h-72 overflow-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-relaxed text-ink">
-          {card.code}
-        </pre>
-      )}
-      {editing ? (
-        <div className="mt-2 flex gap-2">
-          <Button
-            variant="primary"
-            onClick={() =>
-              onAct(card.id, {
-                action: "request_edit",
-                correction: text,
-              } as never)
-            }
-            disabled={busy}
-          >
-            Save my version
-          </Button>
-          <Button variant="ghost" onClick={() => setEditing(false)}>
-            Cancel
-          </Button>
-        </div>
-      ) : (
-        <ActionRow
-          busy={busy}
-          onApprove={() => onAct(card.id, { action: "approve" } as never)}
-          onEdit={() => setEditing(true)}
-          onDiscard={() => onAct(card.id, { action: "discard" } as never)}
-        />
       )}
     </CardShell>
   );

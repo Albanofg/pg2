@@ -116,6 +116,20 @@ type WorkspaceState = {
   reset: () => void;
 };
 
+/**
+ * Union two ledgers by entry id (ids are preserved as the ledger chains across
+ * modules), then order by time. Keeps the notebook a complete, growing record of the
+ * whole process instead of only the active stage's slice.
+ */
+function mergeLedger(existing: LedgerEntry[], incoming: LedgerEntry[]): LedgerEntry[] {
+  const byId = new Map<string, LedgerEntry>();
+  for (const e of existing) byId.set(e.id, e);
+  for (const e of incoming) byId.set(e.id, e); // incoming is authoritative for shared ids
+  return [...byId.values()].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  );
+}
+
 const initial = {
   projectId: null,
   activeProjectId: null as string | null,
@@ -140,10 +154,17 @@ export const useWorkspace = create<WorkspaceState>()(
     (set) => ({
       ...initial,
 
-      setProject: (id, title) => set({ projectId: id, title }),
+      // Switching projects resets the accumulated notebook so one project's history
+      // never leaks into another's.
+      setProject: (id, title) =>
+        set((s) => (s.projectId === id ? { title } : { projectId: id, title, proofNotebook: [] })),
       setActiveProject: (activeProjectId) => set({ activeProjectId }),
       setStage: (stage) => set({ stage }),
-      setProof: (proofIdea, proofNotebook) => set({ proofIdea, proofNotebook }),
+      // The Idea reflects the ACTIVE stage (replace). The Notebook is the whole
+      // process, always — accumulate every stage's ledger by id and never shrink, so
+      // moving between stages never drops earlier entries.
+      setProof: (proofIdea, proofNotebook) =>
+        set((s) => ({ proofIdea, proofNotebook: mergeLedger(s.proofNotebook, proofNotebook) })),
       setPhase: (phase) => set({ phase }),
       setCurrentIdea: (currentIdea) => set({ currentIdea }),
       setInput: (input) => set({ input }),
