@@ -29,6 +29,8 @@ export type LandscapeSource = {
   title: string;
   /** Patent number, DOI, arXiv id, etc. */
   identifier?: string;
+  /** Filing / priority date when the provider supplies one (shown on the card). */
+  filingDate?: string;
   url?: string;
   /** Abstract / summary snippet. */
   snippet?: string;

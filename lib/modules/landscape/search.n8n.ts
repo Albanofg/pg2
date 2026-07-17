@@ -78,6 +78,13 @@ function toSource(raw: Record<string, unknown>): LandscapeSource | null {
     kind: "patent",
     title,
     identifier: str(raw.publication_number) ?? str(raw.patent_number),
+    // The provider may or may not send a date; take the earliest meaningful one it
+    // does send. Absent → the card simply shows no date.
+    filingDate:
+      str(raw.filing_date) ??
+      str(raw.priority_date) ??
+      str(raw.publication_date) ??
+      str(raw.grant_date),
     url: str(raw.patent_url) ?? str(raw.url),
     snippet: str(raw.abstract) ?? str(raw.snippet),
     closeness: distanceToCloseness(raw.distance_score),

@@ -202,13 +202,42 @@ function IdeaLandscape({
   );
 }
 
+/**
+ * A patent number's KIND CODE says whether it is granted or still an application:
+ * an "A" code (A1/A2/A9…) is a published application — still PENDING, not granted;
+ * a "B" code (B1/B2) is a GRANTED patent. Calling a pending application a "patent"
+ * misleads the inventor about what actually blocks them, so we label it honestly.
+ */
+function patentStatus(identifier?: string): "pending" | "granted" | null {
+  const m = identifier?.trim().match(/[-\s]?([AB])\d{0,2}\s*$/i);
+  if (!m) return null;
+  return m[1].toUpperCase() === "A" ? "pending" : "granted";
+}
+
 function SourceRow({ source }: { source: LandscapeSource }) {
+  const status = source.kind === "patent" ? patentStatus(source.identifier) : null;
+  const label = status ?? source.kind;
+  const tone =
+    status === "pending"
+      ? "bg-amber-500/15 text-amber-400"
+      : status === "granted"
+        ? "bg-emerald-500/15 text-emerald-400"
+        : "bg-accent/15 text-accent";
   return (
     <div className="rounded-md border border-border bg-bg p-2.5">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <span className="mr-1.5 rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-accent">
-            {source.kind}
+          <span
+            className={`mr-1.5 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide ${tone}`}
+            title={
+              status === "pending"
+                ? "Published application — not granted"
+                : status === "granted"
+                  ? "Granted patent"
+                  : undefined
+            }
+          >
+            {label}
           </span>
           {source.url ? (
             <a
@@ -227,6 +256,11 @@ function SourceRow({ source }: { source: LandscapeSource }) {
           {source.identifier && (
             <span className="ml-1 font-mono text-[10px] text-ink-muted">
               {source.identifier}
+            </span>
+          )}
+          {source.filingDate && (
+            <span className="ml-1.5 font-mono text-[10px] text-ink-muted">
+              · filed {source.filingDate}
             </span>
           )}
         </div>
