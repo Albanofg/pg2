@@ -593,23 +593,10 @@ export class ShowcaseModule {
    * alternative species so the inventor can broaden even after reaching the draft.
    */
   async expand(): Promise<Module5View> {
-    for (const [id, c] of [...this.openCards]) {
-      if (
-        c.type === "choice" ||
-        c.type === "variation" ||
-        c.type === "widened_review" ||
-        c.type === "expansion_review" ||
-        c.type === "criterion" ||
-        c.type === "candidate_sweep" ||
-        c.type === "kc_hygiene" ||
-        c.type === "constraint_review" ||
-        c.type === "genus_review" ||
-        c.type === "delta_review" ||
-        c.type === "forest"
-      ) {
-        this.resolveCard(id);
-      }
-    }
+    // Re-running the stage clears EVERY open card — including a stale card of a type
+    // this build no longer knows. Listing types here meant an unrecognized card
+    // survived every "Start this part over" and kept the stage blank forever.
+    for (const [id] of [...this.openCards]) this.resolveCard(id);
     this.species = [];
     // Reset Layer 4/5 working state so a re-run starts the criterion/sweep clean.
     this.criterion = null;

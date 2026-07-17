@@ -97,3 +97,8 @@ DIAGRAM_SERVICE_PLAN_MODE.md
 LINE_JUMPS_FIX_PROMPT.md
 patent-geyser-2.0-concept.md
 patent-geyser-process.md
+
+# ---------------------------------------------------------------------------
+# Local scratch folder — anything parked here stays out of the repo.
+# ---------------------------------------------------------------------------
+ignore/

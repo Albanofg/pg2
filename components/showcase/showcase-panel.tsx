@@ -190,7 +190,13 @@ export default function ShowcasePanel({
   const currentKey = tabs.some((t) => t.key === activeKey) ? activeKey : (tabs[0]?.key ?? "");
   const activeSection = sections.find((s) => s.key === currentKey);
 
-  const broadeningCards = view.cards.filter((c) => c.type !== "choice");
+  // Only cards the renderer can actually DRAW. A card of an unknown or stale type
+  // rendered as null — which left the "your decisions" header with nothing under it
+  // (a permanent blank page), and the empty-state never fired because length > 0.
+  // Ignoring undrawable cards means the recovery message + Start-over always show.
+  const broadeningCards = view.cards.filter(
+    (c) => c.type !== "choice" && RENDERABLE_CARD_TYPES.has(c.type),
+  );
 
   const select = (key: string) => {
     setActiveKey(key);
@@ -1046,6 +1052,20 @@ function ActionButton({
     </span>
   );
 }
+
+/** Card types CardView can draw. Anything else is ignored (never a silent blank). */
+const RENDERABLE_CARD_TYPES: ReadonlySet<string> = new Set([
+  "variation",
+  "widened_review",
+  "expansion_review",
+  "criterion",
+  "candidate_sweep",
+  "kc_hygiene",
+  "constraint_review",
+  "genus_review",
+  "delta_review",
+  "forest",
+]);
 
 function CardView({
   card,

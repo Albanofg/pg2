@@ -592,8 +592,12 @@ function DiffScaffoldFill({
               }}
               className={`mx-1 inline-block min-w-[6rem] max-w-full resize-none overflow-hidden whitespace-nowrap rounded border-b-2 px-2 py-0.5 align-middle font-sans text-[13px] leading-normal text-ink placeholder:text-ink-muted/70 focus:outline-none ${
                 wrongLabels.includes(p.label)
-                  ? "border-red-500/80 bg-red-500/10 focus:border-red-400"
-                  : "border-accent/50 bg-accent/10 focus:border-accent"
+                  ? // flagged by the checker — this is the one to fix
+                    "border-red-500/80 bg-red-500/10 focus:border-red-400"
+                  : wrongLabels.length > 0
+                    ? // a check ran and did NOT flag this slot — it's good, leave it
+                      "border-emerald-500/70 bg-emerald-500/10 focus:border-emerald-400"
+                    : "border-accent/50 bg-accent/10 focus:border-accent"
               }`}
             />
           ) : (
@@ -794,8 +798,9 @@ function NoveltyCaptureView({
             </ul>
           )}
           <p className="mt-1 font-mono text-[10px] italic text-ink-muted">
-            The marked slot(s) in the lesson above turned red — edit them, use the sentence
-            again, and resubmit.
+            In the lesson above: <span className="text-red-400">red</span> slots are the ones to
+            fix — <span className="text-emerald-400">green</span> slots are already good, leave
+            them alone. Edit the red ones, use the sentence again, and resubmit.
           </p>
         </div>
       )}
