@@ -453,6 +453,75 @@ export class ShowcaseModule {
     return this.view();
   }
 
+  /**
+   * Edit one figure's Brief + Detailed Description of the Drawings in place — the
+   * same inventor final-polish path as {@link editSection}, but the drawings text
+   * lives on the figure (not the disclosure sections). The rendered diagram itself
+   * is NOT editable here — it can only change by re-generating. Recorded verbatim
+   * as an inventor edit and persisted, so it survives reload and flows into export.
+   */
+  editDrawing(figNumber: number, briefDescription: string, detailedDescription: string): Module5View {
+    const drawing = this.drawings.find((d) => d.figNumber === figNumber);
+    if (!drawing) return this.view();
+    const nextBrief = briefDescription.trim();
+    const nextDetailed = detailedDescription.trim();
+    let changed = false;
+    if (nextBrief && nextBrief !== drawing.briefDescription) {
+      drawing.briefDescription = nextBrief;
+      changed = true;
+    }
+    if (nextDetailed && nextDetailed !== drawing.detailedDescription) {
+      drawing.detailedDescription = nextDetailed;
+      changed = true;
+    }
+    if (changed) {
+      this.ledger.recordInventorSource(
+        "inventor_edit",
+        `${drawing.briefDescription}\n${drawing.detailedDescription}`.trim(),
+        ["showcase", "drawing-edit", `fig-${figNumber}`],
+      );
+    }
+    return this.view();
+  }
+
+  /**
+   * Edit one Key Concept in place — same inventor final-polish path as
+   * {@link editSection}. The draft shows the broadened form when present, so an
+   * edit writes back to whichever field is being shown (broadened, else the
+   * statement). Recorded verbatim as an inventor edit and persisted, so it
+   * survives reload and flows into the export.
+   */
+  editKeyConcept(id: string, title: string, text: string): Module5View {
+    const kc = this.keyConcepts.get(id);
+    if (!kc) return this.view();
+    const nextTitle = title.trim();
+    const nextText = text.trim();
+    let changed = false;
+    if (nextTitle && nextTitle !== kc.title) {
+      kc.title = nextTitle;
+      changed = true;
+    }
+    if (nextText) {
+      if (kc.broadened) {
+        if (nextText !== kc.broadened) {
+          kc.broadened = nextText;
+          changed = true;
+        }
+      } else if (nextText !== kc.statement) {
+        kc.statement = nextText;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.ledger.recordInventorSource("inventor_edit", `${kc.title}: ${kc.broadened || kc.statement}`, [
+        "showcase",
+        "key-concept-edit",
+        id,
+      ]);
+    }
+    return this.view();
+  }
+
   /** The narrative sections the on-demand AI drafter/reviser is offered on. */
   private static readonly NARRATIVE_SECTIONS = new Set(["background", "summary", "abstract"]);
 

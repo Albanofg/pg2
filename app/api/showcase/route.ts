@@ -36,6 +36,14 @@ type Body =
   | { op: "act"; projectId: string; cardId: string; input: CardActionInput }
   | { op: "message"; projectId: string; text: string }
   | { op: "edit_section"; projectId: string; key: string; body: string }
+  | {
+      op: "edit_drawing";
+      projectId: string;
+      figNumber: number;
+      briefDescription: string;
+      detailedDescription: string;
+    }
+  | { op: "edit_key_concept"; projectId: string; id: string; title: string; text: string }
   | { op: "polish_section"; projectId: string; key: string; mode: "draft" | "revise" }
   | { op: "expand"; projectId: string }
   | { op: "reset"; projectId: string };
@@ -119,6 +127,24 @@ export async function POST(req: Request) {
         const engine = await loadShowcase(body.projectId);
         if (!engine) return NextResponse.json(EMPTY_VIEW);
         const view = engine.editSection(body.key, body.body ?? "");
+        await saveShowcase(body.projectId, engine);
+        return NextResponse.json(view);
+      }
+      case "edit_drawing": {
+        const engine = await loadShowcase(body.projectId);
+        if (!engine) return NextResponse.json(EMPTY_VIEW);
+        const view = engine.editDrawing(
+          body.figNumber,
+          body.briefDescription ?? "",
+          body.detailedDescription ?? "",
+        );
+        await saveShowcase(body.projectId, engine);
+        return NextResponse.json(view);
+      }
+      case "edit_key_concept": {
+        const engine = await loadShowcase(body.projectId);
+        if (!engine) return NextResponse.json(EMPTY_VIEW);
+        const view = engine.editKeyConcept(body.id, body.title ?? "", body.text ?? "");
         await saveShowcase(body.projectId, engine);
         return NextResponse.json(view);
       }

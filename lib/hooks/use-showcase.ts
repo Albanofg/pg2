@@ -175,6 +175,16 @@ export function useShowcase(projectId: string | null) {
     (key: string, body: string) => post({ op: "edit_section", key, body }),
     [post],
   );
+  const editDrawing = useCallback(
+    (figNumber: number, briefDescription: string, detailedDescription: string) =>
+      post({ op: "edit_drawing", figNumber, briefDescription, detailedDescription }),
+    [post],
+  );
+  const editKeyConcept = useCallback(
+    (id: string, title: string, text: string) =>
+      post({ op: "edit_key_concept", id, title, text }),
+    [post],
+  );
   const expand = useCallback(() => post({ op: "expand" }), [post]);
 
   /**
@@ -280,6 +290,8 @@ export function useShowcase(projectId: string | null) {
     decide,
     tell,
     editSection,
+    editDrawing,
+    editKeyConcept,
     polishSection,
     expand,
     restart,

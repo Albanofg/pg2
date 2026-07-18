@@ -18,6 +18,7 @@ import type {
   KCHygieneCard,
   Module5Card,
   ShowcaseDrawing,
+  ShowcaseKeyConcept,
   SweepCard,
   SweepItem,
   VariationCard,
@@ -96,6 +97,8 @@ export default function ShowcasePanel({
     decide,
     tell,
     editSection,
+    editDrawing,
+    editKeyConcept,
     polishSection,
     expand,
     restart,
@@ -487,23 +490,20 @@ export default function ShowcasePanel({
                     <DrawingsView
                       drawings={drawings}
                       titleBase={slugFilename(inventionTitle, "figure")}
+                      busy={working}
+                      onEditDescription={editDrawing}
                     />
                   ) : currentKey === KC_TAB ? (
                     <div>
                       <div className="mb-2 font-sans text-sm font-semibold text-ink">Key Concepts</div>
                       <ul className="space-y-3">
                         {view.keyConcepts.map((k) => (
-                          <li key={k.id} className="rounded-md border border-border bg-bg p-3">
-                            <div className="font-sans text-[13px] font-semibold text-ink">{k.title}</div>
-                            <p className="mt-1 whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-ink-muted">
-                              {k.broadened || k.statement}
-                            </p>
-                            {k.broadened && (
-                              <span className="mt-1 inline-block rounded-full border border-accent/30 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-accent">
-                                broadened
-                              </span>
-                            )}
-                          </li>
+                          <KeyConceptRow
+                            key={k.id}
+                            kc={k}
+                            busy={working}
+                            onSave={editKeyConcept}
+                          />
                         ))}
                       </ul>
                     </div>
@@ -826,15 +826,116 @@ function DiagramsProgressModal({
   );
 }
 
+/** One Key Concept in the final draft — read-only text with an inline editor, so
+ *  the inventor can polish the title and the concept text (mirrors the section and
+ *  drawing editors). Editing the shown text writes back to the broadened form when
+ *  present, else the statement. */
+function KeyConceptRow({
+  kc,
+  busy,
+  onSave,
+}: {
+  kc: ShowcaseKeyConcept;
+  busy: boolean;
+  onSave: (id: string, title: string, text: string) => void;
+}) {
+  const shownText = kc.broadened || kc.statement;
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(kc.title);
+  const [text, setText] = useState(shownText);
+  // Re-sync when the persisted concept changes underneath us (e.g. broadening).
+  useEffect(() => {
+    if (!editing) {
+      setTitle(kc.title);
+      setText(kc.broadened || kc.statement);
+    }
+  }, [kc.title, kc.broadened, kc.statement, editing]);
+
+  return (
+    <li className="rounded-md border border-border bg-bg p-3">
+      {editing ? (
+        <>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Key Concept title"
+            className="w-full rounded-md border border-border bg-panel px-2 py-1.5 font-sans text-[13px] font-semibold text-ink focus:border-accent focus:outline-none"
+          />
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={Math.max(3, text.split("\n").length + 1)}
+            className="mt-2 w-full resize-y rounded-md border border-border bg-panel p-2 font-sans text-[13px] leading-relaxed text-ink focus:border-accent focus:outline-none"
+          />
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                onSave(kc.id, title.trim(), text.trim());
+                setEditing(false);
+              }}
+              disabled={busy || !title.trim() || !text.trim()}
+              className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTitle(kc.title);
+                setText(shownText);
+                setEditing(false);
+              }}
+              className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="flex items-start justify-between gap-2">
+            <div className="font-sans text-[13px] font-semibold text-ink">{kc.title}</div>
+            <button
+              type="button"
+              onClick={() => {
+                setTitle(kc.title);
+                setText(shownText);
+                setEditing(true);
+              }}
+              disabled={busy}
+              className="shrink-0 rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted transition-colors hover:text-ink disabled:opacity-50"
+            >
+              ✎ Edit
+            </button>
+          </div>
+          <p className="mt-1 whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-ink-muted">
+            {shownText}
+          </p>
+          {kc.broadened && (
+            <span className="mt-1 inline-block rounded-full border border-accent/30 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-accent">
+              broadened
+            </span>
+          )}
+        </>
+      )}
+    </li>
+  );
+}
+
 /** The Drawings part of the ICB: every figure with its drawing (SVG on white, so
  *  the black line art is visible in either theme) plus its grounded Brief and
  *  Detailed descriptions, and a per-figure PDF download. Re-viewable any time. */
 function DrawingsView({
   drawings,
   titleBase,
+  busy,
+  onEditDescription,
 }: {
   drawings: ShowcaseDrawing[];
   titleBase: string;
+  busy: boolean;
+  onEditDescription: (figNumber: number, briefDescription: string, detailedDescription: string) => void;
 }) {
   // Which figure is open in the full-screen enlarge view (null = none).
   const [zoomed, setZoomed] = useState<ShowcaseDrawing | null>(null);
@@ -870,7 +971,9 @@ function DrawingsView({
             key={d.figNumber}
             drawing={d}
             titleBase={titleBase}
+            busy={busy}
             onEnlarge={() => setZoomed(d)}
+            onEditDescription={onEditDescription}
           />
         ))}
       </div>
@@ -883,12 +986,29 @@ function DrawingsView({
 function DrawingCard({
   drawing,
   titleBase,
+  busy,
   onEnlarge,
+  onEditDescription,
 }: {
   drawing: ShowcaseDrawing;
   titleBase: string;
+  busy: boolean;
   onEnlarge: () => void;
+  onEditDescription: (figNumber: number, briefDescription: string, detailedDescription: string) => void;
 }) {
+  // Inline edit of this figure's Brief + Detailed Description of the Drawings — the
+  // inventor's own final polish, saved verbatim (mirrors the narrative sections).
+  // The diagram itself is not editable here; it only changes by re-generating.
+  const [editing, setEditing] = useState(false);
+  const [brief, setBrief] = useState(drawing.briefDescription);
+  const [text, setText] = useState(drawing.detailedDescription);
+  // Re-sync when the persisted descriptions change underneath us (e.g. a redraw).
+  useEffect(() => {
+    if (!editing) {
+      setBrief(drawing.briefDescription);
+      setText(drawing.detailedDescription);
+    }
+  }, [drawing.briefDescription, drawing.detailedDescription, editing]);
   return (
     <figure className="rounded-lg border border-border bg-panel">
       <figcaption className="flex items-center justify-between gap-3 border-b border-border p-3">
@@ -940,11 +1060,91 @@ function DrawingCard({
           ⤢ Click to enlarge
         </span>
       </div>
-      {drawing.detailedDescription && (
-        <p className="whitespace-pre-wrap border-t border-border p-3 font-sans text-[13px] leading-relaxed text-ink">
-          {drawing.detailedDescription}
-        </p>
-      )}
+      <div className="border-t border-border p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            Description
+          </span>
+          {!editing && (
+            <button
+              type="button"
+              onClick={() => {
+                setBrief(drawing.briefDescription);
+                setText(drawing.detailedDescription);
+                setEditing(true);
+              }}
+              disabled={busy}
+              className="rounded-md border border-border px-2.5 py-1 font-sans text-xs text-ink-muted transition-colors hover:text-ink disabled:opacity-50"
+            >
+              ✎ Edit
+            </button>
+          )}
+        </div>
+        {editing ? (
+          <>
+            <label className="font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted">
+              Brief (the one-line caption)
+            </label>
+            <textarea
+              value={brief}
+              onChange={(e) => setBrief(e.target.value)}
+              rows={2}
+              placeholder={`FIG. ${drawing.figNumber} is a … of …`}
+              className="mb-2 mt-1 w-full resize-y rounded-md border border-border bg-bg p-2 font-sans text-[13px] leading-relaxed text-ink focus:border-accent focus:outline-none"
+            />
+            <label className="font-mono text-[9px] uppercase tracking-[0.1em] text-ink-muted">
+              Detailed walkthrough
+            </label>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={Math.max(4, text.split("\n").length + 1)}
+              className="mt-1 w-full resize-y rounded-md border border-border bg-bg p-2 font-sans text-[13px] leading-relaxed text-ink focus:border-accent focus:outline-none"
+            />
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  onEditDescription(drawing.figNumber, brief.trim(), text.trim());
+                  setEditing(false);
+                }}
+                disabled={busy || (!brief.trim() && !text.trim())}
+                className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setBrief(drawing.briefDescription);
+                  setText(drawing.detailedDescription);
+                  setEditing(false);
+                }}
+                className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
+              >
+                Cancel
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {drawing.briefDescription && (
+              <p className="mb-2 font-sans text-[13px] font-medium leading-relaxed text-ink">
+                {drawing.briefDescription}
+              </p>
+            )}
+            {drawing.detailedDescription ? (
+              <p className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-ink-muted">
+                {drawing.detailedDescription}
+              </p>
+            ) : (
+              <p className="font-sans text-[13px] italic leading-relaxed text-ink-muted">
+                No description yet — click Edit to write this figure&rsquo;s walkthrough.
+              </p>
+            )}
+          </>
+        )}
+      </div>
     </figure>
   );
 }
