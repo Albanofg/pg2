@@ -9,6 +9,7 @@ import RestartPart from "@/components/workspace/restart-part";
 import { VoiceTextarea } from "@/components/ui/voice-textarea";
 import type {
   DeepenReviewCard,
+  MaturedConcept,
   Module2Card,
   SelectionCard,
   SparkCard,
@@ -26,10 +27,12 @@ export default function MaturationPanel({
   projectId: string | null;
   maxW?: string;
 }) {
-  const { view, busy, error, ready, act, tell, setCarry, restart } = useMaturation(projectId);
+  const { view, busy, error, ready, act, tell, setCarry, editConcept, restart } =
+    useMaturation(projectId);
   const setStage = useWorkspace((s) => s.setStage);
   const working = busy || !ready;
   const carried = view.concepts.filter((c) => c.decision === "carry_forward");
+  const removed = view.concepts.filter((c) => c.decision === "set_aside");
 
   return (
     <div className="flex h-full flex-col">
@@ -127,61 +130,68 @@ export default function MaturationPanel({
             </div>
           )}
 
-          {/* Presentation step = the picker: choose which concepts get prior-art
-              searched. All on by default; unchecking leaves one behind (set aside). */}
+          {/* The concepts you own from Conception — all carried forward already.
+              Edit any in your own words, or remove one you don't want. Then move on.
+              No per-concept approval: they arrived complete. */}
           {view.complete && (
             <div className="rounded-md border border-accent/40 bg-accent/10 p-4">
               <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
-                Ready for Landscape · pick what to search
+                Your concepts · {carried.length} carrying forward
               </div>
               <p className="font-sans text-sm text-ink">
-                These carry forward to the search of what already exists. Leave one behind if
-                you don&apos;t want it searched — that sets it aside for good.
+                These all carry forward to the search of what already exists. Edit any in your own
+                words, or remove one you don&apos;t want.
               </p>
               <ul className="mt-3 space-y-2">
-                {view.concepts.map((c) => {
-                  const on = c.decision === "carry_forward";
-                  return (
-                    <li key={c.id}>
-                      <label
-                        className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
-                          on ? "border-accent/30 bg-accent/5" : "border-border bg-bg/40 opacity-60"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={on}
-                          disabled={busy}
-                          onChange={() => void setCarry(c.id, !on)}
-                          className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
-                        />
-                        <div className="min-w-0">
-                          <div
-                            className={`font-sans text-sm font-semibold ${
-                              on ? "text-ink" : "text-ink-muted line-through"
-                            }`}
-                          >
-                            {c.title}
-                          </div>
-                          <p className="mt-0.5 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-muted">
-                            {c.deepened_statement || c.formalized_statement}
-                          </p>
-                        </div>
-                      </label>
-                    </li>
-                  );
-                })}
+                {carried.map((c) => (
+                  <ConceptRow
+                    key={c.id}
+                    concept={c}
+                    busy={busy}
+                    onEdit={editConcept}
+                    onDelete={() => void setCarry(c.id, false)}
+                  />
+                ))}
               </ul>
+
+              {removed.length > 0 && (
+                <div className="mt-3">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
+                    Removed
+                  </div>
+                  <ul className="mt-1 space-y-1">
+                    {removed.map((c) => (
+                      <li
+                        key={c.id}
+                        className="flex items-center justify-between gap-2 rounded-md border border-border bg-bg/40 px-3 py-1.5"
+                      >
+                        <span className="min-w-0 truncate font-sans text-[13px] text-ink-muted line-through">
+                          {c.title}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void setCarry(c.id, true)}
+                          disabled={busy}
+                          className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted hover:text-accent disabled:opacity-50"
+                        >
+                          Undo
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <div className="mt-4 flex items-center justify-between gap-3">
                 <span className="font-mono text-[10px] text-ink-muted">
-                  {carried.length} of {view.concepts.length} will be searched
+                  {carried.length} carrying forward
                 </span>
                 <button
                   onClick={() => setStage("landscape")}
                   disabled={busy || carried.length === 0}
                   className="rounded-md bg-accent px-5 py-2.5 font-sans text-sm font-medium text-brand transition-colors hover:bg-accent/90 disabled:opacity-50"
                 >
-                  Search existing art →
+                  Move forward →
                 </button>
               </div>
             </div>
@@ -205,6 +215,92 @@ export default function MaturationPanel({
 }
 
 /* ------------------------------------------------------------------ */
+
+/** One concept in the approved list — its statement, with inline Edit and a
+ *  Delete (which moves it to the reversible "Removed" area). All carried forward
+ *  by default; nothing to approve. */
+function ConceptRow({
+  concept,
+  busy,
+  onEdit,
+  onDelete,
+}: {
+  concept: MaturedConcept;
+  busy: boolean;
+  onEdit: (conceptId: string, text: string) => void;
+  onDelete: () => void;
+}) {
+  const shown = concept.deepened_statement || concept.formalized_statement;
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(shown);
+  return (
+    <li className="rounded-md border border-accent/30 bg-accent/5 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 font-sans text-sm font-semibold text-ink">{concept.title}</div>
+        {!editing && (
+          <div className="flex shrink-0 gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setText(shown);
+                setEditing(true);
+              }}
+              disabled={busy}
+              className="rounded-md border border-border px-2 py-0.5 font-sans text-xs text-ink-muted transition-colors hover:text-ink disabled:opacity-50"
+            >
+              ✎ Edit
+            </button>
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={busy}
+              className="rounded-md border border-border px-2 py-0.5 font-sans text-xs text-ink-muted transition-colors hover:text-red-300 disabled:opacity-50"
+            >
+              Delete
+            </button>
+          </div>
+        )}
+      </div>
+      {editing ? (
+        <>
+          <VoiceTextarea
+            value={text}
+            onChange={setText}
+            rows={6}
+            className="mt-2 w-full resize-y rounded-md border border-border bg-bg p-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
+          />
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                onEdit(concept.id, text.trim());
+                setEditing(false);
+              }}
+              disabled={busy || !text.trim()}
+              className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setText(shown);
+                setEditing(false);
+              }}
+              className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink"
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="mt-1 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-muted">
+          {shown}
+        </p>
+      )}
+    </li>
+  );
+}
 
 function CardView({
   card,

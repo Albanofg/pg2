@@ -92,18 +92,38 @@ export class MaturationModule {
   async start(): Promise<Module2View> {
     if (this.started) return this.view();
     this.started = true;
-    this.phase = "maturing";
     this.ledger.recordMachineEvent("maturation_started", ["module2"], {
       conceptCount: this.concepts.size,
     });
-    // One concept at a time: queue them and deepen+surface only the FIRST. The
-    // rest are matured as the inventor finishes each — no wall of 30+ cards, and
-    // no long upfront load deepening everything at once.
-    this.queue = [...this.concepts.values()]
-      .filter((c) => c.status.state === "active")
-      .map((c) => c.id);
-    this.maturingTotal = this.queue.length;
-    await this.surfaceNextConcept();
+    // The concepts arrive COMPLETE from Conception — there is nothing missing to
+    // fill and nothing to approve one at a time. So present them all at once,
+    // already carried forward (approved), for the inventor to edit or delete, with
+    // a single move-on. No per-concept deepen/spark/approve gauntlet.
+    for (const c of this.concepts.values()) {
+      if (c.status.state !== "active") continue;
+      if (!c.deepened_statement.trim()) c.deepened_statement = c.formalized_statement;
+      c.searchReady = true;
+      if (c.decision === "undecided") c.decision = "carry_forward";
+    }
+    this.phase = "complete";
+    return this.view();
+  }
+
+  /**
+   * Edit one concept's statement in the approved list — the inventor's own final
+   * wording, recorded verbatim as an inventor edit. Their words are the record.
+   */
+  editConcept(conceptId: string, text: string): Module2View {
+    const concept = this.concepts.get(conceptId);
+    const next = text.trim();
+    if (concept && next && next !== concept.deepened_statement) {
+      concept.deepened_statement = next;
+      this.ledger.recordInventorSource("inventor_edit", next, [
+        "maturation",
+        "statement-edit",
+        conceptId,
+      ]);
+    }
     return this.view();
   }
 

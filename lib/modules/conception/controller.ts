@@ -394,23 +394,29 @@ export class ConceptionModule {
     };
   }
 
-  /** The deliverable: the concept objects. Call once `view().complete`. */
+  /** The deliverable: the carried concept objects. Call once `view().complete`. */
   finish(): ConceptObject[] {
     if (!this.isComplete()) {
-      throw new Error(
-        "Module 1: cannot finish — the inventor has not confirmed every surviving concept.",
-      );
+      throw new Error("Module 1: cannot finish — no concept has been carried yet.");
     }
+    const carried = this.snapshotCarried();
     this.ledger.recordMachineEvent("module_completed", ["module1"], {
-      conceptCount: this.activeConcepts().length,
+      conceptCount: carried.length,
     });
     this.phase = "complete";
-    return this.snapshotConcepts();
+    return carried;
   }
 
-  /** Current concepts (snapshot) — used to hand off to Maturation. */
+  /** The carried concepts (snapshot) — what hands off to Maturation: exactly the
+   *  ones the inventor developed, kept, or merged. Untouched candidates are left
+   *  behind, never silently carried. */
   getConcepts(): ConceptObject[] {
-    return this.snapshotConcepts();
+    return this.snapshotCarried();
+  }
+
+  private snapshotCarried(): ConceptObject[] {
+    const carriedIds = new Set(this.carriedConcepts().map((c) => c.id));
+    return this.snapshotConcepts().filter((c) => carriedIds.has(c.id));
   }
 
   /**
@@ -997,6 +1003,8 @@ export class ConceptionModule {
       }
       concept.status = { state: "merged_into", into: input.into };
       this.confirmed.delete(concept.id);
+      // "Merge" is a positive action — the SURVIVING concept carries forward.
+      if (target) this.confirmed.add(target.id);
     }
     this.ledger.recordMachineEvent("concept_status_changed", ["candidate"], {
       conceptId: concept.id,
@@ -1309,21 +1317,29 @@ export class ConceptionModule {
     if (this.phase === "ingesting" || this.phase === "reviewing_statement") {
       return false;
     }
+    // A candidate the inventor hasn't touched does NOT block: it simply won't
+    // carry forward. Only an unfinished statement/leap/addition blocks.
     const hasOpenBlocking = [...this.intents.values()].some(
-      (i) =>
-        i.kind === "statement" ||
-        i.kind === "candidate" ||
-        i.kind === "leap" ||
-        i.kind === "confirm_addition",
+      (i) => i.kind === "statement" || i.kind === "leap" || i.kind === "confirm_addition",
     );
     if (hasOpenBlocking) return false;
-    const active = this.activeConcepts();
-    if (active.length === 0) return false;
-    return active.every((c) => this.confirmed.has(c.id));
+    // Ready to move on the moment the inventor has carried at least one concept
+    // (said "this is mine", "keep", or "merge"). No "Done — move on" step.
+    return this.carriedConcepts().length > 0;
   }
 
   private activeConcepts(): ConceptObject[] {
     return [...this.concepts.values()].filter((c) => c.status.state === "active");
+  }
+
+  /**
+   * The concepts that carry into the next module — exactly the ones the inventor
+   * positively actioned: developed ("this is mine"), kept, or merged into. An
+   * auto-suggested candidate they never touched is NOT carried, so no one loses
+   * time on concepts that silently vanish downstream.
+   */
+  private carriedConcepts(): ConceptObject[] {
+    return this.activeConcepts().filter((c) => this.confirmed.has(c.id));
   }
 
   private snapshotConcepts(): ConceptObject[] {

@@ -310,8 +310,17 @@ export async function runDifferentiationTeacher(
 export const NoveltyCheckOutput = z.object({
   verdict: z.enum(["pass", "fail"]).default("pass"),
   note: z.string().default(""),
+  // `slot` is the 1-based number of the fill-in slot that carries the defect (0 if
+  // the answer wasn't assembled from slots). It — not the label text — is what maps
+  // the flag back to the on-screen box, so the right box turns red every time.
   wrong_blanks: z
-    .array(z.object({ label: z.string().default(""), why: z.string().default("") }))
+    .array(
+      z.object({
+        slot: z.number().int().default(0),
+        label: z.string().default(""),
+        why: z.string().default(""),
+      }),
+    )
     .default([]),
 });
 export type NoveltyCheckResult = z.infer<typeof NoveltyCheckOutput>;
@@ -354,8 +363,8 @@ export async function runNoveltyChecker(
     ...(input.blanks?.length
       ? [
           "",
-          "THE FILL-IN SLOTS the statement was assembled from (mark the wrong one(s) by label):",
-          ...input.blanks.map((b) => `- [${b.label}] → "${b.value}"`),
+          "THE FILL-IN SLOTS the statement was assembled from, NUMBERED. When you flag one, set its `slot` to this number (and echo its label) so the right box is marked:",
+          ...input.blanks.map((b, i) => `slot ${i + 1}: [${b.label}] → "${b.value}"`),
         ]
       : []),
   ].join("\n");

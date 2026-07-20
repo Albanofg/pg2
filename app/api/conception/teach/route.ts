@@ -35,10 +35,13 @@ const TeachOutput = z.object({
   // This step's mad-lib question — a sentence with 1–2 [bracketed slot-labels] the inventor
   // fills to answer this step. null on the turn they reach the answer (the teacher affirms).
   // The teacher never fills a blank; a blank never contains/describes the answer.
+  // `hint` is an ON-DEMAND teaching nugget: it teaches the idea so the inventor can FIND
+  // their own answer — never the answer itself, never a list of options, never a riddle.
   scaffold: z
     .object({
       intro: z.string().default(""),
       template: z.string(),
+      hint: z.string().default(""),
     })
     .nullable()
     .default(null),
@@ -133,7 +136,14 @@ export async function POST(req: Request) {
     );
     return NextResponse.json({
       reply: object.reply.trim(),
-      scaffold: object.scaffold && object.scaffold.template.trim() ? object.scaffold : null,
+      scaffold:
+        object.scaffold && object.scaffold.template.trim()
+          ? {
+              intro: object.scaffold.intro,
+              template: object.scaffold.template,
+              hint: object.scaffold.hint.trim(),
+            }
+          : null,
     });
   } catch (err) {
     console.error("[conception] teach failed", err);

@@ -186,7 +186,7 @@ export type NoveltyCaptureCard = {
    * the note says what's wrong, and wrongBlanks marks the specific slot(s) so the
    * inventor fixes just those and resubmits. Cleared on the next submission.
    */
-  feedback?: { note: string; wrongBlanks: { label: string; why: string }[] };
+  feedback?: { note: string; wrongBlanks: { slot: number; label: string; why: string }[] };
 };
 
 /**

@@ -40,6 +40,7 @@ You never tell the inventor what the distinction "is." Sentences like "the disti
 
 <LAW_4_AT_MOST_TWO_SLOTS_AND_A_SANITY_CAP>
 If the answer came from fill-in slots, mark ONLY the slot(s) that carry the real LAW_1 defect — **at most two**, and only ones you are confident about. Leave every other slot alone; those turn green and tell the inventor what's already good.
+For each slot you mark, set `slot` to its NUMBER from the numbered list you were given (slot 1, slot 2, …) and echo its `label` — the NUMBER is what turns the right box red on screen, so it must be correct. Never invent a number that isn't in the list.
 **Sanity cap:** if you believe most of the slots are wrong, you have misread the statement, not caught a defect. In that case the verdict is **pass**. A statement where everything is wrong is a statement you did not understand.
 </LAW_4_AT_MOST_TWO_SLOTS_AND_A_SANITY_CAP>
 
@@ -81,7 +82,7 @@ Output a single structured object with EXACTLY this shape and nothing else:
 {
   "verdict": "pass" | "fail",
   "note": "<empty when pass; when fail: 1–3 short plain sentences — which part, what the reference already does, why that blocks it, and a direction to move>",
-  "wrong_blanks": [ { "label": "<the slot's label, exactly as given>", "why": "<one short concrete reason — never 'vague' or 'unclear'>" } ]
+  "wrong_blanks": [ { "slot": <the slot NUMBER from the numbered list — this is what marks the box red>, "label": "<the slot's label, echoed>", "why": "<one short concrete reason — never 'vague' or 'unclear'>" } ]
 }
 </OUTPUT_FORMAT>
 </LEAP_FILE>

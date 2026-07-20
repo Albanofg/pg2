@@ -443,7 +443,6 @@ function BrainstormCardView({
   // `developed` flag. The server's flag reconciles (and persists) when it arrives.
   const [taken, setTaken] = useState<Set<string>>(() => new Set());
   const isDone = (dir: string) => (card.developed?.includes(dir) ?? false) || taken.has(dir);
-  const allDone = card.directions.length > 0 && card.directions.every((d) => isDone(d.direction));
   return (
     <div className="rounded-md border border-accent/40 bg-accent/5 p-4">
       <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
@@ -549,30 +548,36 @@ function BrainstormCardView({
           );
         })}
       </div>
-      <div className="mt-3 flex justify-end">
-        <Button
-          variant={allDone ? "primary" : "ghost"}
-          onClick={() => onAct(card.id, { action: "dismiss" } as never)}
-          disabled={busy}
-        >
-          {allDone ? "All captured — move on →" : "Done — move on"}
-        </Button>
-      </div>
+      {/* No "Done — move on" here on purpose: developing a direction carries it
+          forward on its own, and the single "Continue to Expansion" (shown once
+          you've captured a concept) is the only move-on. A dismiss step here made
+          people think their captured concepts had to be "finished" and got lost. */}
       {teachDir && (
         <TellMeMoreModal
           direction={teachDir}
           onClose={() => setTeachDir(null)}
           onUseAnswer={(answer, transcript) => {
-            // Bridge teaching → capturing: drop the inventor's OWN words into the
-            // develop box and open it, so the modal never dead-ends. Keep the transcript
-            // so it rides along as context when they capture the answer.
-            const idx = card.directions.findIndex(
-              (x) => x.direction === teachDir.direction,
-            );
-            if (idx >= 0) {
+            const dir = teachDir.direction;
+            const idx = card.directions.findIndex((x) => x.direction === dir);
+            if (answer.trim()) {
+              // They went through Tell me more and landed: "Use this as mine"
+              // COMMITS right here — one button finishes it, no second click on the
+              // card. Their verbatim words + the tutor transcript (as context) are
+              // captured directly.
+              setTaken((prev) => new Set(prev).add(dir));
+              onAct(card.id, {
+                action: "develop",
+                direction: dir,
+                text: answer.trim(),
+                ...(transcript ? { tutorTranscript: transcript } : {}),
+              } as never);
+              setOpenIdx(null);
+              setText("");
+              setTutorTranscript(null);
+            } else if (idx >= 0) {
+              // "Skip — I'll write it myself": just open the develop box to type in.
               setOpenIdx(idx);
-              setText(answer);
-              setTutorTranscript(transcript);
+              setText("");
             }
             setTeachDir(null);
           }}
@@ -656,7 +661,7 @@ function TellMeMoreModal({
   >([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [scaffold, setScaffold] = useState<{ intro: string; template: string } | null>(null);
+  const [scaffold, setScaffold] = useState<{ intro: string; template: string; hint?: string} | null>(null);
   const startedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const projectId = useWorkspace((s) => s.projectId);
@@ -695,7 +700,7 @@ function TellMeMoreModal({
       });
       const data = (await res.json()) as {
         reply?: string;
-        scaffold?: { intro: string; template: string } | null;
+        scaffold?: { intro: string; template: string; hint?: string} | null;
       };
       if (data.reply) {
         setMessages([...outgoing, { role: "assistant", content: data.reply }]);
@@ -722,7 +727,7 @@ function TellMeMoreModal({
           | { role: "user" | "assistant"; content: string }[] // legacy shape
           | {
               messages: { role: "user" | "assistant"; content: string }[];
-              scaffold: { intro: string; template: string } | null;
+              scaffold: { intro: string; template: string; hint?: string} | null;
             };
         if (Array.isArray(stored)) {
           if (stored.length) {
@@ -816,21 +821,21 @@ function TellMeMoreModal({
             scaffold={scaffold}
             busy={busy}
             onAnswer={(assembled) => void send(assembled)}
-            onFinalize={(assembled) => onUseAnswer(assembled, messages)}
           />
         )}
 
-        {/* Landed: the teacher affirmed (no more questions) — one click takes the
-            answer they just gave into the develop box as theirs. */}
+        {/* Stopped: the teacher has nothing more to add (no more questions). It
+            does NOT judge whether the answer is right — it just hands their own
+            words back to use. One click takes them into the develop box. */}
         {!scaffold &&
           !busy &&
           lastUserText &&
           messages[messages.length - 1]?.role === "assistant" && (
             <div className="flex items-center justify-between gap-3 border-t border-accent/40 bg-accent/10 p-3">
               <p className="min-w-0 font-sans text-[13px] text-ink">
-                <span className="font-semibold">You&apos;ve landed it.</span>{" "}
+                <span className="font-semibold">That&apos;s yours to use.</span>{" "}
                 <span className="text-ink-muted">
-                  Take what you just said as your answer — you can still edit it there.
+                  Take what you just said as your answer — you can keep editing it there.
                 </span>
               </p>
               <Button
@@ -865,15 +870,15 @@ function TellMeMoreModal({
           <div className="mt-2 flex items-center justify-between gap-2">
             <p className="font-mono text-[10px] italic leading-relaxed text-ink-muted">
               {scaffold
-                ? "Fill this step's blanks in your own words, then Answer — the teacher takes it from there."
-                : "The teacher walks you through it a step at a time; you answer each step by filling its blanks."}
+                ? "Or just talk it through above — the teacher follows either way."
+                : "The teacher walks you through it a step at a time; answer in your own words."}
             </p>
             <button
               type="button"
               onClick={() => onUseAnswer("", messages)}
               className="shrink-0 whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
             >
-              I&apos;ve got it — write my answer →
+              Skip — I&apos;ll write it myself →
             </button>
           </div>
         </div>
@@ -907,23 +912,25 @@ function splitTemplate(template: string): ScaffoldPart[] {
  * The Mad-Libs scaffold — THIS teaching step's question, shaped as a sentence with
  * fill-in blanks the inventor completes. The fixed words are the tutor's setup; the
  * blanks are the inventor's to fill. "Answer →" sends the filled sentence back so
- * the teacher gives the next step; "Use as my answer" finalizes it into the develop
- * box (for when they've reached the answer).
+ * the teacher gives the next step. Committing the answer is deliberately NOT offered
+ * here — that only appears once the teacher has stopped (the landed banner).
  */
 function ScaffoldFill({
   scaffold,
   busy,
   onAnswer,
-  onFinalize,
 }: {
-  scaffold: { intro: string; template: string };
+  scaffold: { intro: string; template: string; hint?: string};
   busy: boolean;
   onAnswer: (assembled: string) => void;
-  onFinalize: (assembled: string) => void;
 }) {
   const parts = splitTemplate(scaffold.template);
   const blankCount = parts.filter((p) => p.blank).length;
   const [values, setValues] = useState<string[]>(() => Array(blankCount).fill(""));
+  // The hint is OFF by default and is TEACHING, not options — it hands a stuck
+  // inventor a way to work out THEIR own answer, never candidate answers to pick.
+  const [showHint, setShowHint] = useState(false);
+  const hint = scaffold.hint?.trim() ?? "";
   const assembled = parts
     .map((p) => (p.blank ? (values[p.index] ?? "").trim() : p.text))
     .join("");
@@ -932,7 +939,7 @@ function ScaffoldFill({
   return (
     <div className="border-t border-border bg-accent/5 p-3">
       <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
-        Answer this step — fill in the blanks
+        Answer this step
       </div>
       {scaffold.intro && (
         <p className="mb-2 font-sans text-[13px] text-ink-muted">{scaffold.intro}</p>
@@ -942,42 +949,63 @@ function ScaffoldFill({
           p.blank ? (
             // A one-line TEXTAREA, not an input: Chromium's ID-card/address/payment
             // autofill only targets <input>, so this kills the "Save ID card?" popup.
-            <textarea
-              key={i}
-              rows={1}
-              value={values[p.index] ?? ""}
-              onChange={(e) => {
-                const next = [...values];
-                next[p.index] = e.target.value.replace(/\n/g, " ");
-                setValues(next);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.preventDefault();
-              }}
-              placeholder={p.label}
-              autoComplete="off"
-              data-lpignore="true"
-              data-1p-ignore="true"
-              data-form-type="other"
-              style={{
-                width: `${Math.max(p.label.length, (values[p.index] ?? "").length || 6) + 2}ch`,
-              }}
-              className="mx-1 inline-block min-w-[6rem] max-w-full resize-none overflow-hidden whitespace-nowrap rounded border-b-2 border-accent/50 bg-accent/10 px-2 py-0.5 align-middle font-sans text-[15px] leading-normal text-ink placeholder:text-ink-muted/70 focus:border-accent focus:outline-none"
-            />
+            // Each blank carries its own suggestion chips beneath it — starting
+            // points to tap and edit, never the sole answer.
+            <span key={i} className="inline-flex flex-col align-middle">
+              <textarea
+                rows={1}
+                value={values[p.index] ?? ""}
+                onChange={(e) => {
+                  const next = [...values];
+                  next[p.index] = e.target.value.replace(/\n/g, " ");
+                  setValues(next);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.preventDefault();
+                }}
+                placeholder={p.label}
+                autoComplete="off"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-form-type="other"
+                style={{
+                  width: `${Math.max(p.label.length, (values[p.index] ?? "").length || 6) + 2}ch`,
+                }}
+                className="mx-1 inline-block min-w-[6rem] max-w-full resize-none overflow-hidden whitespace-nowrap rounded border-b-2 border-accent/50 bg-accent/10 px-2 py-0.5 align-middle font-sans text-[15px] leading-normal text-ink placeholder:text-ink-muted/70 focus:border-accent focus:outline-none"
+              />
+            </span>
           ) : (
             <span key={i}>{p.text}</span>
           ),
         )}
       </p>
-      <div className="mt-3 flex items-center justify-end gap-2">
-        <Button
-          variant="secondary"
-          onClick={() => onFinalize(assembled)}
-          disabled={!allFilled}
-          title="This already says it — use it as my final answer"
-        >
-          Use as my answer →
-        </Button>
+
+      {/* The teaching hint — revealed only when asked for. It teaches how to work
+          out the answer; it is never the answer and never a set of options. */}
+      {showHint && hint && (
+        <div className="mt-2 rounded-md border border-accent/30 bg-accent/[0.06] p-2.5">
+          <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.1em] text-accent">
+            A way to think about it
+          </div>
+          <p className="font-sans text-[13px] leading-relaxed text-ink">{hint}</p>
+        </div>
+      )}
+      {/* Only ONE action mid-teaching: submit this step and keep going. Committing
+          the whole thing ("Use this as mine") is deliberately withheld until the
+          teacher has nothing left to add — offering it here invites the inventor to
+          lock in a half-formed answer. */}
+      <div className="mt-3 flex items-center justify-between gap-2">
+        {hint ? (
+          <button
+            type="button"
+            onClick={() => setShowHint((v) => !v)}
+            className="font-mono text-[11px] text-ink-muted transition-colors hover:text-accent"
+          >
+            {showHint ? "Hide hint" : "💡 Stuck? Get a hint"}
+          </button>
+        ) : (
+          <span />
+        )}
         <Button variant="primary" onClick={() => onAnswer(assembled)} disabled={!allFilled || busy}>
           {busy ? "…" : "Answer →"}
         </Button>

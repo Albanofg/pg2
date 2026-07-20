@@ -77,11 +77,13 @@ export default function DifferentiationPanel({
     blanks: { label: string; value: string }[];
   } | null>(null);
 
-  // The checker's wrong-slot labels for the on-screen concept (marks the mad lib).
+  // The checker's flagged slots for the on-screen concept — carries each slot's
+  // label AND the concrete reason, so the mad lib can show the help right at the
+  // slot instead of just marking it red.
   const noveltyFeedback = view.cards.find(
     (c) => c.type === "novelty_capture" && c.feedback,
   ) as Extract<Module4Card, { type: "novelty_capture" }> | undefined;
-  const wrongLabels = noveltyFeedback?.feedback?.wrongBlanks.map((b) => b.label) ?? [];
+  const wrongBlanks = noveltyFeedback?.feedback?.wrongBlanks ?? [];
 
   return (
     <div className="flex h-full flex-col">
@@ -222,7 +224,7 @@ export default function DifferentiationPanel({
                 busy={busy}
                 onAct={act}
                 scaffoldAnswer={scaffoldAnswer}
-                wrongLabels={wrongLabels}
+                wrongBlanks={wrongBlanks}
                 onUseScaffold={(answer) => {
                   setScaffoldAnswer(answer);
                   // Land the user on their prefilled answer — the novelty card
@@ -306,7 +308,7 @@ function CardView({
   busy,
   onAct,
   scaffoldAnswer,
-  wrongLabels,
+  wrongBlanks,
   onUseScaffold,
 }: {
   card: Module4Card;
@@ -317,7 +319,7 @@ function CardView({
     text: string;
     blanks: { label: string; value: string }[];
   } | null;
-  wrongLabels: string[];
+  wrongBlanks: { slot: number; label: string; why: string }[];
   onUseScaffold: (answer: {
     conceptId: string;
     text: string;
@@ -329,7 +331,7 @@ function CardView({
       return (
         <WhitespaceView
           card={card}
-          wrongLabels={wrongLabels}
+          wrongBlanks={wrongBlanks}
           onUseScaffold={(text, blanks) =>
             onUseScaffold({ conceptId: card.conceptId, text, blanks })
           }
@@ -362,11 +364,11 @@ function CardView({
 
 function WhitespaceView({
   card,
-  wrongLabels,
+  wrongBlanks,
   onUseScaffold,
 }: {
   card: WhitespaceCard;
-  wrongLabels: string[];
+  wrongBlanks: { slot: number; label: string; why: string }[];
   onUseScaffold: (assembled: string, blanks: { label: string; value: string }[]) => void;
 }) {
   const a = card.analysis;
@@ -395,7 +397,7 @@ function WhitespaceView({
 
       {/* PRIMARY VIEW: the short lesson (or a concise summary if the lesson is absent). */}
       {t ? (
-        <TeachingLesson t={t} wrongLabels={wrongLabels} onUseScaffold={onUseScaffold} />
+        <TeachingLesson t={t} wrongBlanks={wrongBlanks} onUseScaffold={onUseScaffold} />
       ) : (
         <WhitespaceFallback a={a} />
       )}
@@ -444,11 +446,11 @@ function WhitespaceFallback({ a }: { a: WhitespaceCard["analysis"] }) {
 /** The concise, scannable plain-English lesson — the primary whitespace view. */
 function TeachingLesson({
   t,
-  wrongLabels,
+  wrongBlanks,
   onUseScaffold,
 }: {
   t: WhitespaceTeaching;
-  wrongLabels: string[];
+  wrongBlanks: { slot: number; label: string; why: string }[];
   onUseScaffold: (assembled: string, blanks: { label: string; value: string }[]) => void;
 }) {
   return (
@@ -502,7 +504,12 @@ function TeachingLesson({
       )}
 
       {t.scaffold && (
-        <DiffScaffoldFill template={t.scaffold} wrongLabels={wrongLabels} onUse={onUseScaffold} />
+        <DiffScaffoldFill
+          template={t.scaffold}
+          wrongBlanks={wrongBlanks}
+          keyTerms={t.key_terms.map((k) => k.term).filter(Boolean)}
+          onUse={onUseScaffold}
+        />
       )}
 
       {t.prompt && <p className="font-semibold text-ink">{t.prompt}</p>}
@@ -533,22 +540,29 @@ function splitDiffTemplate(template: string): DiffScaffoldPart[] {
 /**
  * The lesson's Mad Lib — the "way to say it" as inline fill-in slots instead of
  * dead text, so the inventor doesn't retype the whole differentiation. The fixed
- * words are the teacher's setup; the slots are the inventor's. "Use as my answer"
- * drops the assembled sentence into the novelty box below (still editable there).
+ * words are the teacher's setup; the slots are the inventor's. This is a HELP, not
+ * a test: the inventor's own key terms sit below as tappable chips (tap to drop a
+ * word into the slot you're in), and when the checker flags a slot the concrete
+ * reason shows right under it — never just a red mark.
  */
 function DiffScaffoldFill({
   template,
-  wrongLabels,
+  wrongBlanks,
+  keyTerms,
   onUse,
 }: {
   template: string;
-  wrongLabels: string[];
+  wrongBlanks: { slot: number; label: string; why: string }[];
+  keyTerms: string[];
   onUse: (assembled: string, blanks: { label: string; value: string }[]) => void;
 }) {
   const parts = splitDiffTemplate(template);
   const blanks = parts.filter((p): p is Extract<DiffScaffoldPart, { blank: true }> => !!p.blank);
   const blankCount = blanks.length;
   const [values, setValues] = useState<string[]>(() => Array(blankCount).fill(""));
+  // The slot a chip-tap drops into: the one the inventor last touched (defaults to
+  // the first empty slot).
+  const [focused, setFocused] = useState(0);
   // Flips to a "✓ done" state once sent to the answer box; editing a blank re-arms it.
   const [used, setUsed] = useState(false);
   const assembled = parts
@@ -557,59 +571,112 @@ function DiffScaffoldFill({
   const allFilled = blankCount > 0 && values.slice(0, blankCount).every((v) => v.trim());
   const filledBlanks = () =>
     blanks.map((b) => ({ label: b.label, value: (values[b.index] ?? "").trim() }));
+  // Match a flagged slot to a box by POSITION (slot number → blank index) — robust
+  // even when the checker paraphrases the label. Falls back to a normalized-label
+  // match only if no slot number was given.
+  const norm = (s: string) =>
+    s.toLowerCase().replace(/[[\]?.,;:!]/g, "").replace(/\s+/g, " ").trim();
+  const whyForIndex = (index: number, label: string): string | null => {
+    const bySlot = wrongBlanks.find((w) => w.slot > 0 && w.slot - 1 === index);
+    if (bySlot) return bySlot.why || "This part overlaps with the existing art — reword it.";
+    const byLabel = wrongBlanks.find((w) => w.slot <= 0 && norm(w.label) === norm(label));
+    return byLabel ? byLabel.why || "This part overlaps with the existing art — reword it." : null;
+  };
+  // Did any flag actually resolve to a slot on screen? Only then do we mark the
+  // other slots green ("that part's good") — never paint everything green when we
+  // couldn't locate the wrong one.
+  const anyResolved = blanks.some((b) => whyForIndex(b.index, b.label) !== null);
+  const insertTerm = (term: string) => {
+    setValues((prev) => {
+      const next = [...prev];
+      const cur = (next[focused] ?? "").trim();
+      next[focused] = cur ? `${cur} ${term}` : term;
+      return next;
+    });
+    setUsed(false);
+  };
 
   return (
     <div className="rounded border border-dashed border-accent/40 bg-accent/[0.04] p-2.5">
       <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-accent">
-        A way to say it — fill in the blanks
+        A way to say it — put it in your own words
       </p>
       <p className="mt-1 text-[13px] leading-9 text-ink">
         {parts.map((p, i) =>
           p.blank ? (
             // A one-line TEXTAREA, not an input: Chromium's ID-card/address/payment
             // autofill only targets <input>, so this kills the "Save ID card?" popup.
-            // A slot the checker flagged as wrong turns red until it's edited.
-            <textarea
-              key={i}
-              rows={1}
-              value={values[p.index] ?? ""}
-              onChange={(e) => {
-                const next = [...values];
-                next[p.index] = e.target.value.replace(/\n/g, " ");
-                setValues(next);
-                setUsed(false);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.preventDefault();
-              }}
-              placeholder={p.label || "your words"}
-              autoComplete="off"
-              data-lpignore="true"
-              data-1p-ignore="true"
-              data-form-type="other"
-              style={{
-                width: `${Math.max((p.label || "your words").length, (values[p.index] ?? "").length || 6) + 2}ch`,
-              }}
-              className={`mx-1 inline-block min-w-[6rem] max-w-full resize-none overflow-hidden whitespace-nowrap rounded border-b-2 px-2 py-0.5 align-middle font-sans text-[13px] leading-normal text-ink placeholder:text-ink-muted/70 focus:outline-none ${
-                wrongLabels.includes(p.label)
-                  ? // flagged by the checker — this is the one to fix
-                    "border-red-500/80 bg-red-500/10 focus:border-red-400"
-                  : wrongLabels.length > 0
-                    ? // a check ran and did NOT flag this slot — it's good, leave it
-                      "border-emerald-500/70 bg-emerald-500/10 focus:border-emerald-400"
-                    : "border-accent/50 bg-accent/10 focus:border-accent"
-              }`}
-            />
+            // A slot the checker flagged turns red AND shows why right beneath it;
+            // an un-flagged slot after a check turns green (that part's good).
+            <span key={i} className="inline-flex flex-col align-middle">
+              <textarea
+                rows={1}
+                value={values[p.index] ?? ""}
+                onFocus={() => setFocused(p.index)}
+                onChange={(e) => {
+                  const next = [...values];
+                  next[p.index] = e.target.value.replace(/\n/g, " ");
+                  setValues(next);
+                  setUsed(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.preventDefault();
+                }}
+                placeholder={p.label || "your words"}
+                autoComplete="off"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-form-type="other"
+                style={{
+                  width: `${Math.max((p.label || "your words").length, (values[p.index] ?? "").length || 6) + 2}ch`,
+                }}
+                className={`mx-1 inline-block min-w-[6rem] max-w-full resize-none overflow-hidden whitespace-nowrap rounded border-b-2 px-2 py-0.5 align-middle font-sans text-[13px] leading-normal text-ink placeholder:text-ink-muted/70 focus:outline-none ${
+                  whyForIndex(p.index, p.label)
+                    ? // flagged by the checker — this is the one to sharpen
+                      "border-red-500/80 bg-red-500/10 focus:border-red-400"
+                    : anyResolved
+                      ? // a check ran and located the wrong slot; this isn't it — it's good
+                        "border-emerald-500/70 bg-emerald-500/10 focus:border-emerald-400"
+                      : "border-accent/50 bg-accent/10 focus:border-accent"
+                }`}
+              />
+              {whyForIndex(p.index, p.label) && (
+                <span className="mx-1 mt-0.5 max-w-[22rem] whitespace-normal font-sans text-[11px] leading-snug text-red-300/90">
+                  {whyForIndex(p.index, p.label)}
+                </span>
+              )}
+            </span>
           ) : (
             <span key={i}>{p.text}</span>
           ),
         )}
       </p>
+
+      {/* The inventor's OWN words from the lesson, as tappable chips — tap one to
+          drop it into the slot you're in. Real help, never the answer. */}
+      {keyTerms.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            Your words:
+          </span>
+          {keyTerms.map((term, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => insertTerm(term)}
+              className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 font-sans text-[11px] text-ink transition-colors hover:border-accent hover:bg-accent/20"
+            >
+              {term}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="font-mono text-[10px] italic text-ink-muted">
           {used
             ? "It's in your answer box below — finish it there with “This is mine”."
-            : "The answer is in the lesson above — read it, then say it in your own words."}
+            : "Say it your way — tap a word above to drop it in, then use it as your answer."}
         </span>
         <button
           type="button"
@@ -779,28 +846,23 @@ function NoveltyCaptureView({
         words, is this one: what your concept does that the art does not.
       </p>
 
-      {/* The checker's correction — what was wrong, and which slot(s) carry it. */}
+      {/* The checker's help — one thing to sharpen. Supportive, not a scold: the
+          concrete reason is the point, and it shows right at the flagged slot in
+          the lesson above too. */}
       {card.feedback && !submitted && (
-        <div className="mt-2 rounded-md border border-red-500/40 bg-red-500/10 p-3">
-          <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-red-300">
-            Not quite — fix and resubmit
+        <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/[0.08] p-3">
+          <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-amber-300">
+            {card.feedback.wrongBlanks.length > 0
+              ? "Almost — one part to sharpen"
+              : "One thing to sharpen"}
           </div>
           <p className="mt-1 font-sans text-[13px] leading-relaxed text-ink">
             {card.feedback.note}
           </p>
-          {card.feedback.wrongBlanks.length > 0 && (
-            <ul className="mt-1 space-y-0.5">
-              {card.feedback.wrongBlanks.map((b, i) => (
-                <li key={i} className="font-sans text-[12px] text-red-200/90">
-                  <span className="font-semibold">[{b.label}]</span> — {b.why}
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="mt-1 font-mono text-[10px] italic text-ink-muted">
-            In the lesson above: <span className="text-red-400">red</span> slots are the ones to
-            fix — <span className="text-emerald-400">green</span> slots are already good, leave
-            them alone. Edit the red ones, use the sentence again, and resubmit.
+          <p className="mt-1.5 font-mono text-[10px] italic text-ink-muted">
+            {card.feedback.wrongBlanks.length > 0
+              ? "The highlighted slot above shows exactly what to adjust — tweak just that, then use it again. The green parts are already good."
+              : "Adjust that in your own words and send it again — you're close."}
           </p>
         </div>
       )}

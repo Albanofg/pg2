@@ -99,6 +99,10 @@ export function useMaturation(projectId: string | null) {
     [post]
   );
   const tell = useCallback((text: string) => post({ op: "message", text }), [post]);
+  const editConcept = useCallback(
+    (conceptId: string, text: string) => post({ op: "edit", conceptId, text }),
+    [post],
+  );
   const setCarry = useCallback(
     (conceptId: string, carry: boolean) => post({ op: "set_carry", conceptId, carry }),
     [post]
@@ -108,5 +112,5 @@ export function useMaturation(projectId: string | null) {
     return post({ op: "start" });
   }, [post]);
 
-  return { view, busy, error, ready, act, tell, setCarry, restart };
+  return { view, busy, error, ready, act, tell, setCarry, editConcept, restart };
 }

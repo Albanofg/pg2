@@ -26,6 +26,7 @@ type Body =
   | { op: "act"; projectId: string; cardId: string; input: CardActionInput }
   | { op: "message"; projectId: string; text: string }
   | { op: "set_carry"; projectId: string; conceptId: string; carry: boolean }
+  | { op: "edit"; projectId: string; conceptId: string; text: string }
   | { op: "reset"; projectId: string };
 
 /**
@@ -89,6 +90,13 @@ export async function POST(req: Request) {
         const engine = await loadMaturation(body.projectId);
         if (!engine) return NextResponse.json(EMPTY_VIEW);
         const view = engine.setCarry(body.conceptId, body.carry);
+        await saveMaturation(body.projectId, engine);
+        return NextResponse.json(view);
+      }
+      case "edit": {
+        const engine = await loadMaturation(body.projectId);
+        if (!engine) return NextResponse.json(EMPTY_VIEW);
+        const view = engine.editConcept(body.conceptId, body.text ?? "");
         await saveMaturation(body.projectId, engine);
         return NextResponse.json(view);
       }

@@ -531,7 +531,11 @@ export class DifferentiationModule {
           if (card && card.type === "novelty_capture") {
             card.feedback = {
               note: check.note.trim(),
-              wrongBlanks: check.wrong_blanks.filter((b) => b.label.trim()),
+              // Keep a flag if it named EITHER a slot number or a label — the slot
+              // number is what marks the right box on screen.
+              wrongBlanks: check.wrong_blanks
+                .filter((b) => b.slot > 0 || b.label.trim())
+                .map((b) => ({ slot: b.slot, label: b.label.trim(), why: b.why.trim() })),
             };
           }
           this.ledger.recordMachineEvent("novelty_check_failed", ["differentiation"], {
