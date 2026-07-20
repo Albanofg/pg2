@@ -32,6 +32,8 @@ const AGENT_LABELS: Record<string, string> = {
   "mesh/socratic-fallback": "AI Helper (Socratic)",
   "mesh/distiller": "Idea Distiller",
   "conception/teach": "Tutor — Tell me more",
+  "conception/patentability-reader": "Patentability Read",
+  // Retained so usage rows logged before Module 0 was removed still render a name.
   "brainstorm/market": "Market Search",
 };
 

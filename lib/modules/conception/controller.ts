@@ -8,6 +8,7 @@ import {
   runExaminer,
   runFormalizer,
   runHelper,
+  runPatentabilityReader,
   runReviser,
   runVerifier,
 } from "./agents";
@@ -37,6 +38,8 @@ import type {
   ConceptionDeps,
   ConceptionTrailItem,
   LeapInput,
+  PatentabilityCard,
+  PatentabilityInput,
   Module1Card,
   Module1Phase,
   Module1View,
@@ -84,6 +87,7 @@ type Intent =
   | { kind: "leap"; inventiveElement: string }
   | { kind: "candidate"; conceptId: string }
   | { kind: "brainstorm" }
+  | { kind: "patentability" }
   | { kind: "confirm_addition"; conceptId: string; addition: string };
 
 /** Full, JSON-serializable snapshot of a conception session (for the DB). */
@@ -201,7 +205,8 @@ export class ConceptionModule {
       | ClarityAnswerInput
       | LeapInput
       | CandidateActionInput
-      | BrainstormInput,
+      | BrainstormInput
+      | PatentabilityInput,
   ): Promise<Module1View> {
     const card = this.openCards.get(cardId);
     const intent = this.intents.get(cardId);
@@ -222,6 +227,9 @@ export class ConceptionModule {
         break;
       case "brainstorm":
         await this.handleBrainstorm(cardId, input as BrainstormInput);
+        break;
+      case "patentability":
+        await this.handlePatentability(cardId, input as PatentabilityInput);
         break;
     }
     this.maybeCheckpoint();
@@ -510,7 +518,14 @@ export class ConceptionModule {
     this.setAside = [...distilled.set_aside];
 
     // Drop any prior reading/spark cards (re-reading after an answer or edit).
-    this.clearIntents(["statement", "clarity", "leap"]);
+    this.clearIntents(["statement", "clarity", "leap", "patentability"]);
+
+    // THE FRONT-DOOR SUBJECT-MATTER READ — before the inventor invests in
+    // drafting, check whether the idea AS DESCRIBED is a business process /
+    // abstract idea that would be rejected on its own. A "technical" read emits
+    // nothing (a good idea is waved through). Never blocks, and a failure here
+    // must never stop the inventor — it passes through silently.
+    await this.readPatentability();
 
     // Light first read-back: just the clean restatement to confirm. The
     // strong / thin / set-aside read is stored (this.strong/thin/setAside) and
@@ -527,6 +542,77 @@ export class ConceptionModule {
       gapKind: distilled.gap_kind,
       gapMissing: distilled.gap_missing,
     });
+  }
+
+  /**
+   * The front-door subject-matter read. Emits a Patentability card ONLY when the
+   * idea as described reads as a business process / abstract idea — one that
+   * would be rejected on its own. The card says so plainly and hands back 2–4
+   * angles: places in the inventor's OWN system where the technical core could
+   * live. It never blocks, and an agent failure never stops the inventor.
+   */
+  private async readPatentability(): Promise<void> {
+    try {
+      const read = await runPatentabilityReader(this.runAgent, {
+        verbatim: this.material,
+        core: this.statementText,
+      });
+      this.ledger.recordMachineEvent("patentability_read", ["statement"], {
+        verdict: read.verdict,
+        angles: read.technical_angles.length,
+      });
+      // Already concrete — wave it through with no card, no warning.
+      if (read.verdict === "technical") return;
+
+      const angles = read.technical_angles
+        .filter((a) => a.angle.trim())
+        .map((a) => ({ angle: a.angle.trim(), why: a.why.trim(), ask: a.ask.trim() }));
+      // Nothing useful to offer — don't warn without help.
+      if (!angles.length || !read.plain_read.trim()) return;
+
+      const id = this.genId();
+      const card: PatentabilityCard = {
+        id,
+        type: "patentability",
+        verdict: read.verdict,
+        kind: read.kind.trim(),
+        plainRead: read.plain_read.trim(),
+        angles,
+        reassurance: read.reassurance.trim(),
+      };
+      this.openCards.set(id, card);
+      this.intents.set(id, { kind: "patentability" });
+    } catch (err) {
+      // The read is a service to the inventor, never a gate. If it fails, they
+      // continue exactly as before.
+      console.error("[conception] patentability read failed (passing through)", err);
+    }
+  }
+
+  /**
+   * The inventor's response to the subject-matter read: either they answer ONE
+   * angle in their own words — captured verbatim as their conception, folded into
+   * the material, and the idea re-read — or they move on with what they typed.
+   */
+  private async handlePatentability(cardId: string, input: PatentabilityInput): Promise<void> {
+    if (input.action === "dismiss") {
+      this.resolveCard(cardId);
+      this.ledger.recordMachineEvent("patentability_dismissed", ["statement"], {});
+      return;
+    }
+    const text = input.text.trim();
+    if (!text) return;
+    this.resolveCard(cardId);
+
+    // VERBATIM FIRST — what they say the machine does is their conception.
+    this.ledger.recordInventorSource("inventor_input", text, [
+      "statement",
+      "inventor_conceived",
+      "patentability_angle",
+    ]);
+    this.material.push(text);
+    // Re-read the idea now that the technical substance is in it.
+    await this.buildStatement();
   }
 
   /**

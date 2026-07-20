@@ -43,6 +43,7 @@ const PROMPT_FILES: Record<AgentName, string> = {
   verifier: `${MODULE_1_DIR}/09-verifier.md`,
   brainstorm: `${MODULE_1_DIR}/10-brainstorm.md`,
   advocate: `${MODULE_1_DIR}/11-advocate.md`,
+  "patentability-reader": `${MODULE_1_DIR}/13-patentability-reader.md`,
 };
 
 const promptCache = new Map<AgentName, string>();
@@ -122,6 +123,37 @@ export const DistillerOutput = z.object({
   set_aside: z.array(z.string()).default([]),
 });
 export type DistillerResult = z.infer<typeof DistillerOutput>;
+
+/**
+ * The front-door subject-matter read. "technical" waves the idea through with no
+ * card; "mixed"/"abstract" says plainly that the idea as described would be
+ * rejected on its own, then offers 2–4 angles — places in the inventor's OWN
+ * system where the technical core could live. The angles ASK; they never answer.
+ */
+// Every field is REQUIRED (no .default()): an optional field lets the model omit
+// it, and the default then silently masks a non-answer — which is exactly how
+// this shipped empty the first time. Empty strings/arrays must be sent, not
+// implied.
+export const PatentabilityOutput = z.object({
+  verdict: z.enum(["technical", "mixed", "abstract"]),
+  kind: z.string().describe("Short plain label of what the idea reads as."),
+  plain_read: z
+    .string()
+    .describe(
+      "2-4 short plain sentences. If mixed/abstract: what it reads as, that filed solely it would be rejected, and that there is very likely a patentable invention inside it.",
+    ),
+  technical_angles: z
+    .array(
+      z.object({
+        angle: z.string().describe("The spot in THEIR system where the technical core could live."),
+        why: z.string().describe("One plain line — why the technical substance tends to live there."),
+        ask: z.string().describe("One short question inviting them to say what THEIR system does there."),
+      }),
+    )
+    .describe("EMPTY when verdict is 'technical'; 2-4 entries otherwise."),
+  reassurance: z.string().describe("One short encouraging line; empty string when verdict is 'technical'."),
+});
+export type PatentabilityResult = z.infer<typeof PatentabilityOutput>;
 
 export const ClarifierOutput = z.object({
   questions: z.array(
@@ -299,6 +331,34 @@ export async function runDistiller(
     prompt,
     schema: DistillerOutput,
     temperature: 0.2,
+    subject: input.verbatim.join("\n"),
+  });
+}
+
+/**
+ * Read the raw idea for subject matter BEFORE the inventor invests in drafting:
+ * is this already a concrete technical thing, or a business process / abstract
+ * idea that would be rejected on its own? Runs on the verifier model (a different
+ * provider than the drafter) so the read is an independent one.
+ */
+export async function runPatentabilityReader(
+  runAgent: AgentRunner,
+  input: { verbatim: string[]; core: string },
+): Promise<PatentabilityResult> {
+  const system = await loadAgentPrompt("patentability-reader");
+  const prompt = [
+    "THE INVENTOR'S RAW WORDS (judge the idea AS DESCRIBED here):",
+    ...input.verbatim.map((v, i) => `[${i + 1}] ${v}`),
+    "",
+    "THE DISTILLED CORE of that idea:",
+    input.core || "(none yet)",
+  ].join("\n");
+  return runAgent({
+    agent: "patentability-reader",
+    system,
+    prompt,
+    schema: PatentabilityOutput,
+    temperature: 0,
     subject: input.verbatim.join("\n"),
   });
 }

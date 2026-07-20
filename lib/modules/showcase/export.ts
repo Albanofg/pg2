@@ -459,6 +459,51 @@ function diagramFontPath(): string | null {
   return diagramFontPathCache;
 }
 
+/** A figure is "wide" (and so must be turned sideways on a portrait sheet). */
+function isWideFigure(width: number, height: number): boolean {
+  return width / Math.max(1, height) >= 1.15;
+}
+
+/**
+ * Turn a rendered wide figure 90° clockwise so it fits SIDEWAYS on a PORTRAIT
+ * sheet — the USPTO does not accept landscape pages, but it does accept a figure
+ * printed sideways on an upright page (read by rotating the sheet).
+ *
+ * The PNG is re-wrapped in a tiny SVG that rotates it and rendered 1:1 (the
+ * wrapper canvas is exactly height×width), so pixels are transposed rather than
+ * resampled and nothing softens. Returns null if anything goes wrong, and the
+ * caller then just uses the upright image.
+ */
+function rotatePngSideways(
+  Resvg: typeof import("@resvg/resvg-js").Resvg,
+  png: Buffer,
+  width: number,
+  height: number,
+): { png: Buffer; width: number; height: number } | null {
+  try {
+    // rotate(90) maps (x,y)→(−y,x), so shift back into view by the new width.
+    const wrapper =
+      `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +
+      `width="${height}" height="${width}" viewBox="0 0 ${height} ${width}">` +
+      `<g transform="translate(${height},0) rotate(90)">` +
+      `<image x="0" y="0" width="${width}" height="${height}" ` +
+      `xlink:href="data:image/png;base64,${png.toString("base64")}"/>` +
+      `</g></svg>`;
+    const out = new Resvg(wrapper, {
+      fitTo: { mode: "width", value: height }, // 1:1 — the rotated canvas is `height` wide
+      background: "white",
+    }).render();
+    return { png: Buffer.from(out.asPng()), width: out.width, height: out.height };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Render each figure to a PNG that is ready to drop on a PORTRAIT page. Wide
+ * figures come back already turned sideways (and with their width/height
+ * swapped), so callers never need a landscape sheet.
+ */
 async function rasterizeDrawings(
   drawings: ShowcaseDrawing[],
 ): Promise<Map<number, { png: Buffer; width: number; height: number }>> {
@@ -492,7 +537,13 @@ async function rasterizeDrawings(
         font: fontOptions,
       });
       const r = resvg.render();
-      map.set(d.figNumber, { png: Buffer.from(r.asPng()), width: r.width, height: r.height });
+      const upright = { png: Buffer.from(r.asPng()), width: r.width, height: r.height };
+      // Wide figure → lay it sideways so the SHEET can stay portrait (USPTO
+      // rejects landscape pages on a provisional). Falls back to upright.
+      const sideways = isWideFigure(upright.width, upright.height)
+        ? rotatePngSideways(Resvg, upright.png, upright.width, upright.height)
+        : null;
+      map.set(d.figNumber, sideways ?? upright);
     } catch {
       // skip this figure's image — its description still appears in the text section
     }
@@ -505,7 +556,9 @@ async function rasterizeDrawings(
  * serialized .docx bytes (Node Buffer). Sections render in app 2's canonical
  * order; a Drawings section (descriptions) sits before Key Concepts; the Abstract
  * is on its own page; then each figure is embedded on its OWN page as a drawing
- * sheet (landscape when the figure is wide) so the diagrams read large and clear.
+ * sheet. Every page is PORTRAIT (the USPTO does not accept landscape pages on a
+ * provisional); wide figures are turned sideways on the upright sheet so the
+ * diagrams still read large and clear.
  */
 export async function assembleDisclosureDocx(
   disclosure: DisclosureSection[],
@@ -602,23 +655,20 @@ export async function assembleDisclosureDocx(
   }
 
   // ---- FIGURE SHEETS: each figure on its OWN page, placed right AFTER the Brief
-  // Description of the Drawings — landscape when the figure is wide. Text-only if
-  // rasterizing failed.
+  // Description of the Drawings. EVERY page is portrait (the USPTO does not accept
+  // landscape pages on a provisional); a wide figure is turned sideways on the
+  // upright sheet instead. Text-only if rasterizing failed.
   const raster = await rasterizeDrawings(drawings);
   const FIG_MARGIN = 720; // 0.5" (twips). Content px @96 DPI = (page − 2·margin)/1440·96.
   const figureSections = drawings
     .filter((d) => raster.has(d.figNumber))
     .map((d) => {
       const img = raster.get(d.figNumber)!;
-      const landscape = img.width / Math.max(1, img.height) >= 1.15;
-      // The ACTUAL page size after rendering. `docx` swaps width/height when
-      // orientation is LANDSCAPE, so we always pass PORTRAIT base dims and let the
-      // orientation flag do the swap — otherwise the page stays portrait and the
-      // image overflows the right margin.
-      const trueW = landscape ? 15840 : 12240;
-      const trueH = landscape ? 12240 : 15840;
-      const contentWpx = Math.round(((trueW - 2 * FIG_MARGIN) / 1440) * 96);
-      const contentHpx = Math.round(((trueH - 2 * FIG_MARGIN) / 1440) * 96);
+      // ALWAYS PORTRAIT — the USPTO does not accept landscape pages on a
+      // provisional. A wide figure was already turned sideways by the rasterizer,
+      // so it fits an upright sheet (read by rotating the page).
+      const contentWpx = Math.round(((12240 - 2 * FIG_MARGIN) / 1440) * 96);
+      const contentHpx = Math.round(((15840 - 2 * FIG_MARGIN) / 1440) * 96);
       // Fit inside the content box with headroom (never edge-to-edge → no clipping);
       // reserve a little vertical room for the caption line.
       const scale = Math.min((contentWpx * 0.96) / img.width, (contentHpx * 0.9) / img.height, 1);
@@ -630,7 +680,7 @@ export async function assembleDisclosureDocx(
             size: {
               width: 12240,
               height: 15840,
-              orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT,
+              orientation: PageOrientation.PORTRAIT,
             },
             margin: { top: FIG_MARGIN, right: FIG_MARGIN, bottom: FIG_MARGIN, left: FIG_MARGIN },
           },

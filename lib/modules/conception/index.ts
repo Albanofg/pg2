@@ -21,6 +21,8 @@ export {
   runBoundaryClassifier,
   runFormalizer,
   runCodeGenerator,
+  runPatentabilityReader,
+  PatentabilityOutput,
   DistillerOutput,
   ClarifierOutput,
   ExaminerOutput,
@@ -37,6 +39,7 @@ export {
   type BoundaryResult,
   type FormalizerResult,
   type CodeGeneratorResult,
+  type PatentabilityResult,
 } from "./agents";
 export { openaiAgentRunner } from "./runner.openai";
 export * from "./types";

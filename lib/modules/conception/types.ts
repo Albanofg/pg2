@@ -202,13 +202,46 @@ export type BrainstormCard = {
   developed?: string[];
 };
 
+/**
+ * One place in the inventor's OWN described system where the technical core could
+ * live — an ingredient to think with, never an answer. `ask` invites them to say
+ * what their system actually does there; the mechanism is always theirs.
+ */
+export type TechnicalAngle = {
+  angle: string;
+  why: string;
+  ask: string;
+};
+
+/**
+ * The front-door subject-matter read. Shown when the idea, AS DESCRIBED, reads as
+ * a business process / abstract idea that would be rejected on its own — it says
+ * so plainly, then helps the inventor find the technical invention inside it.
+ * NEVER a blocker: the inventor can always proceed with what they typed.
+ */
+export type PatentabilityCard = {
+  id: string;
+  type: "patentability";
+  /** "mixed" (technical substance in business framing) or "abstract". */
+  verdict: "mixed" | "abstract";
+  /** Short plain label of what the idea reads as. */
+  kind: string;
+  /** The frank + constructive read: what it is, that it'd be rejected as-is, and that there's an invention inside. */
+  plainRead: string;
+  /** 2–4 ingredients — where the technical core could live in THEIR system. */
+  angles: TechnicalAngle[];
+  /** One short encouraging line about what happens next. */
+  reassurance: string;
+};
+
 export type Module1Card =
   | ReviewCard
   | ClarityCard
   | LeapCard
   | CandidateConceptCard
   | CodeReviewCard
-  | BrainstormCard;
+  | BrainstormCard
+  | PatentabilityCard;
 
 /* ------------------------------------------------------------------ *
  * The Helper's voice — the conversation surface
@@ -290,12 +323,22 @@ export type BrainstormInput =
     }
   | { action: "dismiss" };
 
+/**
+ * Patentability action — either the inventor answers one angle in their OWN words
+ * (captured verbatim, folded into the idea and re-read), or they move on with the
+ * idea exactly as they typed it. The card never blocks.
+ */
+export type PatentabilityInput =
+  | { action: "develop"; angle: string; text: string }
+  | { action: "dismiss" };
+
 export type CardActionInput =
   | ReviewActionInput
   | ClarityAnswerInput
   | LeapInput
   | CandidateActionInput
-  | BrainstormInput;
+  | BrainstormInput
+  | PatentabilityInput;
 
 /* ------------------------------------------------------------------ *
  * The view the engine returns to the Helper after each step
@@ -343,7 +386,8 @@ export type AgentName =
   | "code-generator"
   | "brainstorm"
   | "reviser"
-  | "verifier";
+  | "verifier"
+  | "patentability-reader";
 
 /** Dependencies the Helper injects when constructing the Module 1 engine. */
 export type ConceptionDeps = {

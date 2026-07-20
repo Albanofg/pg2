@@ -37,6 +37,9 @@ const MODEL_FOR: Record<AgentName, (typeof MODELS)[keyof typeof MODELS]> = {
   reviser: MODELS.drafter,
   // Independent cross-check on a DIFFERENT model (Gemini) than the agents it reviews.
   verifier: MODELS.verifier,
+  // The front-door subject-matter read — an independent judgment on a different
+  // model than the distiller whose reading it's checking.
+  "patentability-reader": MODELS.verifier,
 };
 
 export const openaiAgentRunner: AgentRunner = async (req) =>

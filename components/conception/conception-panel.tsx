@@ -19,6 +19,7 @@ import type {
   Module1Card,
   Module1Phase,
   Module1View,
+  PatentabilityCard,
   ReviewCard,
 } from "@/lib/modules/conception/types";
 
@@ -291,9 +292,132 @@ function CardView({
       );
     case "brainstorm":
       return <BrainstormCardView card={card} busy={busy} onAct={onAct} />;
+    case "patentability":
+      return <PatentabilityCardView card={card} busy={busy} onAct={onAct} />;
     default:
       return null;
   }
+}
+
+/**
+ * The front-door subject-matter read. Shown when the idea as described reads as a
+ * business process / abstract idea: it says so plainly (no euphemism — the
+ * inventor must understand it would be rejected on its own), then immediately
+ * turns constructive and offers the angles where the technical invention inside
+ * their idea could live. Answering one is optional; "Continue anyway" never
+ * blocks.
+ */
+function PatentabilityCardView({
+  card,
+  busy,
+  onAct,
+}: {
+  card: PatentabilityCard;
+  busy: boolean;
+  onAct: (cardId: string, input: never) => void;
+}) {
+  const [openAngle, setOpenAngle] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const active = card.angles.find((a) => a.angle === openAngle) ?? null;
+
+  return (
+    <div className="rounded-md border border-amber-500/40 bg-amber-500/[0.06] p-4">
+      <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-amber-400">
+        Before you go further
+      </div>
+      {card.kind && (
+        <div className="mt-1 font-sans text-sm font-semibold text-ink">{card.kind}</div>
+      )}
+      <p className="mt-2 whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-ink">
+        {card.plainRead}
+      </p>
+
+      <div className="mt-3 border-t border-amber-500/20 pt-3">
+        <div className="font-sans text-[13px] font-semibold text-ink">
+          Where the patentable part is probably hiding
+        </div>
+        <p className="mt-0.5 font-sans text-xs text-ink-muted">
+          Pick whichever one fits — then say, in your own words, what your system actually does
+          there. That part is yours; nobody can write it for you.
+        </p>
+
+        <div className="mt-2 flex flex-col gap-2">
+          {card.angles.map((a) => (
+            <div
+              key={a.angle}
+              className={`rounded-md border p-2.5 transition-colors ${
+                openAngle === a.angle
+                  ? "border-accent/60 bg-accent/[0.06]"
+                  : "border-border bg-bg"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setOpenAngle(openAngle === a.angle ? null : a.angle);
+                  setText("");
+                }}
+                disabled={busy}
+                className="w-full text-left disabled:opacity-50"
+              >
+                <div className="font-sans text-[13px] font-medium text-ink">{a.angle}</div>
+                {a.why && (
+                  <div className="mt-0.5 font-sans text-xs text-ink-muted">{a.why}</div>
+                )}
+              </button>
+
+              {openAngle === a.angle && (
+                <div className="mt-2">
+                  {a.ask && (
+                    <p className="mb-1.5 font-sans text-[13px] font-medium text-accent">{a.ask}</p>
+                  )}
+                  <textarea
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    rows={4}
+                    autoFocus
+                    placeholder="In your own words — what does your system actually do here?"
+                    className="w-full resize-y rounded-md border border-border bg-panel p-2 font-sans text-[13px] leading-relaxed text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+                  />
+                  <div className="mt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onAct(card.id, {
+                          action: "develop",
+                          angle: a.angle,
+                          text: text.trim(),
+                        } as never)
+                      }
+                      disabled={busy || !text.trim()}
+                      className="rounded-md bg-accent px-3 py-1.5 font-sans text-xs font-medium text-brand hover:bg-accent/90 disabled:opacity-50"
+                    >
+                      This is mine
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {card.reassurance && !active && (
+        <p className="mt-3 font-sans text-xs italic text-ink-muted">{card.reassurance}</p>
+      )}
+
+      <div className="mt-3 flex justify-end">
+        <button
+          type="button"
+          onClick={() => onAct(card.id, { action: "dismiss" } as never)}
+          disabled={busy}
+          className="rounded-md border border-border px-3 py-1.5 font-sans text-xs text-ink-muted hover:text-ink disabled:opacity-50"
+        >
+          Continue anyway
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function BrainstormCardView({
