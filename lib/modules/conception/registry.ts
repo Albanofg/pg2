@@ -4,7 +4,9 @@ import {
   loadConsciousness,
   persistConsciousness,
 } from "@/lib/modules/shared/consciousness-store";
+import { EvidenceLedger, type LedgerEntry } from "@/lib/modules/shared";
 import { ConceptionModule, type ConceptionSnapshot } from "./controller";
+import { MODULE1_HUMAN_SOURCE_TYPES } from "./types";
 import { openaiAgentRunner } from "./runner.openai";
 import { refreshFamilyArtifactsBackground } from "@/lib/families/digest";
 
@@ -25,10 +27,24 @@ export async function loadConception(projectId: string): Promise<ConceptionModul
     loadModuleState(projectId),
     loadConsciousness(projectId),
   ]);
-  const deps = { runAgent: openaiAgentRunner, consciousness };
-  return state.conception
-    ? ConceptionModule.fromSnapshot(state.conception as ConceptionSnapshot, deps)
-    : new ConceptionModule(deps);
+  if (state.conception) {
+    return ConceptionModule.fromSnapshot(state.conception as ConceptionSnapshot, {
+      runAgent: openaiAgentRunner,
+      consciousness,
+    });
+  }
+  // Fresh Conception: seed the ledger from Orientation (Module 0) if it ran, so
+  // the inventor's raw idea + orientation trail are the CONTINUOUS origin of the
+  // proof chain rather than being dropped.
+  const orient = state.orientation as { ledger?: LedgerEntry[] } | undefined;
+  const seedLedger = orient?.ledger?.length
+    ? EvidenceLedger.fromEntries(orient.ledger, MODULE1_HUMAN_SOURCE_TYPES)
+    : undefined;
+  return new ConceptionModule({
+    runAgent: openaiAgentRunner,
+    consciousness,
+    ...(seedLedger ? { ledger: seedLedger } : {}),
+  });
 }
 
 /** Persist the project's conception snapshot + the shared draft-memory diff. */

@@ -40,8 +40,16 @@ export async function POST(req: Request) {
       const sc = ms.showcase as { broadened?: boolean } | null;
       stage = sc?.broadened ? "showcase" : "genus_species";
     } else {
-      const STAGE_ORDER = ["differentiation", "landscape", "maturation", "conception"] as const;
-      stage = STAGE_ORDER.find((k) => ms[k] != null) ?? "conception";
+      // Furthest persisted key wins; a brand-new project (nothing persisted) lands
+      // on Orientation, the new first stage before Conception.
+      const STAGE_ORDER = [
+        "differentiation",
+        "landscape",
+        "maturation",
+        "conception",
+        "orientation",
+      ] as const;
+      stage = STAGE_ORDER.find((k) => ms[k] != null) ?? "orientation";
     }
 
     return NextResponse.json({

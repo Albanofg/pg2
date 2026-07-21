@@ -17,6 +17,7 @@ import { projects } from "@/db/schema";
  * a blob rewrite would lose concurrent appends.
  */
 export type ModuleStateBlob = {
+  orientation?: unknown;
   conception?: unknown;
   maturation?: unknown;
   landscape?: unknown;

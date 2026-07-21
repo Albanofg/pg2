@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import LeftSidebar from "./left-sidebar";
 import RightSidebar from "./right-sidebar";
 import BrainstormPanel from "@/components/brainstorm/brainstorm-panel";
+import OrientationPanel from "@/components/orientation/orientation-panel";
 import ConceptionPanel from "@/components/conception/conception-panel";
 import MaturationPanel from "@/components/maturation/maturation-panel";
 import LandscapePanel from "@/components/landscape/landscape-panel";
@@ -112,6 +113,8 @@ export default function Triptych() {
           <div className="flex h-full items-center justify-center">
             <span className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
           </div>
+        ) : stage === "orientation" ? (
+          <OrientationPanel maxW={maxW} />
         ) : stage === "brainstorm" ? (
           <BrainstormPanel maxW={maxW} />
         ) : stage === "showcase" ? (

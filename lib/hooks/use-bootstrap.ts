@@ -5,6 +5,7 @@ import { useWorkspace, type ModuleStage } from "@/lib/store";
 import { phaseLabel, type PhaseKey } from "@/lib/utils";
 
 const STAGES: ModuleStage[] = [
+  "orientation",
   "brainstorm",
   "conception",
   "maturation",

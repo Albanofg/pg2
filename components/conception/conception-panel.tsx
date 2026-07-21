@@ -41,8 +41,20 @@ export default function ConceptionPanel({
 }) {
   const { view, busy, error, act, tell, reset } = useConception(projectId);
   const setStage = useWorkspace((s) => s.setStage);
+  const orientationBrief = useWorkspace((s) => s.orientationBrief);
+  const setOrientationBrief = useWorkspace((s) => s.setOrientationBrief);
 
   const hasStatement = !!view.statement;
+
+  // If the inventor came through Orientation, seed the entry box with the brief
+  // they built there (editable) — then clear it so it seeds only once.
+  const [briefSeed, setBriefSeed] = useState<{ text: string; nonce: number } | null>(null);
+  useEffect(() => {
+    if (orientationBrief && !hasStatement) {
+      setBriefSeed({ text: orientationBrief, nonce: Date.now() });
+      setOrientationBrief(null);
+    }
+  }, [orientationBrief, hasStatement, setOrientationBrief]);
   const candidateCards = view.cards.filter(
     (c): c is CandidateConceptCard => c.type === "candidate_concept"
   );
@@ -116,6 +128,7 @@ export default function ConceptionPanel({
             placeholder={conceptionPlaceholder(view.phase)}
             busy={busy}
             onSend={tell}
+            {...(briefSeed ? { seedText: briefSeed.text, seedNonce: briefSeed.nonce } : {})}
           />
         </div>
       )}

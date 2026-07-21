@@ -14,7 +14,7 @@ import { refreshFamilyArtifactsBackground } from "@/lib/families/digest";
 export const runtime = "nodejs";
 
 // The pipeline order. A stage depends on everything before it.
-const ORDER = ["conception", "maturation", "landscape", "differentiation", "showcase"] as const;
+const ORDER = ["orientation", "conception", "maturation", "landscape", "differentiation", "showcase"] as const;
 type Stage = (typeof ORDER)[number];
 
 export async function POST(req: Request) {

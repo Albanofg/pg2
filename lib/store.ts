@@ -55,7 +55,8 @@ export type MeshStatus = {
 export type ConnectionState = "online" | "reconnecting";
 
 export type ModuleStage =
-  | "brainstorm" // Module 0 — the pre-Conception Socratic brainstorming window (skippable)
+  | "orientation" // Module 0 — the front porch: surface the machine idea, produce a brief for Conception
+  | "brainstorm" // parked (kept, not in the flow) — the old pre-Conception Socratic window
   | "conception"
   | "maturation"
   | "landscape"
@@ -90,6 +91,12 @@ type WorkspaceState = {
    * options). Transient (not persisted); cleared once the panel consumes it.
    */
   brainstormSeed: string | null;
+  /**
+   * The detailed brief the Orientation stage produced, handed to Conception to
+   * pre-fill "Describe your invention". Transient (not persisted); Conception
+   * consumes it once and clears it.
+   */
+  orientationBrief: string | null;
 
   // actions
   setProject: (id: string, title: string) => void;
@@ -113,6 +120,7 @@ type WorkspaceState = {
   setConnection: (state: ConnectionState) => void;
   setPendingQuote: (quote: string | null) => void;
   setBrainstormSeed: (seed: string | null) => void;
+  setOrientationBrief: (brief: string | null) => void;
   reset: () => void;
 };
 
@@ -147,6 +155,7 @@ const initial = {
   pendingQuote: null as string | null,
   input: "",
   brainstormSeed: null as string | null,
+  orientationBrief: null as string | null,
 };
 
 export const useWorkspace = create<WorkspaceState>()(
@@ -219,6 +228,7 @@ export const useWorkspace = create<WorkspaceState>()(
       setConnection: (connection) => set({ connection }),
       setPendingQuote: (pendingQuote) => set({ pendingQuote }),
       setBrainstormSeed: (brainstormSeed) => set({ brainstormSeed }),
+      setOrientationBrief: (orientationBrief) => set({ orientationBrief }),
 
       reset: () => set({ ...initial }),
     }),

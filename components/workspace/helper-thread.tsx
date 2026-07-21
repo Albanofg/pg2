@@ -19,10 +19,15 @@ export default function HelperThread({
   turns,
   onQuickReply,
   busy = false,
+  primaryOption,
 }: {
   turns: HelperTurn[];
   onQuickReply?: (text: string) => void;
   busy?: boolean;
+  /** An option whose text contains this string renders as the PRIMARY (filled)
+   *  action in its options row — a clear finish among optional chips. Optional;
+   *  modules that don't pass it get the usual uniform chips. */
+  primaryOption?: string;
 }) {
   if (!turns || turns.length === 0) return null;
   let lastHelperIdx = -1;
@@ -50,6 +55,7 @@ export default function HelperThread({
                 interactive={i === lastHelperIdx && !!onQuickReply}
                 busy={busy}
                 onAnswer={(text) => onQuickReply?.(text)}
+                primaryOption={primaryOption}
               />
             )}
             {/* Legacy stored turns only — newer turns use `question`. */}
@@ -89,11 +95,13 @@ export function QuestionBlock({
   interactive,
   busy,
   onAnswer,
+  primaryOption,
 }: {
   question: HelperQuestion;
   interactive: boolean;
   busy: boolean;
   onAnswer: (text: string) => void;
+  primaryOption?: string;
 }) {
   const [text, setText] = useState("");
   const send = (value: string) => {
@@ -102,6 +110,12 @@ export function QuestionBlock({
     onAnswer(v);
     setText("");
   };
+  const isPrimary = (opt: string) =>
+    !!primaryOption && opt.toLowerCase().includes(primaryOption.toLowerCase());
+  // Primary action first, then the optional chips — one row, one card.
+  const orderedOptions = [...question.options].sort(
+    (a, b) => Number(isPrimary(b)) - Number(isPrimary(a)),
+  );
   return (
     <div className="mt-3 rounded-md border border-border bg-bg/40 p-3">
       <div className="font-sans text-xs font-semibold text-ink">{question.ask}</div>
@@ -110,19 +124,31 @@ export function QuestionBlock({
       )}
       {!interactive ? null : (
         <>
-          {question.options.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {question.options.map((opt, j) => (
-                <button
-                  key={j}
-                  type="button"
-                  onClick={() => send(opt)}
-                  disabled={busy}
-                  className="rounded-full border border-accent/40 bg-accent/10 px-2.5 py-1 font-mono text-[11px] text-ink hover:bg-accent/20 disabled:opacity-50"
-                >
-                  {opt}
-                </button>
-              ))}
+          {orderedOptions.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {orderedOptions.map((opt, j) =>
+                isPrimary(opt) ? (
+                  <button
+                    key={j}
+                    type="button"
+                    onClick={() => send(opt)}
+                    disabled={busy}
+                    className="rounded-full bg-accent px-3.5 py-1.5 font-sans text-[12px] font-semibold text-brand shadow-sm hover:bg-accent/90 disabled:opacity-50"
+                  >
+                    {opt} →
+                  </button>
+                ) : (
+                  <button
+                    key={j}
+                    type="button"
+                    onClick={() => send(opt)}
+                    disabled={busy}
+                    className="rounded-full border border-accent/40 bg-accent/10 px-2.5 py-1 font-mono text-[11px] text-ink hover:bg-accent/20 disabled:opacity-50"
+                  >
+                    {opt}
+                  </button>
+                ),
+              )}
             </div>
           )}
           <div className="mt-2 flex items-center gap-1.5">
