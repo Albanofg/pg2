@@ -43,7 +43,7 @@ export async function loadAgentPrompt(agent: AgentName): Promise<string> {
  * ------------------------------------------------------------------ */
 
 export const RouterOutput = z.object({
-  route: z.enum(["forward", "discovery"]),
+  route: z.enum(["forward", "improve", "discovery"]),
   missing: z.string().default(""),
   reason: z.string().default(""),
 });

@@ -90,6 +90,25 @@ function matchDiscoveryCommand(
   return null;
 }
 
+/**
+ * IMPROVE MODE directive — the inventor already stated a real software mechanism
+ * that is just under-specified. Drive the SURGICAL path only; never re-run the
+ * business-method excavation. `firstTurn` carries the router's flagged gap.
+ */
+function buildImproveDirective(gap: string, firstTurn: boolean): string {
+  const base =
+    "IMPROVE MODE — the inventor ALREADY stated a real software mechanism; it is only under-specified. Do NOT run objective/process/baseline or build a full requirement conflict. Follow this surgical path and let `phase` advance mechanism → limitation → effect → choose: " +
+    "(1) reflect their mechanism in ONE line; " +
+    "(2) name the ONE missing operation that makes it non-executable or unclear and ask ONE targeted question to get THEM to describe that operation in their own words — never invent it (phase \"mechanism\"); " +
+    "(3) once it's described, test the mechanism against ONE realistic failure case — offer 2–3 concrete failures + \"something else\" (phase \"limitation\"); " +
+    "(4) confirm the machine-dependent effect it produces and run the human-performance check (phase \"effect\"); " +
+    "(5) then synthesize and go to \"choose\". Keep it to a few turns — do not drill parameters. " +
+    "ESCAPE HATCH: if the inventor's answer reveals there is NO real mechanism (the operation dissolves into a wish they can't describe), set `phase` to \"objective\" to fall back to full discovery.";
+  return firstTurn && gap
+    ? `${base}\n\nThe operation the inventor left under-specified (start here): ${gap}`
+    : base;
+}
+
 function emptySession(originalInput: string): OrientationSession {
   return {
     originalInput,
@@ -120,7 +139,7 @@ function emptySession(originalInput: string): OrientationSession {
 export type OrientationSnapshot = {
   phase: Module0Phase;
   started: boolean;
-  route: "forward" | "discovery" | null;
+  route: "forward" | "improve" | "discovery" | null;
   discoveryPhase: DiscoveryPhase;
   mechanism: string;
   canWriteBrief: boolean;
@@ -139,7 +158,9 @@ export class OrientationModule {
 
   private phase: Module0Phase = "empty";
   private started = false;
-  private route: "forward" | "discovery" | null = null;
+  private route: "forward" | "improve" | "discovery" | null = null;
+  /** improve route only: the ONE under-specified operation the router flagged. */
+  private improveGap = "";
   private discoveryPhase: DiscoveryPhase = "objective";
   private mechanism = "";
   private canWriteBrief = false;
@@ -171,7 +192,7 @@ export class OrientationModule {
     this.ledger.recordInventorSource("inventor_input", text, ["orientation", "raw_idea"]);
     this.pushTurn({ role: "inventor", text });
 
-    let route: "forward" | "discovery" = "discovery";
+    let route: "forward" | "improve" | "discovery" = "discovery";
     let missing = "";
     try {
       const r = await runRouter(this.runAgent, { rawIdea: text });
@@ -184,15 +205,31 @@ export class OrientationModule {
     this.route = route;
     this.session.route = route;
 
+    if (route === "improve") {
+      // A clear software mechanism that's just under-specified. Enter the phase
+      // machine DEEP — no objective/process/baseline excavation — and drive only at
+      // the one flagged operation. Ends in a brief (assembled), like discovery.
+      this.phase = "discovery";
+      this.session.phase = "discovery";
+      this.discoveryPhase = "mechanism";
+      this.session.discoveryPhase = "mechanism";
+      this.improveGap = missing;
+      await this.replyHelper(text);
+      return this.view();
+    }
+
     if (route === "forward") {
       this.phase = "forward";
       this.session.phase = "forward";
-      this.canWriteBrief = true;
+      // No brief on the forward route — the idea is already detailed, so it goes
+      // straight into Conception in the inventor's own words (canWriteBrief stays
+      // false; the panel offers "Take this into Patent Geyser" instead).
+      this.canWriteBrief = false;
       this.pushTurn({
         role: "helper",
         text: missing
-          ? `Your idea already describes a clear system mechanism — nice. One thing to pin down before we write it up: ${missing}`
-          : "Your idea already describes a clear system mechanism — no need to draw it out. When you're ready, I'll write it up as a detailed brief.",
+          ? `Your idea already describes a clear system mechanism — nice. One thing worth pinning down first: ${missing}. Add it if you like, then take it straight in.`
+          : "Your idea already describes a clear system mechanism — no need to rework it. Take it straight into Patent Geyser in your own words, and we'll build it out there.",
         intent: "forward",
       });
       return this.view();
@@ -219,10 +256,17 @@ export class OrientationModule {
   private async replyHelper(message: string): Promise<void> {
     const exchangeCount = this.conversation.filter((t) => t.role === "inventor").length;
     let synthesize = false;
-    // A choose-phase action ("develop the interaction", etc.) must deterministically
-    // drive the phase machine — never loop back to the choose menu. Force the target
-    // phase and hand the Helper a mandatory directive so it DOES that phase's work.
-    const cmd = matchDiscoveryCommand(message);
+    // Two directive seams, mutually exclusive per turn:
+    //  • IMPROVE MODE (route "improve", pre-choose): drive the surgical path — reflect
+    //    the mechanism, resolve the one gap, one failure test, confirm the effect.
+    //  • A choose-phase ACTION ("develop the interaction", …): force that phase and
+    //    make the Helper DO its work instead of looping the menu.
+    const improveMode = this.route === "improve" && this.discoveryPhase !== "choose";
+    const cmd = improveMode ? null : matchDiscoveryCommand(message);
+    const directive = improveMode
+      ? buildImproveDirective(this.improveGap, exchangeCount <= 1)
+      : cmd?.directive;
+    const forcedPhase = cmd?.phase;
     try {
       const helper = await runOrientationHelper(this.runAgent, {
         message,
@@ -230,12 +274,23 @@ export class OrientationModule {
         conversation: this.conversation.slice(-12).map((t) => ({ role: t.role, text: t.text })),
         mechanism: this.mechanism,
         exchangeCount,
-        phase: cmd ? cmd.phase : this.discoveryPhase,
-        ...(cmd ? { directive: cmd.directive } : {}),
+        phase: forcedPhase ?? this.discoveryPhase,
+        ...(directive ? { directive } : {}),
       });
       // If a command was issued but the Helper regressed to "choose" anyway, keep the
       // forced target phase so the machine still advances.
-      const nextPhase = cmd && helper.phase === "choose" ? cmd.phase : helper.phase;
+      let nextPhase = forcedPhase && helper.phase === "choose" ? forcedPhase : helper.phase;
+      // ESCAPE HATCH: if improve mode falls back to an early excavation phase, the
+      // stated mechanism didn't hold up — promote to full discovery so the whole
+      // process (and full rail) takes over.
+      if (
+        this.route === "improve" &&
+        (nextPhase === "objective" || nextPhase === "process" || nextPhase === "baseline")
+      ) {
+        this.route = "discovery";
+        this.session.route = "discovery";
+        this.improveGap = "";
+      }
       this.discoveryPhase = nextPhase;
       this.session.discoveryPhase = nextPhase;
       if (helper.mechanism.trim()) this.mechanism = helper.mechanism.trim();

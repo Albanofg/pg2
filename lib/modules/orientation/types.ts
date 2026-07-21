@@ -154,7 +154,7 @@ export type Module0Phase =
 
 export type OrientationSession = {
   originalInput: string;
-  route: "forward" | "discovery" | null;
+  route: "forward" | "improve" | "discovery" | null;
   phase: Module0Phase;
   discoveryPhase: DiscoveryPhase;
   maturity: MaturityScore;
@@ -185,7 +185,7 @@ export type OrientationSession = {
 
 export type Module0View = {
   phase: Module0Phase;
-  route: "forward" | "discovery" | null;
+  route: "forward" | "improve" | "discovery" | null;
   /** Which discovery phase the machine is in right now. */
   discoveryPhase: DiscoveryPhase;
   conversation: HelperTurn[];

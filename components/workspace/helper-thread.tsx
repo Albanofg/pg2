@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { HelperQuestion, HelperTurn } from "@/lib/modules/shared";
 
 /**
@@ -20,6 +20,7 @@ export default function HelperThread({
   onQuickReply,
   busy = false,
   primaryOption,
+  autoScrollToLatest = true,
 }: {
   turns: HelperTurn[];
   onQuickReply?: (text: string) => void;
@@ -28,21 +29,40 @@ export default function HelperThread({
    *  action in its options row — a clear finish among optional chips. Optional;
    *  modules that don't pass it get the usual uniform chips. */
   primaryOption?: string;
+  /** When a NEW Helper turn arrives, scroll its START into view (not the footer),
+   *  so the reader begins at the top of the new content. On by default. */
+  autoScrollToLatest?: boolean;
 }) {
-  if (!turns || turns.length === 0) return null;
+  const safeTurns = turns ?? [];
   let lastHelperIdx = -1;
-  turns.forEach((t, i) => {
+  safeTurns.forEach((t, i) => {
     if (t.role === "helper") lastHelperIdx = i;
   });
+
+  // Bring the newest Helper turn's TOP into view whenever a new one lands. Keyed on
+  // the last helper turn's identity so it fires on the Helper's reply, NOT when the
+  // inventor's own message is appended.
+  const latestRef = useRef<HTMLDivElement | null>(null);
+  const latestText = lastHelperIdx >= 0 ? (safeTurns[lastHelperIdx]?.text ?? "") : "";
+  useEffect(() => {
+    if (!autoScrollToLatest || lastHelperIdx < 0) return;
+    latestRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [autoScrollToLatest, lastHelperIdx, latestText]);
+
+  if (safeTurns.length === 0) return null;
 
   return (
     <div className="flex flex-col gap-3">
       <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-muted">
         Helper
       </div>
-      {turns.map((t, i) =>
+      {safeTurns.map((t, i) =>
         t.role === "helper" ? (
-          <div key={i} className="rounded-md border border-action/30 bg-action/5 p-3">
+          <div
+            key={i}
+            ref={i === lastHelperIdx ? latestRef : undefined}
+            className="scroll-mt-4 rounded-md border border-action/30 bg-action/5 p-3"
+          >
             <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-action">
               Helper
             </div>

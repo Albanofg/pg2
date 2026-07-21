@@ -17,7 +17,7 @@ import type { Clause, DiscoveryPhase, OrientationSession } from "@/lib/modules/o
  * always sees the idea materializing — not just a stream of questions.
  */
 
-/** The discovery phases in order, for the progress rail. */
+/** The full discovery phases in order, for the progress rail. */
 const PHASE_LABELS: { key: DiscoveryPhase; label: string }[] = [
   { key: "objective", label: "Objective" },
   { key: "process", label: "Ordinary process" },
@@ -25,6 +25,14 @@ const PHASE_LABELS: { key: DiscoveryPhase; label: string }[] = [
   { key: "limitation", label: "Machine limitation" },
   { key: "conflict", label: "The conflict" },
   { key: "mechanism", label: "Your mechanism" },
+  { key: "effect", label: "Technical effect" },
+];
+
+/** The improve route enters deep — the mechanism already exists, so the rail shows
+ *  only the surgical steps: sharpen it, stress-test it, confirm the effect. */
+const IMPROVE_PHASE_LABELS: { key: DiscoveryPhase; label: string }[] = [
+  { key: "mechanism", label: "Your mechanism" },
+  { key: "limitation", label: "Stress-tested" },
   { key: "effect", label: "Technical effect" },
 ];
 
@@ -80,6 +88,21 @@ export default function OrientationPanel({ maxW = "max-w-2xl" }: { maxW?: string
     setStage("conception");
   };
 
+  // Forward route: the idea is already a clear, detailed mechanism. Carry the
+  // inventor's VERBATIM words straight into Conception — no brief, no rewrite.
+  // Conception's "here's what I understood" is then the ONE AI restatement;
+  // writing an Orientation brief first would water the idea down twice.
+  const carryRawIntoGeyser = async () => {
+    const rawParts = view.conversation
+      .filter((t) => t.role === "inventor")
+      .map((t) => t.text.trim())
+      .filter(Boolean);
+    const raw = (rawParts.length ? rawParts.join("\n\n") : view.session.originalInput).trim();
+    await finish();
+    setOrientationBrief(raw);
+    setStage("conception");
+  };
+
   // The choose-phase options ("write my brief", …) are ACTIONS, not chat. If we
   // sent them to the Helper as messages it would just reply "choose what you want"
   // forever. Route "write my brief" to the real build; everything else continues
@@ -103,8 +126,15 @@ export default function OrientationPanel({ maxW = "max-w-2xl" }: { maxW?: string
                 Getting started
               </div>
               <h2 className="mt-1 font-sans text-lg font-semibold text-ink">
-                Find the real machine idea in your hands
+                {view.route === "improve"
+                  ? "Sharpen your mechanism"
+                  : "Find the real machine idea in your hands"}
               </h2>
+              {view.route === "improve" && (
+                <p className="mt-0.5 font-sans text-xs text-ink-muted">
+                  You&apos;ve got a real mechanism — a couple of details and it&apos;s ready.
+                </p>
+              )}
             </div>
             {view.phase !== "empty" && (
               <button
@@ -150,28 +180,33 @@ export default function OrientationPanel({ maxW = "max-w-2xl" }: { maxW?: string
             </div>
           )}
 
-          {/* Discovery progress rail — visible progression, never legal labels. */}
-          {view.phase === "discovery" && (
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              {PHASE_LABELS.map((p, i) => {
-                const done = phaseDone(s, p.key);
-                const current = view.discoveryPhase === p.key;
-                return (
-                  <span key={p.key} className="flex items-center gap-2">
-                    <span
-                      className={`font-mono text-[10px] uppercase tracking-[0.1em] ${
-                        done ? "text-accent" : current ? "text-ink" : "text-ink-muted/50"
-                      }`}
-                    >
-                      {done ? "✓ " : ""}
-                      {p.label}
-                    </span>
-                    {i < PHASE_LABELS.length - 1 && <span className="text-ink-muted/30">·</span>}
-                  </span>
-                );
-              })}
-            </div>
-          )}
+          {/* Discovery progress rail — visible progression, never legal labels. The
+              improve route enters deep, so it shows the shorter surgical rail. */}
+          {view.phase === "discovery" &&
+            (() => {
+              const rail = view.route === "improve" ? IMPROVE_PHASE_LABELS : PHASE_LABELS;
+              return (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  {rail.map((p, i) => {
+                    const done = phaseDone(s, p.key);
+                    const current = view.discoveryPhase === p.key;
+                    return (
+                      <span key={p.key} className="flex items-center gap-2">
+                        <span
+                          className={`font-mono text-[10px] uppercase tracking-[0.1em] ${
+                            done ? "text-accent" : current ? "text-ink" : "text-ink-muted/50"
+                          }`}
+                        >
+                          {done ? "✓ " : ""}
+                          {p.label}
+                        </span>
+                        {i < rail.length - 1 && <span className="text-ink-muted/30">·</span>}
+                      </span>
+                    );
+                  })}
+                </div>
+              );
+            })()}
 
           {/* Conversation. */}
           {view.phase !== "empty" && (
@@ -193,17 +228,18 @@ export default function OrientationPanel({ maxW = "max-w-2xl" }: { maxW?: string
               {/* THE DISCOVERY CANVAS — what you've built so far, with provenance. */}
               {view.phase === "discovery" && <DiscoveryCanvas s={s} mechanism={view.mechanism} />}
 
-              {/* Forward path only: the idea already has a mechanism and there is no
-                  choose-phase option, so a button is the way to build the brief. On
-                  the DISCOVERY path the "write my brief" choice in the thread above
-                  does this — no redundant bottom button. */}
+              {/* Forward path: the idea is ALREADY a clear, detailed mechanism. It goes
+                  straight into Patent Geyser in the inventor's own words — no brief, no
+                  rewrite. Rewriting it here would only dilute it before Conception
+                  restates it. (The brief exists only for the discovery route, where
+                  vague material had to be assembled into a mechanism.) */}
               {view.phase === "forward" && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-accent/30 bg-accent/[0.06] p-3">
                   <span className="font-sans text-[13px] text-ink">
-                    Your idea&apos;s ready — I&apos;ll write it up as a detailed brief you can edit.
+                    Your idea&apos;s already detailed — it goes straight in, in your own words.
                   </span>
-                  <Button variant="primary" onClick={() => void buildBrief()} disabled={busy}>
-                    {busy ? "…" : "Write my brief →"}
+                  <Button variant="primary" onClick={() => void carryRawIntoGeyser()} disabled={busy}>
+                    {busy ? "…" : "Take this into Patent Geyser →"}
                   </Button>
                 </div>
               )}

@@ -46,15 +46,27 @@ export default function ConceptionPanel({
 
   const hasStatement = !!view.statement;
 
-  // If the inventor came through Orientation, seed the entry box with the brief
-  // they built there (editable) — then clear it so it seeds only once.
-  const [briefSeed, setBriefSeed] = useState<{ text: string; nonce: number } | null>(null);
+  // If the inventor came through Orientation, the "Take this into Patent Geyser"
+  // click WAS their submit — they already reviewed their words (their own idea on
+  // the forward route, or the brief they edited on the discovery route). So auto-
+  // submit it straight into the AI's "here's what I understood" step instead of
+  // dropping them on a pre-filled box that needs another click. Guarded + cleared
+  // so it fires exactly once.
+  const handoffStarted = useRef(false);
+  const [handingOff, setHandingOff] = useState(false);
   useEffect(() => {
-    if (orientationBrief && !hasStatement) {
-      setBriefSeed({ text: orientationBrief, nonce: Date.now() });
+    if (orientationBrief && !hasStatement && !handoffStarted.current) {
+      handoffStarted.current = true;
+      setHandingOff(true);
+      const text = orientationBrief;
       setOrientationBrief(null);
+      void tell(text);
     }
-  }, [orientationBrief, hasStatement, setOrientationBrief]);
+  }, [orientationBrief, hasStatement, setOrientationBrief, tell]);
+  // A handoff is in flight from mount until the statement lands — show the working
+  // state, never the empty "describe your invention" box. If the request errors,
+  // drop back to the composer so the inventor isn't stuck on a spinner.
+  const handingOffNow = (!!orientationBrief || handingOff) && !hasStatement && !error;
   const candidateCards = view.cards.filter(
     (c): c is CandidateConceptCard => c.type === "candidate_concept"
   );
@@ -102,7 +114,7 @@ export default function ConceptionPanel({
 
       {hasStatement && <StrengthMeter pct={strength.pct} label={strength.label} />}
 
-      {busy && (
+      {(busy || handingOffNow) && (
         <div className="flex items-center gap-3 rounded-md border border-accent/30 bg-accent/5 p-4">
           <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" />
           <span className="font-mono text-xs text-ink-muted">
@@ -118,8 +130,9 @@ export default function ConceptionPanel({
       )}
 
       {/* Onboarding — the inventor describes their invention directly. (The AI
-          brainstorm entry is parked for now; the module stays on the side.) */}
-      {!hasStatement && (
+          brainstorm entry is parked for now; the module stays on the side.)
+          Hidden during an Orientation handoff, which auto-submits. */}
+      {!hasStatement && !handingOffNow && (
         <div className="flex flex-col gap-4 py-2">
           <h3 className="font-sans text-lg font-semibold text-ink">
             Describe your invention
@@ -128,7 +141,6 @@ export default function ConceptionPanel({
             placeholder={conceptionPlaceholder(view.phase)}
             busy={busy}
             onSend={tell}
-            {...(briefSeed ? { seedText: briefSeed.text, seedNonce: briefSeed.nonce } : {})}
           />
         </div>
       )}
