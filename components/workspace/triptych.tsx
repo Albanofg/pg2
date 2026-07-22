@@ -56,7 +56,13 @@ export default function Triptych() {
   useEffect(() => {
     if (booting || reconciled.current || !urlProjectId) return;
     reconciled.current = true;
-    const floorIdx = resolvedStage ? STAGES.indexOf(resolvedStage) : STAGES.length - 1;
+    // Ceiling = the furthest the SERVER saw, OR the stage the app already advanced to
+    // in-session (survives a remount via the store). The latter is what keeps a handoff
+    // (e.g. Orientation → Conception) from being clamped back before its module_state
+    // exists on the server. Store default is "orientation", so it never over-permits.
+    const furthestIdx = resolvedStage ? STAGES.indexOf(resolvedStage) : STAGES.length - 1;
+    const storeIdx = STAGES.indexOf(useWorkspace.getState().stage);
+    const floorIdx = Math.max(furthestIdx, storeIdx);
     const wantedIdx = urlStage ? STAGES.indexOf(urlStage as ModuleStage) : -1;
     const finalStage: ModuleStage =
       wantedIdx >= 0 && wantedIdx <= floorIdx

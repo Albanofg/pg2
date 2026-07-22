@@ -141,7 +141,7 @@ function mergeLedger(existing: LedgerEntry[], incoming: LedgerEntry[]): LedgerEn
 const initial = {
   projectId: null,
   activeProjectId: null as string | null,
-  stage: "conception" as ModuleStage, // conception | maturation | landscape
+  stage: "orientation" as ModuleStage, // the true first stage; used as the min clamp floor
   proofIdea: { core: null, concepts: [] } as ProofIdea,
   proofNotebook: [] as LedgerEntry[],
   title: "Untitled Draft",
