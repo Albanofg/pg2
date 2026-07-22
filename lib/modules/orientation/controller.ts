@@ -234,7 +234,7 @@ function matchDeferSignal(message: string): boolean {
  */
 function buildDeferDirective(_phase: DiscoveryPhase): string {
   return (
-    "DEFER — the inventor explicitly asked YOU to decide on their behalf. For THIS turn the normal 'never supply the answer/mechanism' restraint is WAIVED because they asked: pick the single best answer for the current phase, state it in ONE line as the working answer, and PROCEED to the next phase. Do NOT ask them to confirm and do NOT re-offer options. Make clear it is YOUR suggestion — it is recorded as system-supplied, does NOT count as their conception, and they can change it later."
+    "DEFER — the inventor explicitly asked YOU to decide on their behalf. For THIS turn the normal 'never supply the answer/mechanism' restraint is WAIVED because they asked. Pick the MOST OBVIOUSLY USEFUL, plain-default answer for THEIR specific idea in this phase — the sensible, most-likely-right choice a reasonable person would land on for this case, NOT the cleverest option, an edge case, or the most sophisticated one. If concrete options were on the table, choose the most obviously useful of those. State it in ONE line as the working answer and PROCEED to the next phase. Do NOT ask them to confirm and do NOT re-offer options. Make clear it is YOUR suggestion — it is recorded as system-supplied, does NOT count as their conception, and they can change it later."
   );
 }
 
