@@ -13,10 +13,11 @@ export async function middleware(req: NextRequest) {
   const payload = await verifySession(token);
 
   if (payload) {
-    // Admin area needs an admin session; non-admins go to the workspace.
+    // Admin area needs an admin session; non-admins go to their dashboard (no
+    // project context here, so not straight into a workspace URL).
     if (req.nextUrl.pathname.startsWith("/admin") && !isAdminEmail(payload.email)) {
       const url = req.nextUrl.clone();
-      url.pathname = "/workspace";
+      url.pathname = "/projects";
       url.search = "";
       return NextResponse.redirect(url);
     }

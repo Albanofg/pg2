@@ -359,7 +359,7 @@ function PatentabilityCardView({
 
       <div className="mt-3 border-t border-amber-500/20 pt-3">
         <div className="font-sans text-[13px] font-semibold text-ink">
-          Where the patentable part is probably hiding
+          Where the real invention is probably hiding
         </div>
         <p className="mt-0.5 font-sans text-xs text-ink-muted">
           Pick whichever one fits — then say, in your own words, what your system actually does

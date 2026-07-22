@@ -120,7 +120,9 @@ export default function ProjectsPage() {
     (id: string) => {
       reset();
       setActiveProject(id);
-      router.push("/workspace");
+      // Land on the project; the workspace resumes at the furthest module and
+      // rewrites the URL to /workspace/<id>/<stage>.
+      router.push(`/workspace/${id}`);
     },
     [reset, setActiveProject, router],
   );

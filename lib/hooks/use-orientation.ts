@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useWorkspace } from "@/lib/store";
 import type { Module0View } from "@/lib/modules/orientation/types";
 
 const EMPTY_SESSION = {
@@ -58,6 +59,7 @@ export function useOrientation(projectId: string | null) {
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const setProof = useWorkspace((s) => s.setProof);
 
   const chainRef = useRef<Promise<unknown>>(Promise.resolve());
   const pendingRef = useRef(0);
@@ -78,6 +80,10 @@ export function useOrientation(projectId: string | null) {
           if (!res.ok) throw new Error(`orientation request failed (${res.status})`);
           const data = (await res.json()) as Module0View;
           setView(data);
+          // Feed the right panel: Orientation's human inputs (raw idea + every
+          // tapped/typed answer) belong in the Inventor's Notebook, like every
+          // other module. The mechanism-so-far is the living "core".
+          setProof({ core: data.mechanism || null, concepts: [] }, data.ledger);
           return data;
         } catch (e) {
           setError("The Helper couldn't respond just now. Please try again in a moment.");
@@ -95,7 +101,7 @@ export function useOrientation(projectId: string | null) {
       );
       return run;
     },
-    [projectId],
+    [projectId, setProof],
   );
 
   useEffect(() => {

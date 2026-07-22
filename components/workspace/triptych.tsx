@@ -10,8 +10,9 @@ import MaturationPanel from "@/components/maturation/maturation-panel";
 import LandscapePanel from "@/components/landscape/landscape-panel";
 import DifferentiationPanel from "@/components/differentiation/differentiation-panel";
 import ShowcasePanel from "@/components/showcase/showcase-panel";
-import { useWorkspace } from "@/lib/store";
-import { useBootstrap } from "@/lib/hooks/use-bootstrap";
+import { useParams, useRouter } from "next/navigation";
+import { useWorkspace, type ModuleStage } from "@/lib/store";
+import { useBootstrap, STAGES } from "@/lib/hooks/use-bootstrap";
 
 /**
  * The signature layout. Three fluidly resizable panes:
@@ -28,17 +29,66 @@ export default function Triptych() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef<null | "left" | "right">(null);
   const projectId = useWorkspace((s) => s.projectId);
-  const activeProjectId = useWorkspace((s) => s.activeProjectId);
   const stage = useWorkspace((s) => s.stage);
+  const setActiveProject = useWorkspace((s) => s.setActiveProject);
+  const setStage = useWorkspace((s) => s.setStage);
 
-  const { booting } = useBootstrap();
-  // Hold the center pane until bootstrap resolves which stage THIS project actually
-  // reached. `stage` is no longer persisted, so until bootstrap answers it's just
-  // the default — rendering it (or a leftover from a previously-viewed project)
-  // would land the inventor on a stage this project hasn't reached. Holding on
-  // every load with an active project (not only cross-project switches) is what
-  // makes the resumed stage authoritative; bootstrap is a fast DB read.
-  const stageResolving = booting && !!activeProjectId;
+  // The URL is the source of truth: /workspace/<projectId>/<stage>.
+  const params = useParams<{ projectId: string; stage?: string[] }>();
+  const router = useRouter();
+  const urlProjectId = params?.projectId;
+  const urlStage = params?.stage?.[0];
+  const urlStageRef = useRef<string | undefined>(urlStage);
+  urlStageRef.current = urlStage;
+
+  const { booting, resolvedStage } = useBootstrap();
+  const reconciled = useRef(false);
+  const [ready, setReady] = useState(false);
+
+  // Load THIS project (from the URL) via bootstrap.
+  useEffect(() => {
+    if (urlProjectId) setActiveProject(urlProjectId);
+  }, [urlProjectId, setActiveProject]);
+
+  // Reconcile ONCE, when bootstrap finishes: honor a URL stage the project has
+  // actually reached ("restart at module 4"), otherwise resume at the furthest.
+  // Never land on an unreached module. Degrades to the URL stage if bootstrap failed.
+  useEffect(() => {
+    if (booting || reconciled.current || !urlProjectId) return;
+    reconciled.current = true;
+    const floorIdx = resolvedStage ? STAGES.indexOf(resolvedStage) : STAGES.length - 1;
+    const wantedIdx = urlStage ? STAGES.indexOf(urlStage as ModuleStage) : -1;
+    const finalStage: ModuleStage =
+      wantedIdx >= 0 && wantedIdx <= floorIdx
+        ? (urlStage as ModuleStage)
+        : (resolvedStage ?? (urlStage as ModuleStage) ?? "orientation");
+    setStage(finalStage);
+    if (finalStage !== urlStage) router.replace(`/workspace/${urlProjectId}/${finalStage}`);
+    setReady(true);
+  }, [booting, resolvedStage, urlStage, urlProjectId, setStage, router]);
+
+  // URL stage -> store (browser back/forward, or a pasted deep link after load).
+  // Reacts to urlStage ONLY (reads current stage via getState) so a store-driven
+  // change never trips it — that would revert a panel's module transition.
+  useEffect(() => {
+    if (!reconciled.current || !urlProjectId || !urlStage) return;
+    if (STAGES.includes(urlStage as ModuleStage) && urlStage !== useWorkspace.getState().stage) {
+      setStage(urlStage as ModuleStage);
+    }
+  }, [urlStage, urlProjectId, setStage]);
+
+  // store stage -> URL (a panel advanced/changed the module). Reacts to stage ONLY
+  // (reads urlStage via ref) for the same anti-revert reason.
+  useEffect(() => {
+    if (!reconciled.current || !urlProjectId) return;
+    if (stage && stage !== urlStageRef.current) {
+      router.replace(`/workspace/${urlProjectId}/${stage}`);
+    }
+  }, [stage, urlProjectId, router]);
+
+  // Hold the center pane until the URL/stage are reconciled, so a project never
+  // flashes the wrong module before landing where the inventor actually is.
+  const stageResolving = !ready && !!urlProjectId;
 
   const onMouseDown = (which: "left" | "right") => (e: React.MouseEvent) => {
     e.preventDefault();

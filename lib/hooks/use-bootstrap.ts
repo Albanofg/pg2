@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { useWorkspace, type ModuleStage } from "@/lib/store";
 import { phaseLabel, type PhaseKey } from "@/lib/utils";
 
-const STAGES: ModuleStage[] = [
+/** Canonical module order — index = how far a project has progressed. Exported so
+ *  the workspace can clamp a URL stage against the furthest reached. */
+export const STAGES: ModuleStage[] = [
   "orientation",
   "brainstorm",
   "conception",
@@ -27,11 +29,13 @@ const STAGES: ModuleStage[] = [
 export function useBootstrap() {
   const activeProjectId = useWorkspace((s) => s.activeProjectId);
   const setProject = useWorkspace((s) => s.setProject);
-  const setStage = useWorkspace((s) => s.setStage);
   const setPhase = useWorkspace((s) => s.setPhase);
   const setCurrentIdea = useWorkspace((s) => s.setCurrentIdea);
   const setDraftNodes = useWorkspace((s) => s.setDraftNodes);
   const [booting, setBooting] = useState(true);
+  // The furthest module the server saw this project reach. The workspace owns the
+  // actual `setStage` now (URL is authoritative); this is the ceiling to clamp against.
+  const [resolvedStage, setResolvedStage] = useState<ModuleStage | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,8 +53,9 @@ export function useBootstrap() {
         if (cancelled || !data?.project) return;
 
         setProject(data.project.id, data.project.title ?? "Untitled Draft");
-        // Resume the inventor at the furthest stage the server saw them reach.
-        if (STAGES.includes(data.stage)) setStage(data.stage as ModuleStage);
+        // Report the furthest stage the server saw; the workspace reconciles it with
+        // the URL (honor a reached stage in the URL, else resume at the furthest).
+        if (STAGES.includes(data.stage)) setResolvedStage(data.stage as ModuleStage);
         setPhase((data.project.currentPhase as PhaseKey) ?? "core_novelty");
         if (typeof data.currentIdea === "string") setCurrentIdea(data.currentIdea);
 
@@ -75,7 +80,7 @@ export function useBootstrap() {
     return () => {
       cancelled = true;
     };
-  }, [activeProjectId, setProject, setStage, setPhase, setCurrentIdea, setDraftNodes]);
+  }, [activeProjectId, setProject, setPhase, setCurrentIdea, setDraftNodes]);
 
-  return { booting };
+  return { booting, resolvedStage };
 }

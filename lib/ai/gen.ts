@@ -8,6 +8,23 @@ import {
 } from "ai";
 import { recordUsage } from "./usage-log";
 import { getUsageContext } from "./usage-context";
+import { isReasoningModel } from "./openai";
+
+/**
+ * Reasoning-style models (the gpt-5.6 family) reject a custom `temperature`/`topP` —
+ * only the provider default is allowed. Agents pass `temperature` everywhere, so strip
+ * those params here for such models instead of editing every call site. A shallow clone
+ * keeps the original opts (and its model/schema refs) untouched. (The `reasoning_effort`
+ * accommodation is separate — injected at the fetch layer in openai.ts.)
+ */
+function forModel(opts: any): any {
+  const id = opts?.model?.modelId as string | undefined;
+  if (isReasoningModel(id) && ("temperature" in opts || "topP" in opts)) {
+    const { temperature: _t, topP: _p, ...rest } = opts;
+    return rest;
+  }
+  return opts;
+}
 
 /**
  * Instrumented drop-in replacements for the AI SDK's `generateObject` /
@@ -41,7 +58,7 @@ export const generateObject: typeof _generateObject = (async (opts: any) => {
   const start = Date.now();
   const info = modelOf(opts);
   try {
-    const result: any = await _generateObject(opts);
+    const result: any = await _generateObject(forModel(opts));
     recordUsage({ ...info, ...tokensOf(result), durationMs: Date.now() - start, status: "ok" });
     return result;
   } catch (e) {
@@ -59,7 +76,7 @@ export const generateText: typeof _generateText = (async (opts: any) => {
   const start = Date.now();
   const info = modelOf(opts);
   try {
-    const result: any = await _generateText(opts);
+    const result: any = await _generateText(forModel(opts));
     recordUsage({ ...info, ...tokensOf(result), durationMs: Date.now() - start, status: "ok" });
     return result;
   } catch (e) {
@@ -122,7 +139,7 @@ export const streamText: typeof _streamText = ((opts: any) => {
   const info = modelOf(opts);
   // usage/context are lost inside the post-stream .then, so snapshot the context now.
   const ctx = getUsageContext();
-  const result: any = _streamText(opts);
+  const result: any = _streamText(forModel(opts));
   Promise.resolve(result?.usage)
     .then((u: any) =>
       recordUsage(

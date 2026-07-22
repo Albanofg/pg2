@@ -77,7 +77,7 @@ function matchDiscoveryCommand(
     return {
       phase: "baseline",
       directive:
-        "The inventor chose to EXPLORE ANOTHER WEAKNESS. In THIS reply you MUST enter phase \"baseline\": surface 2–3 realistic, DIFFERENT ways the baseline could be unreliable (as tap options + \"something else\") and ask which one matters — do not repeat the failure already developed. Do NOT return to the choose menu and do NOT merely re-summarize.",
+        "The inventor chose to EXPLORE ANOTHER WEAKNESS. In THIS reply you MUST enter phase \"baseline\": surface 2–3 realistic, DIFFERENT ways the baseline could be unreliable (concrete tap options only — no escape/hedge option; if none fit they type their own) and ask which one matters — do not repeat the failure already developed. Do NOT return to the choose menu and do NOT merely re-summarize.",
     };
   }
   if (/\bedit\b/.test(t) && /\bmechanism\b/.test(t)) {
@@ -100,13 +100,97 @@ function buildImproveDirective(gap: string, firstTurn: boolean): string {
     "IMPROVE MODE — the inventor ALREADY stated a real software mechanism; it is only under-specified. Do NOT run objective/process/baseline or build a full requirement conflict. Follow this surgical path and let `phase` advance mechanism → limitation → effect → choose: " +
     "(1) reflect their mechanism in ONE line; " +
     "(2) name the ONE missing operation that makes it non-executable or unclear and ask ONE targeted question to get THEM to describe that operation in their own words — never invent it (phase \"mechanism\"); " +
-    "(3) once it's described, test the mechanism against ONE realistic failure case — offer 2–3 concrete failures + \"something else\" (phase \"limitation\"); " +
+    "(3) once it's described, test the mechanism against ONE realistic failure case — offer 2–3 concrete failures, tap options only, no escape/hedge option (phase \"limitation\"); " +
     "(4) confirm the machine-dependent effect it produces and run the human-performance check (phase \"effect\"); " +
     "(5) then synthesize and go to \"choose\". Keep it to a few turns — do not drill parameters. " +
     "ESCAPE HATCH: if the inventor's answer reveals there is NO real mechanism (the operation dissolves into a wish they can't describe), set `phase` to \"objective\" to fall back to full discovery.";
   return firstTurn && gap
     ? `${base}\n\nThe operation the inventor left under-specified (start here): ${gap}`
     : base;
+}
+
+/** A tap/answer that carries no new content — "something else", "not sure", etc.
+ *  Repeated re-asking of these is the loop inventors hate. */
+const STUCK_SIGNALS = new Set([
+  "something else",
+  "i don't know",
+  "i dont know",
+  "idk",
+  "not sure",
+  "i'm not sure",
+  "im not sure",
+  "i'm not sure yet",
+  "im not sure yet",
+  "no idea",
+  "dunno",
+  "none",
+  "none of these",
+  "none of those",
+  "none of these fit",
+  "not really",
+  "help",
+  "pass",
+  "no",
+]);
+
+function matchStuckSignal(message: string): boolean {
+  return STUCK_SIGNALS.has(message.trim().toLowerCase().replace(/[.!?]+$/, ""));
+}
+
+/**
+ * NO DEAD BUTTONS AND NO ESCAPE BUTTON. Tap options are ONLY concrete candidate
+ * answers. A hedge/escape ("something else", "I'm not sure yet", "none of these fit")
+ * is not a real answer — it manufactures doubt and duplicates the always-present
+ * "type your own" composer. If nothing fits, the inventor types. So drop every hedge
+ * option entirely and de-dupe, regardless of what the Helper emits.
+ */
+const HEDGE_OPTION =
+  /^(something else|i'?m not sure(\s+yet)?|i\s*don'?t\s*know|idk|not sure|none|none of (these|those)( fit)?|no idea|dunno|other|not applicable|n\/?a)$/i;
+
+function sanitizeOptions(options: string[] | undefined): string[] {
+  const out: string[] = [];
+  for (const raw of options ?? []) {
+    const t = raw.trim();
+    if (!t || HEDGE_OPTION.test(t)) continue; // drop empties + hedge/escape buttons
+    if (!out.some((o) => o.toLowerCase() === t.toLowerCase())) out.push(t);
+  }
+  return out;
+}
+
+/**
+ * A non-answer must make the Helper PROPOSE, never re-ask the same question in new
+ * words. Phase-aware so POHC holds: it may propose failures/limitations/conflicts
+ * (teaching), but NEVER the resolving mechanism (that must stay the inventor's).
+ */
+function buildStuckDirective(phase: DiscoveryPhase): string {
+  const head =
+    "ANTI-LOOP — the inventor gave a NON-ANSWER (\"something else\" / not sure). Do NOT re-ask the same question in new words; re-asking is the loop they hate. ";
+  if (phase === "process" || phase === "baseline" || phase === "limitation") {
+    const artifact = phase === "limitation" ? "machine limitation" : "failure of the basic version";
+    return (
+      head +
+      `You have teaching license in this phase: PROPOSE the single most likely concrete ${artifact} for THEIR specific idea as one plain statement, then ask only whether it fits — offer 2–3 concrete NAMED alternatives, tap options only (no escape/hedge option; if none fit they type). Advance; never ask this phase's question a third way.`
+    );
+  }
+  if (phase === "conflict") {
+    return (
+      head +
+      "PROPOSE the two-sided requirement conflict you infer from their idea (\"must X — but it must also Y\") and ask only whether both sides are required. Do not re-ask an open question."
+    );
+  }
+  if (
+    phase === "mechanism" ||
+    phase === "synthesis" ||
+    phase === "states" ||
+    phase === "flow" ||
+    phase === "interaction"
+  ) {
+    return (
+      head +
+      "POHC: do NOT invent the resolving mechanism. Offer 2–3 conceptual DIRECTIONS (categories, never finished mechanisms) they can pick from, or name the gap plainly and let them decide. Silence beats invention."
+    );
+  }
+  return head + "Either propose a concrete option for them to confirm, or move to the next phase.";
 }
 
 function emptySession(originalInput: string): OrientationSession {
@@ -263,10 +347,16 @@ export class OrientationModule {
     //    make the Helper DO its work instead of looping the menu.
     const improveMode = this.route === "improve" && this.discoveryPhase !== "choose";
     const cmd = improveMode ? null : matchDiscoveryCommand(message);
-    const directive = improveMode
+    const forcedPhase = cmd?.phase;
+    let directive = improveMode
       ? buildImproveDirective(this.improveGap, exchangeCount <= 1)
       : cmd?.directive;
-    const forcedPhase = cmd?.phase;
+    // A non-answer ("something else" / not sure) must PROPOSE, never re-ask the same
+    // question. Phase-aware (POHC-safe); composes with any base directive.
+    if (matchStuckSignal(message)) {
+      const stuckDir = buildStuckDirective(forcedPhase ?? this.discoveryPhase);
+      directive = directive ? `${stuckDir}\n\n${directive}` : stuckDir;
+    }
     try {
       const helper = await runOrientationHelper(this.runAgent, {
         message,
@@ -297,10 +387,13 @@ export class OrientationModule {
       if (helper.can_write_brief) this.canWriteBrief = true;
       synthesize = helper.synthesize;
       this.ledger.recordMachineEvent("orientation_helper", ["orientation", nextPhase], {});
+      const question = helper.question?.ask
+        ? { ...helper.question, options: sanitizeOptions(helper.question.options) }
+        : undefined;
       this.pushTurn({
         role: "helper",
         text: helper.reply || "Tell me a bit more about how it actually works.",
-        ...(helper.question?.ask ? { question: helper.question } : {}),
+        ...(question ? { question } : {}),
         intent: nextPhase,
       });
     } catch (err) {
