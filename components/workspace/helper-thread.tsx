@@ -21,6 +21,7 @@ export default function HelperThread({
   busy = false,
   primaryOption,
   autoScrollToLatest = true,
+  onDefer,
 }: {
   turns: HelperTurn[];
   onQuickReply?: (text: string) => void;
@@ -32,6 +33,9 @@ export default function HelperThread({
   /** When a NEW Helper turn arrives, scroll its START into view (not the footer),
    *  so the reader begins at the top of the new content. On by default. */
   autoScrollToLatest?: boolean;
+  /** When provided, the latest question shows a "let the AI decide" delegation.
+   *  Optional; modules that don't pass it don't show it. */
+  onDefer?: () => void;
 }) {
   const safeTurns = turns ?? [];
   let lastHelperIdx = -1;
@@ -76,6 +80,7 @@ export default function HelperThread({
                 busy={busy}
                 onAnswer={(text) => onQuickReply?.(text)}
                 primaryOption={primaryOption}
+                {...(i === lastHelperIdx ? { onDefer } : {})}
               />
             )}
             {/* Legacy stored turns only — newer turns use `question`. */}
@@ -116,12 +121,17 @@ export function QuestionBlock({
   busy,
   onAnswer,
   primaryOption,
+  onDefer,
 }: {
   question: HelperQuestion;
   interactive: boolean;
   busy: boolean;
   onAnswer: (text: string) => void;
   primaryOption?: string;
+  /** When provided, shows a subtle "let the AI decide" delegation below the composer.
+   *  Distinct from a hedge/escape: it hands the choice to the AI (which decides and
+   *  proceeds). Optional — modules that don't pass it don't show it. */
+  onDefer?: () => void;
 }) {
   const [text, setText] = useState("");
   const send = (value: string) => {
@@ -144,7 +154,7 @@ export function QuestionBlock({
       )}
       {!interactive ? null : (
         <>
-          {orderedOptions.length > 0 && (
+          {(orderedOptions.length > 0 || onDefer) && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               {orderedOptions.map((opt, j) =>
                 isPrimary(opt) ? (
@@ -168,6 +178,16 @@ export function QuestionBlock({
                     {opt}
                   </button>
                 ),
+              )}
+              {onDefer && (
+                <button
+                  type="button"
+                  onClick={onDefer}
+                  disabled={busy}
+                  className="rounded-full border border-action/50 bg-action/10 px-2.5 py-1 font-mono text-[11px] text-action hover:bg-action/20 disabled:opacity-50"
+                >
+                  let the AI decide
+                </button>
               )}
             </div>
           )}

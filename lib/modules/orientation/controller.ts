@@ -193,6 +193,51 @@ function buildStuckDirective(phase: DiscoveryPhase): string {
   return head + "Either propose a concrete option for them to confirm, or move to the next phase.";
 }
 
+/**
+ * The inventor handing the decision to the AI ("you decide", "your call"). DISTINCT
+ * from a stuck non-answer: on stuck the AI proposes and asks the inventor to confirm;
+ * on DEFER the AI decides and PROCEEDS. Crucially, a deferred decision is the SYSTEM's,
+ * not the inventor's conception — it must never be recorded in the inventor's notebook.
+ */
+const DEFER_SIGNALS = new Set([
+  "you decide",
+  "you choose",
+  "you pick",
+  "you decide for me",
+  "decide for me",
+  "choose for me",
+  "pick for me",
+  "your call",
+  "up to you",
+  "whatever you think",
+  "whatever you decide",
+  "whatever works",
+  "whatever is best",
+  "whatever's best",
+  "let the ai decide",
+  "let ai decide",
+  "ai decide",
+  "ai decides",
+  "you know best",
+  "surprise me",
+]);
+
+function matchDeferSignal(message: string): boolean {
+  return DEFER_SIGNALS.has(message.trim().toLowerCase().replace(/[.!?]+$/, ""));
+}
+
+/**
+ * On DEFER the AI decides on the inventor's behalf and moves on. The normal
+ * "never supply the answer" restraint is waived for that turn BECAUSE THEY ASKED —
+ * but the choice is the system's suggestion, recorded as system-supplied and kept out
+ * of the notebook (see `tell`), so it never counts as the inventor's conception.
+ */
+function buildDeferDirective(_phase: DiscoveryPhase): string {
+  return (
+    "DEFER — the inventor explicitly asked YOU to decide on their behalf. For THIS turn the normal 'never supply the answer/mechanism' restraint is WAIVED because they asked: pick the single best answer for the current phase, state it in ONE line as the working answer, and PROCEED to the next phase. Do NOT ask them to confirm and do NOT re-offer options. Make clear it is YOUR suggestion — it is recorded as system-supplied, does NOT count as their conception, and they can change it later."
+  );
+}
+
 function emptySession(originalInput: string): OrientationSession {
   return {
     originalInput,
@@ -329,7 +374,14 @@ export class OrientationModule {
     const t = text.trim();
     if (!t) return this.view();
     if (this.phase === "empty") return this.ingest(t);
-    this.ledger.recordInventorSource("inventor_note", t, ["orientation", "note"]);
+    if (matchDeferSignal(t)) {
+      // The inventor handed the decision to the AI — this is NOT their conception, so
+      // it must never enter the inventor's notebook. Log it as a MACHINE event (origin
+      // machine → excluded from the human-verbatim trail), not recordInventorSource.
+      this.ledger.recordMachineEvent("deferred_to_ai", ["orientation", "note"], { text: t });
+    } else {
+      this.ledger.recordInventorSource("inventor_note", t, ["orientation", "note"]);
+    }
     this.pushTurn({ role: "inventor", text: t });
     if (this.phase === "discovery") await this.replyHelper(t);
     return this.view();
@@ -356,6 +408,12 @@ export class OrientationModule {
     if (matchStuckSignal(message)) {
       const stuckDir = buildStuckDirective(forcedPhase ?? this.discoveryPhase);
       directive = directive ? `${stuckDir}\n\n${directive}` : stuckDir;
+    }
+    // DEFER ("you decide") — the AI decides and proceeds; takes precedence so it
+    // dominates any base/stuck directive on the same turn.
+    if (matchDeferSignal(message)) {
+      const deferDir = buildDeferDirective(forcedPhase ?? this.discoveryPhase);
+      directive = directive ? `${deferDir}\n\n${directive}` : deferDir;
     }
     try {
       const helper = await runOrientationHelper(this.runAgent, {

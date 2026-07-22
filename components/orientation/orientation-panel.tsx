@@ -216,6 +216,9 @@ export default function OrientationPanel({ maxW = "max-w-2xl" }: { maxW?: string
                 onQuickReply={handleSend}
                 busy={busy}
                 primaryOption={view.canWriteBrief ? "write my brief" : undefined}
+                {...(view.phase === "discovery" && view.discoveryPhase !== "choose"
+                  ? { onDefer: () => void tell("you decide") }
+                  : {})}
               />
 
               {working && view.conversation[view.conversation.length - 1]?.role === "inventor" && (
